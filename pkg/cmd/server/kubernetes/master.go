@@ -15,7 +15,7 @@ import (
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/api/v1"
-	appsv1alpha1 "k8s.io/kubernetes/pkg/apis/apps/v1alpha1"
+	appsv1beta1 "k8s.io/kubernetes/pkg/apis/apps/v1beta1"
 	autoscalingv1 "k8s.io/kubernetes/pkg/apis/autoscaling/v1"
 	"k8s.io/kubernetes/pkg/apis/batch"
 	batchv1 "k8s.io/kubernetes/pkg/apis/batch/v1"
@@ -142,7 +142,7 @@ func (c *MasterConfig) InstallAPI(container *restful.Container) ([]string, error
 		batchv2alpha1.SchemeGroupVersion,
 		autoscalingv1.SchemeGroupVersion,
 		certificatesv1alpha1.SchemeGroupVersion,
-		appsv1alpha1.SchemeGroupVersion,
+		appsv1beta1.SchemeGroupVersion,
 		policyv1alpha1.SchemeGroupVersion,
 		federationv1beta1.SchemeGroupVersion,
 	}
