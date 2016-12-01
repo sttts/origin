@@ -3155,6 +3155,10 @@
 			"Rev": "eb47ba841d53d93506cfbfbc03927daf9cc48f88"
 		},
 		{
+			"ImportPath": "google.golang.org/cloud/internal/transport",
+			"Rev": "eb47ba841d53d93506cfbfbc03927daf9cc48f88"
+		},
+		{
 			"ImportPath": "google.golang.org/cloud/storage",
 			"Rev": "eb47ba841d53d93506cfbfbc03927daf9cc48f88"
 		},
