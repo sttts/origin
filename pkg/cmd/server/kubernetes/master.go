@@ -56,8 +56,8 @@ import (
 	storagefactory "k8s.io/kubernetes/pkg/storage/storagebackend/factory"
 	utilwait "k8s.io/kubernetes/pkg/util/wait"
 
-	"k8s.io/kubernetes/pkg/registry/endpoint"
-	endpointsetcd "k8s.io/kubernetes/pkg/registry/endpoint/etcd"
+	"k8s.io/kubernetes/pkg/registry/core/endpoint"
+	endpointsetcd "k8s.io/kubernetes/pkg/registry/core/endpoint/etcd"
 	"k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/volume/aws_ebs"
 	"k8s.io/kubernetes/pkg/volume/cinder"

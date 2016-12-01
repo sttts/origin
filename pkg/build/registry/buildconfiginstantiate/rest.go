@@ -16,7 +16,7 @@ import (
 	"k8s.io/kubernetes/pkg/client/unversioned/remotecommand"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
 	kubeletremotecommand "k8s.io/kubernetes/pkg/kubelet/server/remotecommand"
-	"k8s.io/kubernetes/pkg/registry/pod"
+	"k8s.io/kubernetes/pkg/registry/core/pod"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util/httpstream/spdy"
 	"k8s.io/kubernetes/pkg/util/wait"
