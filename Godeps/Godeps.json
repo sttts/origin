@@ -683,6 +683,16 @@
 			"Rev": "3d5ba43211beec7fbb1472634a9c3b464581658a"
 		},
 		{
+			"ImportPath": "github.com/coreos/etcd/proxy/grpcproxy",
+			"Comment": "v3.1.0-rc.1",
+			"Rev": "3d5ba43211beec7fbb1472634a9c3b464581658a"
+		},
+		{
+			"ImportPath": "github.com/coreos/etcd/proxy/grpcproxy/cache",
+			"Comment": "v3.1.0-rc.1",
+			"Rev": "3d5ba43211beec7fbb1472634a9c3b464581658a"
+		},
+		{
 			"ImportPath": "github.com/coreos/etcd/raft",
 			"Comment": "v3.1.0-rc.1",
 			"Rev": "3d5ba43211beec7fbb1472634a9c3b464581658a"
