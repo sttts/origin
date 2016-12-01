@@ -13,7 +13,7 @@ import (
 	kapierrors "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/client/cache"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
+	"k8s.io/kubernetes/pkg/client/retry"
 	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/credentialprovider"
 	"k8s.io/kubernetes/pkg/fields"
@@ -367,7 +367,7 @@ func (e *DockercfgController) syncServiceAccount(key string) error {
 	}
 
 	first := true
-	err = kclient.RetryOnConflict(kclient.DefaultBackoff, func() error {
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		if !first {
 			obj, exists, err := e.serviceAccountCache.GetByKey(key)
 			if err != nil {
