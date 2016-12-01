@@ -211,11 +211,6 @@
 			"Rev": "c924893c38ecc04b18d7aab8a7aa561cb8b4c4cc"
 		},
 		{
-			"ImportPath": "github.com/aws/aws-sdk-go/private/protocol",
-			"Comment": "v1.0.8",
-			"Rev": "c924893c38ecc04b18d7aab8a7aa561cb8b4c4cc"
-		},
-		{
 			"ImportPath": "github.com/aws/aws-sdk-go/private/protocol/ec2query",
 			"Comment": "v1.0.8",
 			"Rev": "c924893c38ecc04b18d7aab8a7aa561cb8b4c4cc"
