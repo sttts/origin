@@ -141,6 +141,11 @@
 			"Rev": "ab50d12e88f57788bf84b83fef2be236eb1fcc0b"
 		},
 		{
+			"ImportPath": "github.com/asaskevich/govalidator",
+			"Comment": "v4-12-g593d645",
+			"Rev": "593d64559f7600f29581a3ee42177f5dbded27a9"
+		},
+		{
 			"ImportPath": "github.com/aws/aws-sdk-go/aws",
 			"Comment": "v1.0.8",
 			"Rev": "c924893c38ecc04b18d7aab8a7aa561cb8b4c4cc"
