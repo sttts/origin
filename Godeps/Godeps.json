@@ -5,6 +5,8 @@
 	"Packages": [
 		"github.com/elazarl/goproxy",
 		"github.com/golang/mock/gomock",
+		"github.com/containernetworking/cni/plugins/ipam/host-local",
+		"github.com/containernetworking/cni/plugins/main/loopback",
 		"./..."
 	],
 	"Deps": [
@@ -417,6 +419,31 @@
 		},
 		{
 			"ImportPath": "github.com/containernetworking/cni/pkg/version",
+			"Comment": "v0.3.0-83-g52e4358",
+			"Rev": "52e4358cbd540cc31f72ea5e0bd4762c98011b84"
+		},
+		{
+			"ImportPath": "github.com/containernetworking/cni/plugins/ipam/host-local",
+			"Comment": "v0.3.0-83-g52e4358",
+			"Rev": "52e4358cbd540cc31f72ea5e0bd4762c98011b84"
+		},
+		{
+			"ImportPath": "github.com/containernetworking/cni/plugins/ipam/host-local/backend",
+			"Comment": "v0.3.0-83-g52e4358",
+			"Rev": "52e4358cbd540cc31f72ea5e0bd4762c98011b84"
+		},
+		{
+			"ImportPath": "github.com/containernetworking/cni/plugins/ipam/host-local/backend/disk",
+			"Comment": "v0.3.0-83-g52e4358",
+			"Rev": "52e4358cbd540cc31f72ea5e0bd4762c98011b84"
+		},
+		{
+			"ImportPath": "github.com/containernetworking/cni/plugins/ipam/host-local/backend/testing",
+			"Comment": "v0.3.0-83-g52e4358",
+			"Rev": "52e4358cbd540cc31f72ea5e0bd4762c98011b84"
+		},
+		{
+			"ImportPath": "github.com/containernetworking/cni/plugins/main/loopback",
 			"Comment": "v0.3.0-83-g52e4358",
 			"Rev": "52e4358cbd540cc31f72ea5e0bd4762c98011b84"
 		},
