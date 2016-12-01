@@ -22,7 +22,7 @@ import (
 	"k8s.io/kubernetes/pkg/registry/core/service/allocator"
 	etcdallocator "k8s.io/kubernetes/pkg/registry/core/service/allocator/etcd"
 	"k8s.io/kubernetes/pkg/serviceaccount"
-	kcrypto "k8s.io/kubernetes/pkg/util/crypto"
+	"k8s.io/kubernetes/pkg/util/cert"
 	"k8s.io/kubernetes/pkg/util/flowcontrol"
 	utilwait "k8s.io/kubernetes/pkg/util/wait"
 	serviceaccountadmission "k8s.io/kubernetes/plugin/pkg/admission/serviceaccount"
@@ -126,7 +126,7 @@ func (c *MasterConfig) RunServiceAccountTokensController(cm *cmapp.CMServer) {
 		if err != nil {
 			glog.Fatalf("Error reading master ca file for Service Account Token Manager: %s: %v", c.Options.ServiceAccountConfig.MasterCA, err)
 		}
-		if _, err := kcrypto.CertsFromPEM(rootCA); err != nil {
+		if _, err := cert.ParseCertsPEM(rootCA); err != nil {
 			glog.Fatalf("Error parsing master ca file for Service Account Token Manager: %s: %v", c.Options.ServiceAccountConfig.MasterCA, err)
 		}
 	}

@@ -27,7 +27,7 @@ import (
 	kubeletcni "k8s.io/kubernetes/pkg/kubelet/network/cni"
 	kubeletserver "k8s.io/kubernetes/pkg/kubelet/server"
 	kubelettypes "k8s.io/kubernetes/pkg/kubelet/types"
-	kcrypto "k8s.io/kubernetes/pkg/util/crypto"
+	"k8s.io/kubernetes/pkg/util/cert"
 	kerrors "k8s.io/kubernetes/pkg/util/errors"
 
 	osclient "github.com/openshift/origin/pkg/client"
@@ -103,7 +103,7 @@ func BuildKubernetesNodeConfig(options configapi.NodeConfig, enableProxy, enable
 		glog.Warningf(`Using "localhost" as node name will not resolve from all locations`)
 	}
 
-	clientCAs, err := kcrypto.CertPoolFromFile(options.ServingInfo.ClientCA)
+	clientCAs, err := cert.NewPool(options.ServingInfo.ClientCA)
 	if err != nil {
 		return nil, err
 	}
