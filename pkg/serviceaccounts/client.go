@@ -82,14 +82,14 @@ func Clients(config restclient.Config, tokenRetriever TokenRetriever, namespace,
 	// TODO: refetch the token if the client encounters 401 errors
 	token, err := tokenRetriever.GetToken(namespace, name)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
 	config.BearerToken = token
 
 	config.UserAgent = openshiftUserAgent
 	c, err := client.New(&config)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	config.UserAgent = kubeUserAgent
