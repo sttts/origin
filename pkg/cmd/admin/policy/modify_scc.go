@@ -9,7 +9,6 @@ import (
 
 	kapi "k8s.io/kubernetes/pkg/api"
 	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
-	adapter "k8s.io/kubernetes/pkg/client/unversioned/adapters/internalclientset"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
@@ -145,11 +144,11 @@ func (o *SCCModificationOptions) CompleteUsers(f *clientcmd.Factory, args []stri
 		return errors.New("you must specify at least one user or service account")
 	}
 
-	_, kc, _, err := f.Clients()
+	_, kc, err := f.Clients()
 	if err != nil {
 		return err
 	}
-	o.SCCInterface = adapter.FromUnversionedClient(kc).Core()
+	o.SCCInterface = kc.Core()
 
 	o.DefaultSubjectNamespace, _, err = f.DefaultNamespace()
 	if err != nil {

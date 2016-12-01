@@ -147,12 +147,6 @@ type MasterConfig struct {
 	// To apply different access control to a system component, create a client config specifically for that component.
 	PrivilegedLoopbackClientConfig restclient.Config
 
-	// PrivilegedLoopbackKubernetesClient is the client used to call Kubernetes APIs from system components,
-	// built from KubeClientConfig. It should only be accessed via the *Client() helper methods. To apply
-	// different access control to a system component, create a separate client/config specifically for
-	// that component.
-	// DEPRECATED: use PrivilegedLoopbackKubernetesClientset instead.
-	PrivilegedLoopbackKubernetesClient *kclient.Client
 	// PrivilegedLoopbackKubernetesClientset is the client used to call Kubernetes APIs from system components,
 	// built from KubeClientConfig. It should only be accessed via the *Client() helper methods. To apply
 	// different access control to a system component, create a separate client/config specifically for
@@ -188,7 +182,7 @@ func BuildMasterConfig(options configapi.MasterConfig) (*MasterConfig, error) {
 		return nil, err
 	}
 
-	privilegedLoopbackKubeClient, privilegedLoopbackKubeClientset, _, err := configapi.GetKubeClient(options.MasterClients.OpenShiftLoopbackKubeConfig, options.MasterClients.OpenShiftLoopbackClientConnectionOverrides)
+	privilegedLoopbackKubeClientset, _, err := configapi.GetKubeClient(options.MasterClients.OpenShiftLoopbackKubeConfig, options.MasterClients.OpenShiftLoopbackClientConnectionOverrides)
 	if err != nil {
 		return nil, err
 	}
@@ -581,7 +575,7 @@ func newServiceAccountTokenGetter(options configapi.MasterConfig) (serviceaccoun
 	if options.KubernetesMasterConfig == nil {
 		// When we're running against an external Kubernetes, use the external kubernetes client to validate service account tokens
 		// This prevents infinite auth loops if the privilegedLoopbackKubeClient authenticates using a service account token
-		_, kubeClientset, _, err := configapi.GetKubeClient(options.MasterClients.ExternalKubernetesKubeConfig, options.MasterClients.ExternalKubernetesClientConnectionOverrides)
+		kubeClientset, _, err := configapi.GetKubeClient(options.MasterClients.ExternalKubernetesKubeConfig, options.MasterClients.ExternalKubernetesClientConnectionOverrides)
 		if err != nil {
 			return nil, err
 		}
@@ -815,11 +809,6 @@ func getEtcdTokenAuthenticator(optsGetter restoptions.Getter, groupMapper identi
 	userRegistry := userregistry.NewRegistry(userStorage)
 
 	return authnregistry.NewTokenAuthenticator(accessTokenRegistry, userRegistry, groupMapper), nil
-}
-
-// KubeClient returns the kubernetes client object
-func (c *MasterConfig) KubeClient() *kclient.Client {
-	return c.PrivilegedLoopbackKubernetesClient
 }
 
 // KubeClientset returns the kubernetes client object

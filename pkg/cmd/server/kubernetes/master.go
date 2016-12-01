@@ -29,7 +29,6 @@ import (
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/typed/dynamic"
 	kclient "k8s.io/kubernetes/pkg/client/unversioned"
-	adapter "k8s.io/kubernetes/pkg/client/unversioned/adapters/internalclientset"
 	"k8s.io/kubernetes/pkg/controller/daemon"
 	"k8s.io/kubernetes/pkg/controller/deployment"
 	"k8s.io/kubernetes/pkg/controller/disruption"
@@ -414,7 +413,7 @@ func (c *MasterConfig) RunNodeController() {
 	controller, err := nodecontroller.NewNodeController(
 		c.Informers.Pods().Informer(),
 		c.CloudProvider,
-		adapter.FromUnversionedClient(c.KubeClient),
+		clientset.NewFromConfig(c.KubeClient),
 		s.PodEvictionTimeout.Duration,
 
 		s.NodeEvictionRate,
