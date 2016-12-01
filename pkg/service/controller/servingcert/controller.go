@@ -13,7 +13,6 @@ import (
 	"k8s.io/kubernetes/pkg/client/cache"
 	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
 	"k8s.io/kubernetes/pkg/controller"
-	"k8s.io/kubernetes/pkg/controller/framework"
 	"k8s.io/kubernetes/pkg/runtime"
 	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
 	"k8s.io/kubernetes/pkg/util/sets"
@@ -54,7 +53,7 @@ type ServiceServingCertController struct {
 	maxRetries int
 
 	serviceCache      cache.Store
-	serviceController *framework.Controller
+	serviceController *cache.Controller
 
 	ca         *crypto.CA
 	publicCert string
@@ -78,7 +77,7 @@ func NewServiceServingCertController(serviceClient kcoreclient.ServicesGetter, s
 		dnsSuffix: dnsSuffix,
 	}
 
-	sc.serviceCache, sc.serviceController = framework.NewInformer(
+	sc.serviceCache, sc.serviceController = cache.NewInformer(
 		&cache.ListWatch{
 			ListFunc: func(options kapi.ListOptions) (runtime.Object, error) {
 				return sc.serviceClient.Services(kapi.NamespaceAll).List(options)
@@ -89,7 +88,7 @@ func NewServiceServingCertController(serviceClient kcoreclient.ServicesGetter, s
 		},
 		&kapi.Service{},
 		resyncInterval,
-		framework.ResourceEventHandlerFuncs{
+		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				service := obj.(*kapi.Service)
 				glog.V(4).Infof("Adding service %s", service.Name)
