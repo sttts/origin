@@ -1035,6 +1035,11 @@
 			"Rev": "12acdf0a6c1e56d965ac6eb395d2bce687bf22fc"
 		},
 		{
+			"ImportPath": "github.com/docker/distribution/testutil",
+			"Comment": "v2.5.1",
+			"Rev": "12acdf0a6c1e56d965ac6eb395d2bce687bf22fc"
+		},
+		{
 			"ImportPath": "github.com/docker/distribution/uuid",
 			"Comment": "v2.5.1",
 			"Rev": "12acdf0a6c1e56d965ac6eb395d2bce687bf22fc"
