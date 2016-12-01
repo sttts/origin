@@ -29,6 +29,7 @@ import (
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/typed/dynamic"
 	kclient "k8s.io/kubernetes/pkg/client/unversioned"
+	"k8s.io/kubernetes/pkg/controller/cronjob"
 	"k8s.io/kubernetes/pkg/controller/daemon"
 	"k8s.io/kubernetes/pkg/controller/deployment"
 	"k8s.io/kubernetes/pkg/controller/disruption"
@@ -44,7 +45,6 @@ import (
 	gccontroller "k8s.io/kubernetes/pkg/controller/podgc"
 	replicasetcontroller "k8s.io/kubernetes/pkg/controller/replicaset"
 	replicationcontroller "k8s.io/kubernetes/pkg/controller/replication"
-	"k8s.io/kubernetes/pkg/controller/scheduledjob"
 	servicecontroller "k8s.io/kubernetes/pkg/controller/service"
 	attachdetachcontroller "k8s.io/kubernetes/pkg/controller/volume/attachdetach"
 	persistentvolumecontroller "k8s.io/kubernetes/pkg/controller/volume/persistentvolume"
@@ -314,7 +314,7 @@ func (c *MasterConfig) RunScheduledJobController(config *restclient.Config) {
 	if err != nil {
 		glog.Fatalf("Unable to configure scheduled job controller: %v", err)
 	}
-	go scheduledjob.NewScheduledJobController(client).Run(utilwait.NeverStop)
+	go cronjob.NewCronJobController(client).Run(utilwait.NeverStop)
 }
 
 // RunDisruptionBudgetController starts the Kubernetes disruption budget controller
