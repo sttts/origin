@@ -613,7 +613,7 @@ func ValidateRoutingConfig(config api.RoutingConfig, fldPath *field.Path) field.
 func ValidateAPIServerExtendedArguments(config api.ExtendedArguments, fldPath *field.Path) ValidationResults {
 	validationResults := ValidationResults{}
 
-	validationResults.AddErrors(ValidateExtendedArguments(config, apiserveroptions.NewAPIServer().AddFlags, fldPath)...)
+	validationResults.AddErrors(ValidateExtendedArguments(config, apiserveroptions.NewServerRunOptions().AddFlags, fldPath)...)
 
 	if len(config["admission-control"]) > 0 {
 		validationResults.AddWarnings(field.Invalid(fldPath.Key("admission-control"), config["admission-control"], "specified admission ordering is being phased out.  Convert to DefaultAdmissionConfig in admissionConfig.pluginConfig."))
