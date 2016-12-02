@@ -35,7 +35,7 @@ func NewREST(optsGetter restoptions.Getter, defaultRegistry api.DefaultRegistry,
 			return obj.(*api.ImageStream).Name, nil
 		},
 		// Used to match objects based on labels/fields for list and watch
-		PredicateFunc: func(label labels.Selector, field fields.Selector) *generic.SelectionPredicate {
+		PredicateFunc: func(label labels.Selector, field fields.Selector) storage.SelectionPredicate {
 			return imagestream.Matcher(label, field)
 		},
 		QualifiedResource: api.Resource("imagestreams"),

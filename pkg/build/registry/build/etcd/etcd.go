@@ -29,7 +29,7 @@ func NewREST(optsGetter restoptions.Getter) (*REST, *DetailsREST, error) {
 		ObjectNameFunc: func(obj runtime.Object) (string, error) {
 			return obj.(*api.Build).Name, nil
 		},
-		PredicateFunc: func(label labels.Selector, field fields.Selector) *generic.SelectionPredicate {
+		PredicateFunc: func(label labels.Selector, field fields.Selector) storage.SelectionPredicate {
 			return build.Matcher(label, field)
 		},
 		CreateStrategy:      build.Strategy,

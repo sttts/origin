@@ -30,7 +30,7 @@ func NewREST(optsGetter restoptions.Getter) (*REST, error) {
 			return obj.(*api.Image).Name, nil
 		},
 		// Used to match objects based on labels/fields for list and watch
-		PredicateFunc: func(label labels.Selector, field fields.Selector) *generic.SelectionPredicate {
+		PredicateFunc: func(label labels.Selector, field fields.Selector) storage.SelectionPredicate {
 			return image.Matcher(label, field)
 		},
 		QualifiedResource: api.Resource("images"),

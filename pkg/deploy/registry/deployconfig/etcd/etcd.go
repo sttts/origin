@@ -36,7 +36,7 @@ func NewREST(optsGetter restoptions.Getter) (*REST, *StatusREST, *ScaleREST, err
 		ObjectNameFunc: func(obj runtime.Object) (string, error) {
 			return obj.(*api.DeploymentConfig).Name, nil
 		},
-		PredicateFunc: func(label labels.Selector, field fields.Selector) *generic.SelectionPredicate {
+		PredicateFunc: func(label labels.Selector, field fields.Selector) storage.SelectionPredicate {
 			return deployconfig.Matcher(label, field)
 		},
 		CreateStrategy:      deployconfig.Strategy,

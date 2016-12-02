@@ -28,7 +28,7 @@ func NewREST(optsGetter restoptions.Getter, clientGetter oauthclient.Getter) (*R
 		ObjectNameFunc: func(obj runtime.Object) (string, error) {
 			return obj.(*api.OAuthAuthorizeToken).Name, nil
 		},
-		PredicateFunc: func(label labels.Selector, field fields.Selector) *generic.SelectionPredicate {
+		PredicateFunc: func(label labels.Selector, field fields.Selector) storage.SelectionPredicate {
 			return oauthauthorizetoken.Matcher(label, field)
 		},
 		TTLFunc: func(obj runtime.Object, existing uint64, update bool) (uint64, error) {
