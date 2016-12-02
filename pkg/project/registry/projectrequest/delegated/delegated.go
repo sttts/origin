@@ -155,7 +155,7 @@ func (r *REST) Create(ctx kapi.Context, obj runtime.Object) (runtime.Object, err
 				if latest.OriginKind(mapping.GroupVersionKind) {
 					return r.openshiftClient, nil
 				}
-				return r.kubeClient.CoreClient, nil
+				return r.kubeClient.CoreClient.RESTClient(), nil
 			}),
 		},
 		After: stopOnErr,
