@@ -9,7 +9,7 @@ import (
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/storage"
+	kstorage "k8s.io/kubernetes/pkg/storage"
 	"k8s.io/kubernetes/pkg/util/validation/field"
 
 	scopeauthorizer "github.com/openshift/origin/pkg/authorization/authorizer/scope"
@@ -92,8 +92,8 @@ func (strategy) AllowUnconditionalUpdate() bool {
 }
 
 // Matcher returns a generic matcher for a given label and field selector.
-func Matcher(label labels.Selector, field fields.Selector) storage.SelectionPredicate {
-	return storage.SelectionPredicate{
+func Matcher(label labels.Selector, field fields.Selector) kstorage.SelectionPredicate {
+	return kstorage.SelectionPredicate{
 		Label: label,
 		Field: field,
 		GetAttrs: func(o runtime.Object) (labels.Set, fields.Set, error) {
