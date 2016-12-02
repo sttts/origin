@@ -195,7 +195,7 @@ func RunProcess(f *clientcmd.Factory, out, errout io.Writer, cmd *cobra.Command,
 	} else {
 		infos, err = resource.NewBuilder(mapper, typer, resource.ClientMapperFunc(f.ClientForMapping), kapi.Codecs.UniversalDecoder()).
 			NamespaceParam(namespace).RequireNamespace().
-			FilenameParam(explicit, false, filename).
+			FilenameParam(explicit, &resource.FilenameOptions{Recursive: false, Filenames: []string{filename}}).
 			Do().
 			Infos()
 		if err != nil {
