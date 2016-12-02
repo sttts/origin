@@ -66,8 +66,7 @@ func GetClusterAdminClientConfig(adminKubeConfigFile string) (*restclient.Config
 	return conf, nil
 }
 
-// TODO internalclientset: get rid of oldClient after next rebase
-func GetClientForUser(clientConfig restclient.Config, username string) (*client.Client, *kclientset.Clientset, *restclient.Config, error) {
+func GetClientForUser(clientConfig restclient.Config, username string) (*client.Client, kclientset.Interface, *restclient.Config, error) {
 	token, err := tokencmd.RequestToken(&clientConfig, nil, username, "password")
 	if err != nil {
 		return nil, nil, nil, err
@@ -76,11 +75,10 @@ func GetClientForUser(clientConfig restclient.Config, username string) (*client.
 	userClientConfig := clientcmd.AnonymousClientConfig(&clientConfig)
 	userClientConfig.BearerToken = token
 
-	kubeClient, err := kclient.New(&userClientConfig)
+	kubeClientset, err := kclientset.NewForConfig(&userClientConfig)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	kubeClientset := adapter.FromUnversionedClient(kubeClient)
 
 	osClient, err := client.New(&userClientConfig)
 	if err != nil {

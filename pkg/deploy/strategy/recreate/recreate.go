@@ -70,7 +70,7 @@ func NewRecreateDeploymentStrategy(client kclientset.Interface, tagClient client
 	if errOut == nil {
 		errOut = ioutil.Discard
 	}
-	scaler, _ := kubectl.ScalerFor(kapi.Kind("ReplicationController"), oldClient)
+	scaler, _ := kubectl.ScalerFor(kapi.Kind("ReplicationController"), client)
 	return &RecreateDeploymentStrategy{
 		out:         out,
 		errOut:      errOut,
