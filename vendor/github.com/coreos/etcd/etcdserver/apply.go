@@ -304,14 +304,7 @@ func (a *applierV3backend) Range(txnID int64, r *pb.RangeRequest) (*pb.RangeResp
 		pruneKVs(rr, f)
 	}
 
-	sortOrder := r.SortOrder
-	if r.SortTarget != pb.RangeRequest_KEY && sortOrder == pb.RangeRequest_NONE {
-		// Since current mvcc.Range implementation returns results
-		// sorted by keys in lexiographically ascending order,
-		// sort ASCEND by default only when target is not 'KEY'
-		sortOrder = pb.RangeRequest_ASCEND
-	}
-	if sortOrder != pb.RangeRequest_NONE {
+	if r.SortOrder != pb.RangeRequest_NONE {
 		var sorter sort.Interface
 		switch {
 		case r.SortTarget == pb.RangeRequest_KEY:
@@ -326,9 +319,9 @@ func (a *applierV3backend) Range(txnID int64, r *pb.RangeRequest) (*pb.RangeResp
 			sorter = &kvSortByValue{&kvSort{rr.KVs}}
 		}
 		switch {
-		case sortOrder == pb.RangeRequest_ASCEND:
+		case r.SortOrder == pb.RangeRequest_ASCEND:
 			sort.Sort(sorter)
-		case sortOrder == pb.RangeRequest_DESCEND:
+		case r.SortOrder == pb.RangeRequest_DESCEND:
 			sort.Sort(sort.Reverse(sorter))
 		}
 	}
@@ -449,10 +442,6 @@ func (a *applierV3backend) applyCompare(c *pb.Compare) (int64, bool) {
 	switch c.Result {
 	case pb.Compare_EQUAL:
 		if result != 0 {
-			return rev, false
-		}
-	case pb.Compare_NOT_EQUAL:
-		if result == 0 {
 			return rev, false
 		}
 	case pb.Compare_GREATER:

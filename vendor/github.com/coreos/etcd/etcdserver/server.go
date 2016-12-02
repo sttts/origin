@@ -177,7 +177,8 @@ type EtcdServer struct {
 
 	snapCount uint64
 
-	w wait.Wait
+	w  wait.Wait
+	td *contention.TimeoutDetector
 
 	readMu sync.RWMutex
 	// read routine notifies etcd server that it waits for reading by sending an empty struct to
@@ -232,6 +233,8 @@ type EtcdServer struct {
 	// to detect the cluster version immediately.
 	forceVersionC chan struct{}
 
+	msgSnapC chan raftpb.Message
+
 	// wgMu blocks concurrent waitgroup mutation while server stopping
 	wgMu sync.RWMutex
 	// wg is used to wait for the go routines that depends on the server state
@@ -265,22 +268,7 @@ func NewServer(cfg *ServerConfig) (srv *EtcdServer, err error) {
 
 	bepath := path.Join(cfg.SnapDir(), databaseFilename)
 	beExist := fileutil.Exist(bepath)
-
-	var be backend.Backend
-	beOpened := make(chan struct{})
-	go func() {
-		be = backend.NewDefaultBackend(bepath)
-		beOpened <- struct{}{}
-	}()
-
-	select {
-	case <-beOpened:
-	case <-time.After(time.Second):
-		plog.Warningf("another etcd process is running with the same data dir and holding the file lock.")
-		plog.Warningf("waiting for it to exit before starting...")
-		<-beOpened
-	}
-
+	be := backend.NewDefaultBackend(bepath)
 	defer func() {
 		if err != nil {
 			be.Close()
@@ -411,19 +399,16 @@ func NewServer(cfg *ServerConfig) (srv *EtcdServer, err error) {
 		readych:   make(chan struct{}),
 		Cfg:       cfg,
 		snapCount: cfg.SnapCount,
-		errorc:    make(chan error, 1),
-		store:     st,
+		// set up contention detectors for raft heartbeat message.
+		// expect to send a heartbeat within 2 heartbeat intervals.
+		td:     contention.NewTimeoutDetector(2 * heartbeat),
+		errorc: make(chan error, 1),
+		store:  st,
 		r: raftNode{
-			isIDRemoved: func(id uint64) bool { return cl.IsIDRemoved(types.ID(id)) },
 			Node:        n,
 			ticker:      time.Tick(heartbeat),
-			// set up contention detectors for raft heartbeat message.
-			// expect to send a heartbeat within 2 heartbeat intervals.
-			td:          contention.NewTimeoutDetector(2 * heartbeat),
-			heartbeat:   heartbeat,
 			raftStorage: s,
 			storage:     NewStorage(w, ss),
-			msgSnapC:    make(chan raftpb.Message, maxInFlightMsgSnap),
 			readStateC:  make(chan raft.ReadState, 1),
 		},
 		id:            id,
@@ -435,6 +420,7 @@ func NewServer(cfg *ServerConfig) (srv *EtcdServer, err error) {
 		peerRt:        prt,
 		reqIDGen:      idutil.NewGenerator(uint16(id), time.Now()),
 		forceVersionC: make(chan struct{}),
+		msgSnapC:      make(chan raftpb.Message, maxInFlightMsgSnap),
 	}
 
 	srv.applyV2 = &applierV2store{store: srv.store, cluster: srv.cluster}
@@ -597,6 +583,7 @@ type etcdProgress struct {
 // TODO: add a state machine interface to apply the commit entries and do snapshot/recover
 type raftReadyHandler struct {
 	leadershipUpdate func()
+	sendMessage      func(msgs []raftpb.Message)
 }
 
 func (s *EtcdServer) run() {
@@ -642,10 +629,11 @@ func (s *EtcdServer) run() {
 			if s.compactor != nil {
 				s.compactor.Resume()
 			}
-			if s.r.td != nil {
-				s.r.td.Reset()
+			if s.td != nil {
+				s.td.Reset()
 			}
 		},
+		sendMessage: func(msgs []raftpb.Message) { s.send(msgs) },
 	}
 	s.r.start(rh)
 
@@ -757,7 +745,7 @@ func (s *EtcdServer) applyAll(ep *etcdProgress, apply *apply) {
 	s.triggerSnapshot(ep)
 	select {
 	// snapshot requested via send()
-	case m := <-s.r.msgSnapC:
+	case m := <-s.msgSnapC:
 		merged := s.createMergedSnapshotMessage(m, ep.appliedi, ep.confState)
 		s.sendMergedSnap(merged)
 	default:
@@ -1175,6 +1163,47 @@ func (s *EtcdServer) publish(timeout time.Duration) {
 			plog.Errorf("publish error: %v", err)
 		}
 	}
+}
+
+// TODO: move this function into raft.go
+func (s *EtcdServer) send(ms []raftpb.Message) {
+	sentAppResp := false
+	for i := len(ms) - 1; i >= 0; i-- {
+		if s.cluster.IsIDRemoved(types.ID(ms[i].To)) {
+			ms[i].To = 0
+		}
+
+		if ms[i].Type == raftpb.MsgAppResp {
+			if sentAppResp {
+				ms[i].To = 0
+			} else {
+				sentAppResp = true
+			}
+		}
+
+		if ms[i].Type == raftpb.MsgSnap {
+			// There are two separate data store: the store for v2, and the KV for v3.
+			// The msgSnap only contains the most recent snapshot of store without KV.
+			// So we need to redirect the msgSnap to etcd server main loop for merging in the
+			// current store snapshot and KV snapshot.
+			select {
+			case s.msgSnapC <- ms[i]:
+			default:
+				// drop msgSnap if the inflight chan if full.
+			}
+			ms[i].To = 0
+		}
+		if ms[i].Type == raftpb.MsgHeartbeat {
+			ok, exceed := s.td.Observe(ms[i].To)
+			if !ok {
+				// TODO: limit request rate.
+				plog.Warningf("failed to send out heartbeat on time (exceeded the %dms timeout for %v)", s.Cfg.TickMs, exceed)
+				plog.Warningf("server is likely overloaded")
+			}
+		}
+	}
+
+	s.r.transport.Send(ms)
 }
 
 func (s *EtcdServer) sendMergedSnap(merged snap.Message) {

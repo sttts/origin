@@ -47,7 +47,6 @@ var (
 	ErrRootUserNotExist     = errors.New("auth: root user does not exist")
 	ErrRootRoleNotExist     = errors.New("auth: root user does not have root role")
 	ErrUserAlreadyExist     = errors.New("auth: user already exists")
-	ErrUserEmpty            = errors.New("auth: user name is empty")
 	ErrUserNotFound         = errors.New("auth: user not found")
 	ErrRoleAlreadyExist     = errors.New("auth: role already exists")
 	ErrRoleNotFound         = errors.New("auth: role not found")
@@ -147,9 +146,6 @@ type AuthStore interface {
 
 	// Revision gets current revision of authStore
 	Revision() uint64
-
-	// CheckPassword checks a given pair of username and password is correct
-	CheckPassword(username, password string) (uint64, error)
 }
 
 type authStore struct {
@@ -236,29 +232,16 @@ func (as *authStore) Authenticate(ctx context.Context, username, password string
 		return nil, ErrAuthFailed
 	}
 
+	if bcrypt.CompareHashAndPassword(user.Password, []byte(password)) != nil {
+		plog.Noticef("authentication failed, invalid password for user %s", username)
+		return &pb.AuthenticateResponse{}, ErrAuthFailed
+	}
+
 	token := fmt.Sprintf("%s.%d", simpleToken, index)
 	as.assignSimpleTokenToUser(username, token)
 
 	plog.Infof("authorized %s, token is %s", username, token)
 	return &pb.AuthenticateResponse{Token: token}, nil
-}
-
-func (as *authStore) CheckPassword(username, password string) (uint64, error) {
-	tx := as.be.BatchTx()
-	tx.Lock()
-	defer tx.Unlock()
-
-	user := getUser(tx, username)
-	if user == nil {
-		return 0, ErrAuthFailed
-	}
-
-	if bcrypt.CompareHashAndPassword(user.Password, []byte(password)) != nil {
-		plog.Noticef("authentication failed, invalid password for user %s", username)
-		return 0, ErrAuthFailed
-	}
-
-	return getRevision(tx), nil
 }
 
 func (as *authStore) Recover(be backend.Backend) {
@@ -283,10 +266,6 @@ func (as *authStore) Recover(be backend.Backend) {
 }
 
 func (as *authStore) UserAdd(r *pb.AuthUserAddRequest) (*pb.AuthUserAddResponse, error) {
-	if len(r.Name) == 0 {
-		return nil, ErrUserEmpty
-	}
-
 	hashed, err := bcrypt.GenerateFromPassword([]byte(r.Password), BcryptCost)
 	if err != nil {
 		plog.Errorf("failed to hash password: %s", err)

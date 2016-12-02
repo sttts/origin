@@ -12,17 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// +build !linux !386,!amd64
-
-package netutil
-
-import (
-	"fmt"
-	"runtime"
-)
-
-// GetDefaultHost fetches the a resolvable name that corresponds
-// to the machine's default routable interface
-func GetDefaultHost() (string, error) {
-	return "", fmt.Errorf("default host not supported on %s_%s", runtime.GOOS, runtime.GOARCH)
-}
+// Package grpcproxy is an OSI level 7 proxy for etcd v3 API requests.
+package grpcproxy

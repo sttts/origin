@@ -462,12 +462,8 @@ func (n *node) ApplyConfChange(cc pb.ConfChange) *pb.ConfState {
 
 func (n *node) Status() Status {
 	c := make(chan Status)
-	select {
-	case n.status <- c:
-		return <-c
-	case <-n.done:
-		return Status{}
-	}
+	n.status <- c
+	return <-c
 }
 
 func (n *node) ReportUnreachable(id uint64) {

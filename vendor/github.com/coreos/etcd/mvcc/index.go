@@ -30,7 +30,6 @@ type index interface {
 	RangeSince(key, end []byte, rev int64) []revision
 	Compact(rev int64) map[revision]struct{}
 	Equal(b index) bool
-	Insert(ki *keyIndex)
 }
 
 type treeIndex struct {
@@ -215,10 +214,4 @@ func (a *treeIndex) Equal(bi index) bool {
 	})
 
 	return equal
-}
-
-func (ti *treeIndex) Insert(ki *keyIndex) {
-	ti.Lock()
-	defer ti.Unlock()
-	ti.tree.ReplaceOrInsert(ki)
 }

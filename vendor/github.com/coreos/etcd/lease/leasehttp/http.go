@@ -135,9 +135,11 @@ func RenewHTTP(id lease.LeaseID, url string, rt http.RoundTripper, timeout time.
 	cc := &http.Client{Transport: rt, Timeout: timeout}
 	resp, err := cc.Post(url, "application/protobuf", bytes.NewReader(lreq))
 	if err != nil {
+		// TODO detect if leader failed and retry?
 		return -1, err
 	}
-	b, err := readResponse(resp)
+	b, err := ioutil.ReadAll(resp.Body)
+	resp.Body.Close()
 	if err != nil {
 		return -1, err
 	}
@@ -180,12 +182,14 @@ func TimeToLiveHTTP(ctx context.Context, id lease.LeaseID, keys bool, url string
 	var b []byte
 	errc := make(chan error)
 	go func() {
+		// TODO detect if leader failed and retry?
 		resp, err := cc.Do(req)
 		if err != nil {
 			errc <- err
 			return
 		}
-		b, err = readResponse(resp)
+		b, err = ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
 		if err != nil {
 			errc <- err
 			return
@@ -218,10 +222,4 @@ func TimeToLiveHTTP(ctx context.Context, id lease.LeaseID, keys bool, url string
 		return nil, fmt.Errorf("lease: renew id mismatch")
 	}
 	return lresp, nil
-}
-
-func readResponse(resp *http.Response) (b []byte, err error) {
-	b, err = ioutil.ReadAll(resp.Body)
-	httputil.GracefulClose(resp)
-	return
 }

@@ -126,6 +126,8 @@ type watchGrpcStream struct {
 	reqc chan *watchRequest
 	// respc receives data from the watch client
 	respc chan *pb.WatchResponse
+	// stopc is sent to the main goroutine to stop all processing
+	stopc chan struct{}
 	// donec closes to broadcast shutdown
 	donec chan struct{}
 	// errc transmits errors from grpc Recv to the watch stream reconn logic
@@ -211,6 +213,7 @@ func (w *watcher) newWatcherGrpcStream(inctx context.Context) *watchGrpcStream {
 
 		respc:    make(chan *pb.WatchResponse),
 		reqc:     make(chan *watchRequest),
+		stopc:    make(chan struct{}),
 		donec:    make(chan struct{}),
 		errc:     make(chan error, 1),
 		closingc: make(chan *watcherStream),
@@ -316,7 +319,7 @@ func (w *watcher) Close() (err error) {
 }
 
 func (w *watchGrpcStream) Close() (err error) {
-	w.cancel()
+	close(w.stopc)
 	<-w.donec
 	select {
 	case err = <-w.errc:
@@ -363,7 +366,7 @@ func (w *watchGrpcStream) closeSubstream(ws *watcherStream) {
 	// close subscriber's channel
 	if closeErr := w.closeErr; closeErr != nil && ws.initReq.ctx.Err() == nil {
 		go w.sendCloseSubstream(ws, &WatchResponse{closeErr: w.closeErr})
-	} else if ws.outc != nil {
+	} else {
 		close(ws.outc)
 	}
 	if ws.id != -1 {
@@ -393,17 +396,15 @@ func (w *watchGrpcStream) run() {
 		for _, ws := range w.substreams {
 			if _, ok := closing[ws]; !ok {
 				close(ws.recvc)
-				closing[ws] = struct{}{}
 			}
 		}
 		for _, ws := range w.resuming {
 			if _, ok := closing[ws]; ws != nil && !ok {
 				close(ws.recvc)
-				closing[ws] = struct{}{}
 			}
 		}
 		w.joinSubstreams()
-		for range closing {
+		for toClose := len(w.substreams) + len(w.resuming); toClose > 0; toClose-- {
 			w.closeSubstream(<-w.closingc)
 		}
 
@@ -490,7 +491,7 @@ func (w *watchGrpcStream) run() {
 				wc.Send(ws.initReq.toPB())
 			}
 			cancelSet = make(map[int64]struct{})
-		case <-w.ctx.Done():
+		case <-w.stopc:
 			return
 		case ws := <-w.closingc:
 			w.closeSubstream(ws)
@@ -583,6 +584,17 @@ func (w *watchGrpcStream) serveSubstream(ws *watcherStream, resumec chan struct{
 		curWr := emptyWr
 		outc := ws.outc
 
+		if len(ws.buf) > 0 && ws.buf[0].Created {
+			select {
+			case ws.initReq.retc <- ws.outc:
+				// send first creation event and only if requested
+				if !ws.initReq.createdNotify {
+					ws.buf = ws.buf[1:]
+				}
+			default:
+			}
+		}
+
 		if len(ws.buf) > 0 {
 			curWr = ws.buf[0]
 		} else {
@@ -600,37 +612,13 @@ func (w *watchGrpcStream) serveSubstream(ws *watcherStream, resumec chan struct{
 				// shutdown from closeSubstream
 				return
 			}
-
-			if wr.Created {
-				if ws.initReq.retc != nil {
-					ws.initReq.retc <- ws.outc
-					// to prevent next write from taking the slot in buffered channel
-					// and posting duplicate create events
-					ws.initReq.retc = nil
-
-					// send first creation event only if requested
-					if ws.initReq.createdNotify {
-						ws.outc <- *wr
-					}
-				}
-			}
-
+			// TODO pause channel if buffer gets too large
+			ws.buf = append(ws.buf, wr)
 			nextRev = wr.Header.Revision
 			if len(wr.Events) > 0 {
 				nextRev = wr.Events[len(wr.Events)-1].Kv.ModRevision + 1
 			}
 			ws.initReq.rev = nextRev
-
-			// created event is already sent above,
-			// watcher should not post duplicate events
-			if wr.Created {
-				continue
-			}
-
-			// TODO pause channel if buffer gets too large
-			ws.buf = append(ws.buf, wr)
-		case <-w.ctx.Done():
-			return
 		case <-ws.initReq.ctx.Done():
 			return
 		case <-resumec:
@@ -642,76 +630,32 @@ func (w *watchGrpcStream) serveSubstream(ws *watcherStream, resumec chan struct{
 }
 
 func (w *watchGrpcStream) newWatchClient() (pb.Watch_WatchClient, error) {
-	// mark all substreams as resuming
-	close(w.resumec)
-	w.resumec = make(chan struct{})
-	w.joinSubstreams()
-	for _, ws := range w.substreams {
-		ws.id = -1
-		w.resuming = append(w.resuming, ws)
-	}
-	// strip out nils, if any
-	var resuming []*watcherStream
-	for _, ws := range w.resuming {
-		if ws != nil {
-			resuming = append(resuming, ws)
-		}
-	}
-	w.resuming = resuming
-	w.substreams = make(map[int64]*watcherStream)
-
-	// connect to grpc stream while accepting watcher cancelation
-	stopc := make(chan struct{})
-	donec := w.waitCancelSubstreams(stopc)
+	// connect to grpc stream
 	wc, err := w.openWatchClient()
-	close(stopc)
-	<-donec
-
-	// serve all non-closing streams, even if there's a client error
-	// so that the teardown path can shutdown the streams as expected.
-	for _, ws := range w.resuming {
-		if ws.closing {
-			continue
-		}
-		ws.donec = make(chan struct{})
-		go w.serveSubstream(ws, w.resumec)
-	}
-
 	if err != nil {
 		return nil, v3rpc.Error(err)
 	}
-
+	// mark all substreams as resuming
+	if len(w.substreams)+len(w.resuming) > 0 {
+		close(w.resumec)
+		w.resumec = make(chan struct{})
+		w.joinSubstreams()
+		for _, ws := range w.substreams {
+			ws.id = -1
+			w.resuming = append(w.resuming, ws)
+		}
+		for _, ws := range w.resuming {
+			if ws == nil || ws.closing {
+				continue
+			}
+			ws.donec = make(chan struct{})
+			go w.serveSubstream(ws, w.resumec)
+		}
+	}
+	w.substreams = make(map[int64]*watcherStream)
 	// receive data from new grpc stream
 	go w.serveWatchClient(wc)
 	return wc, nil
-}
-
-func (w *watchGrpcStream) waitCancelSubstreams(stopc <-chan struct{}) <-chan struct{} {
-	var wg sync.WaitGroup
-	wg.Add(len(w.resuming))
-	donec := make(chan struct{})
-	for i := range w.resuming {
-		go func(ws *watcherStream) {
-			defer wg.Done()
-			if ws.closing {
-				return
-			}
-			select {
-			case <-ws.initReq.ctx.Done():
-				// closed ws will be removed from resuming
-				ws.closing = true
-				close(ws.outc)
-				ws.outc = nil
-				go func() { w.closingc <- ws }()
-			case <-stopc:
-			}
-		}(w.resuming[i])
-	}
-	go func() {
-		defer close(donec)
-		wg.Wait()
-	}()
-	return donec
 }
 
 // joinSubstream waits for all substream goroutines to complete
@@ -730,9 +674,9 @@ func (w *watchGrpcStream) joinSubstreams() {
 func (w *watchGrpcStream) openWatchClient() (ws pb.Watch_WatchClient, err error) {
 	for {
 		select {
-		case <-w.ctx.Done():
+		case <-w.stopc:
 			if err == nil {
-				return nil, w.ctx.Err()
+				return nil, context.Canceled
 			}
 			return nil, err
 		default:
