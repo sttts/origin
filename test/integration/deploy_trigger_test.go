@@ -6,7 +6,7 @@ import (
 	"time"
 
 	kapi "k8s.io/kubernetes/pkg/api"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
+	"k8s.io/kubernetes/pkg/client/retry"
 	"k8s.io/kubernetes/pkg/util/wait"
 	watchapi "k8s.io/kubernetes/pkg/watch"
 
@@ -67,7 +67,7 @@ func TestTriggers_manual(t *testing.T) {
 		Force:  true,
 	}
 
-	retryErr := kclient.RetryOnConflict(wait.Backoff{Steps: maxUpdateRetries}, func() error {
+	retryErr := retry.RetryOnConflict(wait.Backoff{Steps: maxUpdateRetries}, func() error {
 		var err error
 		config, err = oc.DeploymentConfigs(namespace).Instantiate(request)
 		return err
@@ -361,7 +361,7 @@ loop:
 		Latest: true,
 		Force:  true,
 	}
-	retryErr := kclient.RetryOnConflict(wait.Backoff{Steps: maxUpdateRetries}, func() error {
+	retryErr := retry.RetryOnConflict(wait.Backoff{Steps: maxUpdateRetries}, func() error {
 		var err error
 		config, err = oc.DeploymentConfigs(testutil.Namespace()).Instantiate(request)
 		return err
@@ -607,7 +607,7 @@ func TestTriggers_configChange(t *testing.T) {
 	// before we update the config, we need to update the state of the existing deployment
 	// this is required to be done manually since the deployment and deployer pod controllers are not run in this test
 	// get this live or conflicts will never end up resolved
-	retryErr := kclient.RetryOnConflict(wait.Backoff{Steps: maxUpdateRetries}, func() error {
+	retryErr := retry.RetryOnConflict(wait.Backoff{Steps: maxUpdateRetries}, func() error {
 		liveDeployment, err := kc.ReplicationControllers(deployment.Namespace).Get(deployment.Name)
 		if err != nil {
 			return err
@@ -632,7 +632,7 @@ func TestTriggers_configChange(t *testing.T) {
 
 	// Update the config with a new environment variable and observe a new deployment
 	// coming up.
-	retryErr = kclient.RetryOnConflict(wait.Backoff{Steps: maxUpdateRetries}, func() error {
+	retryErr = retry.RetryOnConflict(wait.Backoff{Steps: maxUpdateRetries}, func() error {
 		latest, err := oc.DeploymentConfigs(namespace).Get(config.Name)
 		if err != nil {
 			return err
@@ -653,7 +653,7 @@ func TestTriggers_configChange(t *testing.T) {
 		t.Fatal(retryErr)
 	}
 
-	if retryErr := kclient.RetryOnConflict(wait.Backoff{Steps: maxUpdateRetries}, func() error {
+	if retryErr := retry.RetryOnConflict(wait.Backoff{Steps: maxUpdateRetries}, func() error {
 		// submit a new config with an updated environment variable
 		newConfig, err := oc.DeploymentConfigs(namespace).Get(config.Name)
 		if err != nil {

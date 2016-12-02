@@ -11,7 +11,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/resource"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/unversioned"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
+	"k8s.io/kubernetes/pkg/client/retry"
 	"k8s.io/kubernetes/pkg/util/wait"
 
 	"github.com/openshift/origin/pkg/client"
@@ -27,7 +27,7 @@ const limitRangeName = "limits"
 var quotaExceededBackoff wait.Backoff
 
 func init() {
-	quotaExceededBackoff = kclient.DefaultBackoff
+	quotaExceededBackoff = retry.DefaultBackoff
 	quotaExceededBackoff.Duration = time.Millisecond * 250
 	quotaExceededBackoff.Steps = 3
 }
