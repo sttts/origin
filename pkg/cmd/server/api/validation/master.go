@@ -313,9 +313,7 @@ func ValidateServiceAccountConfig(config api.ServiceAccountConfig, builtInKubern
 		privateKeyFilePath := fldPath.Child("privateKeyFile")
 		if fileErrs := ValidateFile(config.PrivateKeyFile, privateKeyFilePath); len(fileErrs) > 0 {
 			validationResults.AddErrors(fileErrs...)
-		} else if privateKey, err := serviceaccount.ReadPrivateKey(config.PrivateKeyFile); err != nil {
-			validationResults.AddErrors(field.Invalid(privateKeyFilePath, config.PrivateKeyFile, err.Error()))
-		} else if err := privateKey.Validate(); err != nil {
+		} else if _, err := serviceaccount.ReadPrivateKey(config.PrivateKeyFile); err != nil {
 			validationResults.AddErrors(field.Invalid(privateKeyFilePath, config.PrivateKeyFile, err.Error()))
 		}
 	} else if builtInKubernetes {
@@ -329,7 +327,7 @@ func ValidateServiceAccountConfig(config api.ServiceAccountConfig, builtInKubern
 		idxPath := fldPath.Child("publicKeyFiles").Index(i)
 		if fileErrs := ValidateFile(publicKeyFile, idxPath); len(fileErrs) > 0 {
 			validationResults.AddErrors(fileErrs...)
-		} else if _, err := serviceaccount.ReadPublicKey(publicKeyFile); err != nil {
+		} else if _, err := serviceaccount.ReadPublicKeys(publicKeyFile); err != nil {
 			validationResults.AddErrors(field.Invalid(idxPath, publicKeyFile, err.Error()))
 		}
 	}
