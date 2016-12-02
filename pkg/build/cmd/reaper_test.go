@@ -9,7 +9,7 @@ import (
 
 	kapi "k8s.io/kubernetes/pkg/api"
 	kerrors "k8s.io/kubernetes/pkg/api/errors"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
 	ktypes "k8s.io/kubernetes/pkg/types"
@@ -84,8 +84,8 @@ func makeBuildList(configName string, version int) *buildapi.BuildList {
 
 func newBuildListFake(objects ...runtime.Object) *testclient.Fake {
 	fake := testclient.NewSimpleFake(objects...)
-	fake.PrependReactor("list", "builds", func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
-		selector := action.(ktestclient.ListAction).GetListRestrictions().Labels
+	fake.PrependReactor("list", "builds", func(action core.Action) (handled bool, ret runtime.Object, err error) {
+		selector := action.(core.ListAction).GetListRestrictions().Labels
 		retList := &buildapi.BuildList{}
 		for _, obj := range objects {
 			list, ok := obj.(*buildapi.BuildList)
@@ -103,7 +103,7 @@ func newBuildListFake(objects ...runtime.Object) *testclient.Fake {
 	return fake
 }
 
-func actionsAreEqual(a, b ktestclient.Action) bool {
+func actionsAreEqual(a, b core.Action) bool {
 	if reflect.DeepEqual(a, b) {
 		return true
 	}
@@ -112,7 +112,7 @@ func actionsAreEqual(a, b ktestclient.Action) bool {
 		a.GetNamespace() == b.GetNamespace() &&
 		a.GetResource() == b.GetResource() &&
 		a.GetSubresource() == b.GetSubresource() {
-		ret := reflect.DeepEqual(a.(ktestclient.UpdateAction).GetObject(), b.(ktestclient.UpdateAction).GetObject())
+		ret := reflect.DeepEqual(a.(core.UpdateAction).GetObject(), b.(core.UpdateAction).GetObject())
 		return ret
 	}
 	return false
@@ -126,71 +126,71 @@ func TestStop(t *testing.T) {
 	tests := map[string]struct {
 		targetBC string
 		oc       *testclient.Fake
-		expected []ktestclient.Action
+		expected []core.Action
 		err      bool
 	}{
 		"simple stop": {
 			targetBC: configName,
 			oc:       newBuildListFake(makeBuildConfig(configName, 0, false)),
-			expected: []ktestclient.Action{
-				ktestclient.NewGetAction("buildconfigs", "default", configName),
+			expected: []core.Action{
+				core.NewGetAction("buildconfigs", "default", configName),
 				// Since there are no builds associated with this build config, do not expect an update
-				ktestclient.NewListAction("builds", "default", kapi.ListOptions{LabelSelector: buildutil.BuildConfigSelector(configName)}),
-				ktestclient.NewListAction("builds", "default", kapi.ListOptions{LabelSelector: buildutil.BuildConfigSelectorDeprecated(configName)}),
-				ktestclient.NewDeleteAction("buildconfigs", "default", configName),
+				core.NewListAction("builds", "default", kapi.ListOptions{LabelSelector: buildutil.BuildConfigSelector(configName)}),
+				core.NewListAction("builds", "default", kapi.ListOptions{LabelSelector: buildutil.BuildConfigSelectorDeprecated(configName)}),
+				core.NewDeleteAction("buildconfigs", "default", configName),
 			},
 			err: false,
 		},
 		"multiple builds": {
 			targetBC: configName,
 			oc:       newBuildListFake(makeBuildConfig(configName, 4, false), makeBuildList(configName, 4)),
-			expected: []ktestclient.Action{
-				ktestclient.NewGetAction("buildconfigs", "default", configName),
-				ktestclient.NewListAction("builds", "default", kapi.ListOptions{LabelSelector: buildutil.BuildConfigSelector(configName)}),
-				ktestclient.NewListAction("builds", "default", kapi.ListOptions{LabelSelector: buildutil.BuildConfigSelectorDeprecated(configName)}),
-				ktestclient.NewGetAction("buildconfigs", "default", configName),                              // Second GET to enable conflict retry logic
-				ktestclient.NewUpdateAction("buildconfigs", "default", makeBuildConfig(configName, 4, true)), // Because this bc has builds, it is paused
-				ktestclient.NewDeleteAction("builds", "default", "build-1"),
-				ktestclient.NewDeleteAction("builds", "default", "build-2"),
-				ktestclient.NewDeleteAction("builds", "default", "build-3"),
-				ktestclient.NewDeleteAction("builds", "default", "build-4"),
-				ktestclient.NewDeleteAction("buildconfigs", "default", configName),
+			expected: []core.Action{
+				core.NewGetAction("buildconfigs", "default", configName),
+				core.NewListAction("builds", "default", kapi.ListOptions{LabelSelector: buildutil.BuildConfigSelector(configName)}),
+				core.NewListAction("builds", "default", kapi.ListOptions{LabelSelector: buildutil.BuildConfigSelectorDeprecated(configName)}),
+				core.NewGetAction("buildconfigs", "default", configName),                              // Second GET to enable conflict retry logic
+				core.NewUpdateAction("buildconfigs", "default", makeBuildConfig(configName, 4, true)), // Because this bc has builds, it is paused
+				core.NewDeleteAction("builds", "default", "build-1"),
+				core.NewDeleteAction("builds", "default", "build-2"),
+				core.NewDeleteAction("builds", "default", "build-3"),
+				core.NewDeleteAction("builds", "default", "build-4"),
+				core.NewDeleteAction("buildconfigs", "default", configName),
 			},
 			err: false,
 		},
 		"long name builds": {
 			targetBC: longConfigNameA,
 			oc:       newBuildListFake(makeBuildConfig(longConfigNameA, 4, false), makeBuildList(longConfigNameA, 4), makeBuildList(longConfigNameB, 4)),
-			expected: []ktestclient.Action{
-				ktestclient.NewGetAction("buildconfigs", "default", longConfigNameA),
-				ktestclient.NewListAction("builds", "default", kapi.ListOptions{LabelSelector: buildutil.BuildConfigSelector(longConfigNameA)}),
-				ktestclient.NewListAction("builds", "default", kapi.ListOptions{LabelSelector: buildutil.BuildConfigSelectorDeprecated(longConfigNameA)}),
-				ktestclient.NewGetAction("buildconfigs", "default", longConfigNameA),                              // Second GET to enable conflict retry logic
-				ktestclient.NewUpdateAction("buildconfigs", "default", makeBuildConfig(longConfigNameA, 4, true)), // Because this bc has builds, it is paused
-				ktestclient.NewDeleteAction("builds", "default", "build-1"),
-				ktestclient.NewDeleteAction("builds", "default", "build-2"),
-				ktestclient.NewDeleteAction("builds", "default", "build-3"),
-				ktestclient.NewDeleteAction("builds", "default", "build-4"),
-				ktestclient.NewDeleteAction("buildconfigs", "default", longConfigNameA),
+			expected: []core.Action{
+				core.NewGetAction("buildconfigs", "default", longConfigNameA),
+				core.NewListAction("builds", "default", kapi.ListOptions{LabelSelector: buildutil.BuildConfigSelector(longConfigNameA)}),
+				core.NewListAction("builds", "default", kapi.ListOptions{LabelSelector: buildutil.BuildConfigSelectorDeprecated(longConfigNameA)}),
+				core.NewGetAction("buildconfigs", "default", longConfigNameA),                              // Second GET to enable conflict retry logic
+				core.NewUpdateAction("buildconfigs", "default", makeBuildConfig(longConfigNameA, 4, true)), // Because this bc has builds, it is paused
+				core.NewDeleteAction("builds", "default", "build-1"),
+				core.NewDeleteAction("builds", "default", "build-2"),
+				core.NewDeleteAction("builds", "default", "build-3"),
+				core.NewDeleteAction("builds", "default", "build-4"),
+				core.NewDeleteAction("buildconfigs", "default", longConfigNameA),
 			},
 			err: false,
 		},
 		"no config, no or some builds": {
 			targetBC: configName,
 			oc:       testclient.NewSimpleFake(notFound(), makeBuildList(configName, 2)),
-			expected: []ktestclient.Action{
-				ktestclient.NewGetAction("buildconfigs", "default", configName),
+			expected: []core.Action{
+				core.NewGetAction("buildconfigs", "default", configName),
 			},
 			err: true,
 		},
 		"config, no builds": {
 			targetBC: configName,
 			oc:       testclient.NewSimpleFake(makeBuildConfig(configName, 0, false)),
-			expected: []ktestclient.Action{
-				ktestclient.NewGetAction("buildconfigs", "default", configName),
-				ktestclient.NewListAction("builds", "default", kapi.ListOptions{LabelSelector: buildutil.BuildConfigSelector(configName)}),
-				ktestclient.NewListAction("builds", "default", kapi.ListOptions{LabelSelector: buildutil.BuildConfigSelectorDeprecated(configName)}),
-				ktestclient.NewDeleteAction("buildconfigs", "default", configName),
+			expected: []core.Action{
+				core.NewGetAction("buildconfigs", "default", configName),
+				core.NewListAction("builds", "default", kapi.ListOptions{LabelSelector: buildutil.BuildConfigSelector(configName)}),
+				core.NewListAction("builds", "default", kapi.ListOptions{LabelSelector: buildutil.BuildConfigSelectorDeprecated(configName)}),
+				core.NewDeleteAction("buildconfigs", "default", configName),
 			},
 			err: false,
 		},

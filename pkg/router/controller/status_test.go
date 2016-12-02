@@ -9,7 +9,7 @@ import (
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util/sets"
 	"k8s.io/kubernetes/pkg/watch"
@@ -87,7 +87,7 @@ func checkResult(t *testing.T, err error, c *testclient.Fake, admitter *StatusAd
 	if action.GetVerb() != "update" || action.GetResource() != "routes" || action.GetSubresource() != "status" {
 		t.Fatalf("unexpected action: %#v", action)
 	}
-	obj := c.Actions()[actionInd].(ktestclient.UpdateAction).GetObject().(*routeapi.Route)
+	obj := c.Actions()[actionInd].(core.UpdateAction).GetObject().(*routeapi.Route)
 	if len(obj.Status.Ingress) != ingressInd+1 || obj.Status.Ingress[ingressInd].Host != targetHost {
 		t.Fatalf("expected route reset: expected %q / actual %q -- %#v", targetHost, obj.Status.Ingress[ingressInd].Host, obj)
 	}
@@ -215,7 +215,7 @@ func TestStatusRecordRejection(t *testing.T) {
 	if action.GetVerb() != "update" || action.GetResource() != "routes" || action.GetSubresource() != "status" {
 		t.Fatalf("unexpected action: %#v", action)
 	}
-	obj := c.Actions()[0].(ktestclient.UpdateAction).GetObject().(*routeapi.Route)
+	obj := c.Actions()[0].(core.UpdateAction).GetObject().(*routeapi.Route)
 	if len(obj.Status.Ingress) != 1 || obj.Status.Ingress[0].Host != "route1.test.local" {
 		t.Fatalf("expected route reset: %#v", obj)
 	}
@@ -299,7 +299,7 @@ func TestStatusRecordRejectionWithStatus(t *testing.T) {
 	if action.GetVerb() != "update" || action.GetResource() != "routes" || action.GetSubresource() != "status" {
 		t.Fatalf("unexpected action: %#v", action)
 	}
-	obj := c.Actions()[0].(ktestclient.UpdateAction).GetObject().(*routeapi.Route)
+	obj := c.Actions()[0].(core.UpdateAction).GetObject().(*routeapi.Route)
 	if len(obj.Status.Ingress) != 1 || obj.Status.Ingress[0].Host != "route1.test.local" {
 		t.Fatalf("expected route reset: %#v", obj)
 	}
@@ -348,7 +348,7 @@ func TestStatusRecordRejectionOnHostUpdateOnly(t *testing.T) {
 	if action.GetVerb() != "update" || action.GetResource() != "routes" || action.GetSubresource() != "status" {
 		t.Fatalf("unexpected action: %#v", action)
 	}
-	obj := c.Actions()[0].(ktestclient.UpdateAction).GetObject().(*routeapi.Route)
+	obj := c.Actions()[0].(core.UpdateAction).GetObject().(*routeapi.Route)
 	if len(obj.Status.Ingress) != 1 || obj.Status.Ingress[0].Host != "route1.test.local" {
 		t.Fatalf("expected route reset: %#v", obj)
 	}
@@ -395,7 +395,7 @@ func TestStatusRecordRejectionConflict(t *testing.T) {
 	if action.GetVerb() != "update" || action.GetResource() != "routes" || action.GetSubresource() != "status" {
 		t.Fatalf("unexpected action: %#v", action)
 	}
-	obj := c.Actions()[0].(ktestclient.UpdateAction).GetObject().(*routeapi.Route)
+	obj := c.Actions()[0].(core.UpdateAction).GetObject().(*routeapi.Route)
 	if len(obj.Status.Ingress) != 1 || obj.Status.Ingress[0].Host != "route1.test.local" {
 		t.Fatalf("expected route reset: %#v", obj)
 	}

@@ -12,7 +12,6 @@ import (
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 	"k8s.io/kubernetes/pkg/client/testing/core"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util/sets"
 	"k8s.io/kubernetes/pkg/watch"
@@ -59,7 +58,7 @@ func runFuzzer(t *testing.T) {
 	startingQuotas := CreateStartingQuotas()
 	originclient := testclient.NewSimpleFake(startingQuotas...)
 	quotaWatch := watch.NewFake()
-	originclient.AddWatchReactor("clusterresourcequotas", ktestclient.DefaultWatchReactor(quotaWatch, nil))
+	originclient.AddWatchReactor("clusterresourcequotas", core.DefaultWatchReactor(quotaWatch, nil))
 
 	informerFactory := shared.NewInformerFactory(kubeclient, originclient, shared.DefaultListerWatcherOverrides{}, 10*time.Minute)
 	controller := NewClusterQuotaMappingController(informerFactory.Namespaces(), informerFactory.ClusterResourceQuotas())

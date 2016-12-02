@@ -11,7 +11,7 @@ import (
 
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 	"k8s.io/kubernetes/pkg/kubectl"
 
 	api "github.com/openshift/origin/pkg/api"
@@ -110,7 +110,7 @@ main:
 			}
 		}
 
-		_, ok := DescriberFor(api.SchemeGroupVersion.WithKind(apiType.Name()).GroupKind(), c, &ktestclient.Fake{}, "")
+		_, ok := DescriberFor(api.SchemeGroupVersion.WithKind(apiType.Name()).GroupKind(), c, &core.Fake{}, "")
 		if !ok {
 			t.Errorf("missing describer for %v.  Check pkg/cmd/cli/describe/describer.go", apiType)
 		}
@@ -119,7 +119,7 @@ main:
 
 func TestDescribers(t *testing.T) {
 	fake := &testclient.Fake{}
-	fakeKube := &ktestclient.Fake{}
+	fakeKube := &core.Fake{}
 	c := &describeClient{T: t, Namespace: "foo", Fake: fake}
 
 	testCases := []struct {

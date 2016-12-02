@@ -8,7 +8,6 @@ import (
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 	"k8s.io/kubernetes/pkg/client/testing/core"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
 	"k8s.io/kubernetes/pkg/runtime"
 
 	"github.com/davecgh/go-spew/spew"
@@ -31,7 +30,7 @@ func TestGroupReaper(t *testing.T) {
 			group:   "mygroup",
 			objects: []runtime.Object{},
 			expected: []interface{}{
-				ktestclient.DeleteActionImpl{ActionImpl: ktestclient.ActionImpl{Verb: "delete", Resource: "groups"}, Name: "mygroup"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "groups"}, Name: "mygroup"},
 			},
 		},
 		{
@@ -55,12 +54,12 @@ func TestGroupReaper(t *testing.T) {
 				},
 			},
 			expected: []interface{}{
-				ktestclient.UpdateActionImpl{ActionImpl: ktestclient.ActionImpl{Verb: "update", Resource: "clusterrolebindings"}, Object: &authorizationapi.ClusterRoleBinding{
+				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", Resource: "clusterrolebindings"}, Object: &authorizationapi.ClusterRoleBinding{
 					ObjectMeta: kapi.ObjectMeta{Name: "binding-one-subject"},
 					RoleRef:    kapi.ObjectReference{Name: "role"},
 					Subjects:   []kapi.ObjectReference{},
 				}},
-				ktestclient.DeleteActionImpl{ActionImpl: ktestclient.ActionImpl{Verb: "delete", Resource: "groups"}, Name: "mygroup"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "groups"}, Name: "mygroup"},
 			},
 		},
 		{
@@ -84,12 +83,12 @@ func TestGroupReaper(t *testing.T) {
 				},
 			},
 			expected: []interface{}{
-				ktestclient.UpdateActionImpl{ActionImpl: ktestclient.ActionImpl{Verb: "update", Resource: "rolebindings", Namespace: "ns2"}, Object: &authorizationapi.RoleBinding{
+				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", Resource: "rolebindings", Namespace: "ns2"}, Object: &authorizationapi.RoleBinding{
 					ObjectMeta: kapi.ObjectMeta{Name: "binding-one-subject", Namespace: "ns2"},
 					RoleRef:    kapi.ObjectReference{Name: "role"},
 					Subjects:   []kapi.ObjectReference{},
 				}},
-				ktestclient.DeleteActionImpl{ActionImpl: ktestclient.ActionImpl{Verb: "delete", Resource: "groups"}, Name: "mygroup"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "groups"}, Name: "mygroup"},
 			},
 		},
 		{
@@ -115,7 +114,7 @@ func TestGroupReaper(t *testing.T) {
 					ObjectMeta: kapi.ObjectMeta{Name: "scc-one-subject"},
 					Groups:     []string{},
 				}},
-				ktestclient.DeleteActionImpl{ActionImpl: ktestclient.ActionImpl{Verb: "delete", Resource: "groups"}, Name: "mygroup"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "groups"}, Name: "mygroup"},
 			},
 		},
 	}
@@ -125,7 +124,7 @@ func TestGroupReaper(t *testing.T) {
 		ktc := fake.NewSimpleClientset(test.objects...)
 
 		actual := []interface{}{}
-		oreactor := func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
+		oreactor := func(action core.Action) (handled bool, ret runtime.Object, err error) {
 			actual = append(actual, action)
 			return false, nil, nil
 		}

@@ -12,7 +12,6 @@ import (
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 	"k8s.io/kubernetes/pkg/client/testing/core"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
 	genericrest "k8s.io/kubernetes/pkg/registry/generic/rest"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -90,7 +89,7 @@ func mockREST(version, desired int64, status api.DeploymentStatus) *REST {
 	// Fake deploymentConfig
 	config := deploytest.OkDeploymentConfig(version)
 	fakeDn := testclient.NewSimpleFake(config)
-	fakeDn.PrependReactor("get", "deploymentconfigs", func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
+	fakeDn.PrependReactor("get", "deploymentconfigs", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 		return true, config, nil
 	})
 
@@ -117,14 +116,14 @@ func mockREST(version, desired int64, status api.DeploymentStatus) *REST {
 	obj.Annotations[api.DeploymentStatusAnnotation] = string(status)
 	go fakeWatch.Add(obj)
 
-	oldPn := ktestclient.NewSimpleFake()
+	oldPn := core.NewSimpleFake()
 	if status == api.DeploymentStatusComplete {
 		// If the deployment is complete, we will try to get the logs from the oldest
 		// application pod...
-		oldPn.PrependReactor("list", "pods", func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
+		oldPn.PrependReactor("list", "pods", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 			return true, fakePodList, nil
 		})
-		oldPn.PrependReactor("get", "pods", func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
+		oldPn.PrependReactor("get", "pods", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 			return true, &fakePodList.Items[0], nil
 		})
 	} else {
@@ -146,7 +145,7 @@ func mockREST(version, desired int64, status api.DeploymentStatus) *REST {
 				Phase: kapi.PodRunning,
 			},
 		}
-		oldPn.PrependReactor("get", "pods", func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
+		oldPn.PrependReactor("get", "pods", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 			return true, fakeDeployer, nil
 		})
 	}
