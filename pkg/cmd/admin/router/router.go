@@ -15,6 +15,7 @@ import (
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/resource"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	kclientcmd "k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
@@ -547,7 +548,7 @@ func RunCmdRouter(f *clientcmd.Factory, cmd *cobra.Command, out, errout io.Write
 	if err != nil {
 		return fmt.Errorf("error getting client: %v", err)
 	}
-	_, kClient, _, err := f.Clients()
+	_, kClient, err := f.Clients()
 	if err != nil {
 		return fmt.Errorf("error getting client: %v", err)
 	}
@@ -671,7 +672,7 @@ func RunCmdRouter(f *clientcmd.Factory, cmd *cobra.Command, out, errout io.Write
 	}
 	env.Add(app.Environment{"DEFAULT_CERTIFICATE_DIR": defaultCertificateDir})
 	var certName = fmt.Sprintf("%s-certs", cfg.Name)
-	secrets, volumes, mounts, err := generateSecretsConfig(cfg, kClient, namespace, defaultCert, certName)
+	secrets, volumes, mounts, err := generateSecretsConfig(cfg, namespace, defaultCert, certName)
 	if err != nil {
 		return fmt.Errorf("router could not be created: %v", err)
 	}
@@ -790,7 +791,7 @@ func RunCmdRouter(f *clientcmd.Factory, cmd *cobra.Command, out, errout io.Write
 	list := &kapi.List{Items: objects}
 
 	if cfg.Action.ShouldPrint() {
-		mapper, _ := f.Object(false)
+		mapper, _ := f.Object()
 		fn := cmdutil.VersionedPrintObject(f.PrintObject, cmd, mapper, out)
 		if err := fn(list); err != nil {
 			return fmt.Errorf("unable to print object: %v", err)
