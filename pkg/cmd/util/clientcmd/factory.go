@@ -160,13 +160,12 @@ To view or setup config directly use the 'config' command.`)}
 
 // Factory provides common options for OpenShift commands
 type Factory struct {
-	*cmdutil.Factory
+	// TODO switch to an actual field instead of embedding
+	cmdutil.Factory
 	OpenShiftClientConfig kclientcmd.ClientConfig
 	clients               *clientCache
 
 	ImageResolutionOptions FlagBinder
-
-	PrintResourceInfos func(*cobra.Command, []*resource.Info, io.Writer) error
 }
 
 func DefaultGenerators(cmdName string) map[string]kubectl.Generator {
@@ -184,8 +183,6 @@ func DefaultGenerators(cmdName string) map[string]kubectl.Generator {
 
 // NewFactory creates an object that holds common methods across all OpenShift commands
 func NewFactory(clientConfig kclientcmd.ClientConfig) *Factory {
-	restMapper := registered.RESTMapper()
-
 	clients := &clientCache{
 		clients: make(map[string]*client.Client),
 		configs: make(map[string]*restclient.Config),
@@ -199,499 +196,497 @@ func NewFactory(clientConfig kclientcmd.ClientConfig) *Factory {
 		ImageResolutionOptions: &imageResolutionOptions{},
 	}
 
-	w.Object = func(bool) (meta.RESTMapper, runtime.ObjectTyper) {
-		defaultMapper := ShortcutExpander{RESTMapper: kubectl.ShortcutExpander{RESTMapper: restMapper}}
-		defaultTyper := api.Scheme
-
-		// Output using whatever version was negotiated in the client cache. The
-		// version we decode with may not be the same as what the server requires.
-		cfg, err := clients.ClientConfigForVersion(nil)
-		if err != nil {
-			return defaultMapper, defaultTyper
-		}
-
-		cmdApiVersion := unversioned.GroupVersion{}
-		if cfg.GroupVersion != nil {
-			cmdApiVersion = *cfg.GroupVersion
-		}
-
-		// at this point we've negotiated and can get the client
-		oclient, err := clients.ClientForVersion(nil)
-		if err != nil {
-			return defaultMapper, defaultTyper
-		}
-
-		cacheDir := computeDiscoverCacheDir(filepath.Join(homedir.HomeDir(), ".kube"), cfg.Host)
-		cachedDiscoverClient := NewCachedDiscoveryClient(client.NewDiscoveryClient(oclient.RESTClient), cacheDir, time.Duration(10*time.Minute))
-
-		// if we can't find the server version or its too old to have Kind information in the discovery doc, skip the discovery RESTMapper
-		// and use our hardcoded levels
-		mapper := registered.RESTMapper()
-		if serverVersion, err := cachedDiscoverClient.ServerVersion(); err == nil && useDiscoveryRESTMapper(serverVersion.GitVersion) {
-			mapper = restmapper.NewDiscoveryRESTMapper(cachedDiscoverClient)
-		}
-		mapper = NewShortcutExpander(cachedDiscoverClient, kubectl.ShortcutExpander{RESTMapper: mapper})
-		return kubectl.OutputVersionMapper{RESTMapper: mapper, OutputVersions: []unversioned.GroupVersion{cmdApiVersion}}, api.Scheme
-	}
-
-	w.UnstructuredObject = func() (meta.RESTMapper, runtime.ObjectTyper, error) {
-		// load a discovery client from the default config
-		cfg, err := clients.ClientConfigForVersion(nil)
-		if err != nil {
-			return nil, nil, err
-		}
-		dc, err := discovery.NewDiscoveryClientForConfig(cfg)
-		if err != nil {
-			return nil, nil, err
-		}
-		cacheDir := computeDiscoverCacheDir(filepath.Join(homedir.HomeDir(), ".kube"), cfg.Host)
-		cachedDiscoverClient := NewCachedDiscoveryClient(client.NewDiscoveryClient(dc.RESTClient), cacheDir, time.Duration(10*time.Minute))
-
-		// enumerate all group resources
-		groupResources, err := discovery.GetAPIGroupResources(cachedDiscoverClient)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// Register unknown APIs as third party for now to make
-		// validation happy. TODO perhaps make a dynamic schema
-		// validator to avoid this.
-		for _, group := range groupResources {
-			for _, version := range group.Group.Versions {
-				gv := unversioned.GroupVersion{Group: group.Group.Name, Version: version.Version}
-				if !registered.IsRegisteredVersion(gv) {
-					registered.AddThirdPartyAPIGroupVersions(gv)
-				}
-			}
-		}
-
-		// construct unstructured mapper and typer
-		mapper := discovery.NewRESTMapper(groupResources, meta.InterfacesForUnstructured)
-		typer := discovery.NewUnstructuredObjectTyper(groupResources)
-		return NewShortcutExpander(cachedDiscoverClient, kubectl.ShortcutExpander{RESTMapper: mapper}), typer, nil
-	}
-
-	kClientForMapping := w.Factory.ClientForMapping
-	w.ClientForMapping = func(mapping *meta.RESTMapping) (resource.RESTClient, error) {
-		if latest.OriginKind(mapping.GroupVersionKind) {
-			mappingVersion := mapping.GroupVersionKind.GroupVersion()
-			client, err := clients.ClientForVersion(&mappingVersion)
-			if err != nil {
-				return nil, err
-			}
-			return client.RESTClient, nil
-		}
-		return kClientForMapping(mapping)
-	}
-
-	kUnstructuredClientForMapping := w.Factory.UnstructuredClientForMapping
-	w.UnstructuredClientForMapping = func(mapping *meta.RESTMapping) (resource.RESTClient, error) {
-		if latest.OriginKind(mapping.GroupVersionKind) {
-			cfg, err := clientConfig.ClientConfig()
-			if err != nil {
-				return nil, err
-			}
-			if err := client.SetOpenShiftDefaults(cfg); err != nil {
-				return nil, err
-			}
-			cfg.APIPath = "/apis"
-			if mapping.GroupVersionKind.Group == api.GroupName {
-				cfg.APIPath = "/oapi"
-			}
-			gv := mapping.GroupVersionKind.GroupVersion()
-			cfg.ContentConfig = dynamic.ContentConfig()
-			cfg.GroupVersion = &gv
-			return restclient.RESTClientFor(cfg)
-		}
-		return kUnstructuredClientForMapping(mapping)
-	}
-
-	// Save original Describer function
-	kDescriberFunc := w.Factory.Describer
-	w.Describer = func(mapping *meta.RESTMapping) (kubectl.Describer, error) {
-		if latest.OriginKind(mapping.GroupVersionKind) {
-			oClient, kClient, _, err := w.Clients()
-			if err != nil {
-				return nil, fmt.Errorf("unable to create client %s: %v", mapping.GroupVersionKind.Kind, err)
-			}
-
-			mappingVersion := mapping.GroupVersionKind.GroupVersion()
-			cfg, err := clients.ClientConfigForVersion(&mappingVersion)
-			if err != nil {
-				return nil, fmt.Errorf("unable to load a client %s: %v", mapping.GroupVersionKind.Kind, err)
-			}
-
-			describer, ok := describe.DescriberFor(mapping.GroupVersionKind.GroupKind(), oClient, kClient, cfg.Host)
-			if !ok {
-				return nil, fmt.Errorf("no description has been implemented for %q", mapping.GroupVersionKind.Kind)
-			}
-			return describer, nil
-		}
-		return kDescriberFunc(mapping)
-	}
-	kScalerFunc := w.Factory.Scaler
-	w.Scaler = func(mapping *meta.RESTMapping) (kubectl.Scaler, error) {
-		if mapping.GroupVersionKind.GroupKind() == deployapi.Kind("DeploymentConfig") {
-			oc, _, kc, err := w.Clients()
-			if err != nil {
-				return nil, err
-			}
-			return deploycmd.NewDeploymentConfigScaler(oc, kc), nil
-		}
-		return kScalerFunc(mapping)
-	}
-	kReaperFunc := w.Factory.Reaper
-	w.Reaper = func(mapping *meta.RESTMapping) (kubectl.Reaper, error) {
-		switch mapping.GroupVersionKind.GroupKind() {
-		case deployapi.Kind("DeploymentConfig"):
-			oc, kc, _, err := w.Clients()
-			if err != nil {
-				return nil, err
-			}
-			return deploycmd.NewDeploymentConfigReaper(oc, kc), nil
-		case authorizationapi.Kind("Role"):
-			oc, _, _, err := w.Clients()
-			if err != nil {
-				return nil, err
-			}
-			return authorizationreaper.NewRoleReaper(oc, oc), nil
-		case authorizationapi.Kind("ClusterRole"):
-			oc, _, _, err := w.Clients()
-			if err != nil {
-				return nil, err
-			}
-			return authorizationreaper.NewClusterRoleReaper(oc, oc, oc), nil
-		case userapi.Kind("User"):
-			oc, _, kc, err := w.Clients()
-			if err != nil {
-				return nil, err
-			}
-			return authenticationreaper.NewUserReaper(
-				client.UsersInterface(oc),
-				client.GroupsInterface(oc),
-				client.ClusterRoleBindingsInterface(oc),
-				client.RoleBindingsNamespacer(oc),
-				client.OAuthClientAuthorizationsInterface(oc),
-				kc.Core(),
-			), nil
-		case userapi.Kind("Group"):
-			oc, _, kc, err := w.Clients()
-			if err != nil {
-				return nil, err
-			}
-			return authenticationreaper.NewGroupReaper(
-				client.GroupsInterface(oc),
-				client.ClusterRoleBindingsInterface(oc),
-				client.RoleBindingsNamespacer(oc),
-				kc.Core(),
-			), nil
-		case buildapi.Kind("BuildConfig"):
-			oc, _, _, err := w.Clients()
-			if err != nil {
-				return nil, err
-			}
-			return buildcmd.NewBuildConfigReaper(oc), nil
-		}
-		return kReaperFunc(mapping)
-	}
-	kGenerators := w.Factory.Generators
-	w.Generators = func(cmdName string) map[string]kubectl.Generator {
-		originGenerators := DefaultGenerators(cmdName)
-		kubeGenerators := kGenerators(cmdName)
-
-		ret := map[string]kubectl.Generator{}
-		for k, v := range kubeGenerators {
-			ret[k] = v
-		}
-		for k, v := range originGenerators {
-			ret[k] = v
-		}
-		return ret
-	}
-	kMapBasedSelectorForObjectFunc := w.Factory.MapBasedSelectorForObject
-	w.MapBasedSelectorForObject = func(object runtime.Object) (string, error) {
-		switch t := object.(type) {
-		case *deployapi.DeploymentConfig:
-			return kubectl.MakeLabels(t.Spec.Selector), nil
-		default:
-			return kMapBasedSelectorForObjectFunc(object)
-		}
-	}
-	kPortsForObjectFunc := w.Factory.PortsForObject
-	w.PortsForObject = func(object runtime.Object) ([]string, error) {
-		switch t := object.(type) {
-		case *deployapi.DeploymentConfig:
-			return getPorts(t.Spec.Template.Spec), nil
-		default:
-			return kPortsForObjectFunc(object)
-		}
-	}
-	kLogsForObjectFunc := w.Factory.LogsForObject
-	w.LogsForObject = func(object, options runtime.Object) (*restclient.Request, error) {
-		switch t := object.(type) {
-		case *deployapi.DeploymentConfig:
-			dopts, ok := options.(*deployapi.DeploymentLogOptions)
-			if !ok {
-				return nil, errors.New("provided options object is not a DeploymentLogOptions")
-			}
-			oc, _, _, err := w.Clients()
-			if err != nil {
-				return nil, err
-			}
-			return oc.DeploymentLogs(t.Namespace).Get(t.Name, *dopts), nil
-		case *buildapi.Build:
-			bopts, ok := options.(*buildapi.BuildLogOptions)
-			if !ok {
-				return nil, errors.New("provided options object is not a BuildLogOptions")
-			}
-			if bopts.Version != nil {
-				return nil, errors.New("cannot specify a version and a build")
-			}
-			oc, _, _, err := w.Clients()
-			if err != nil {
-				return nil, err
-			}
-			return oc.BuildLogs(t.Namespace).Get(t.Name, *bopts), nil
-		case *buildapi.BuildConfig:
-			bopts, ok := options.(*buildapi.BuildLogOptions)
-			if !ok {
-				return nil, errors.New("provided options object is not a BuildLogOptions")
-			}
-			oc, _, _, err := w.Clients()
-			if err != nil {
-				return nil, err
-			}
-			builds, err := oc.Builds(t.Namespace).List(api.ListOptions{})
-			if err != nil {
-				return nil, err
-			}
-			builds.Items = buildapi.FilterBuilds(builds.Items, buildapi.ByBuildConfigPredicate(t.Name))
-			if len(builds.Items) == 0 {
-				return nil, fmt.Errorf("no builds found for %q", t.Name)
-			}
-			if bopts.Version != nil {
-				// If a version has been specified, try to get the logs from that build.
-				desired := buildutil.BuildNameForConfigVersion(t.Name, int(*bopts.Version))
-				return oc.BuildLogs(t.Namespace).Get(desired, *bopts), nil
-			}
-			sort.Sort(sort.Reverse(buildapi.BuildSliceByCreationTimestamp(builds.Items)))
-			return oc.BuildLogs(t.Namespace).Get(builds.Items[0].Name, *bopts), nil
-		default:
-			return kLogsForObjectFunc(object, options)
-		}
-	}
-	// Saves current resource name (or alias if any) in PrintOptions. Once saved, it will not be overwritten by the
-	// kubernetes resource alias look-up, as it will notice a non-empty value in `options.Kind`
-	w.Printer = func(mapping *meta.RESTMapping, options kubectl.PrintOptions) (kubectl.ResourcePrinter, error) {
-		if mapping != nil {
-			options.Kind = mapping.Resource
-			if alias, ok := resourceShortFormFor(mapping.Resource); ok {
-				options.Kind = alias
-			}
-		}
-		return describe.NewHumanReadablePrinter(options), nil
-	}
-	// PrintResourceInfos receives a list of resource infos and prints versioned objects if a generic output format was specified
-	// otherwise, it iterates through info objects, printing each resource with a unique printer for its mapping
-	w.PrintResourceInfos = func(cmd *cobra.Command, infos []*resource.Info, out io.Writer) error {
-		printer, generic, err := cmdutil.PrinterForCommand(cmd)
-		if err != nil {
-			return nil
-		}
-		if !generic {
-			for _, info := range infos {
-				mapping := info.ResourceMapping()
-				printer, err := w.PrinterForMapping(cmd, mapping, false)
-				if err != nil {
-					return err
-				}
-				if err := printer.PrintObj(info.Object, out); err != nil {
-					return nil
-				}
-			}
-			return nil
-		}
-
-		clientConfig, err := w.ClientConfig()
-		if err != nil {
-			return err
-		}
-		outputVersion, err := cmdutil.OutputVersion(cmd, clientConfig.GroupVersion)
-		if err != nil {
-			return err
-		}
-		object, err := resource.AsVersionedObject(infos, len(infos) != 1, outputVersion, api.Codecs.LegacyCodec(outputVersion))
-		if err != nil {
-			return err
-		}
-		return printer.PrintObj(object, out)
-
-	}
-	kCanBeExposed := w.Factory.CanBeExposed
-	w.CanBeExposed = func(kind unversioned.GroupKind) error {
-		if kind == deployapi.Kind("DeploymentConfig") {
-			return nil
-		}
-		return kCanBeExposed(kind)
-	}
-	kCanBeAutoscaled := w.Factory.CanBeAutoscaled
-	w.CanBeAutoscaled = func(kind unversioned.GroupKind) error {
-		if kind == deployapi.Kind("DeploymentConfig") {
-			return nil
-		}
-		return kCanBeAutoscaled(kind)
-	}
-	kAttachablePodForObjectFunc := w.Factory.AttachablePodForObject
-	w.AttachablePodForObject = func(object runtime.Object) (*api.Pod, error) {
-		switch t := object.(type) {
-		case *deployapi.DeploymentConfig:
-			_, kc, _, err := w.Clients()
-			if err != nil {
-				return nil, err
-			}
-			selector := labels.SelectorFromSet(t.Spec.Selector)
-			f := func(pods []*api.Pod) sort.Interface { return sort.Reverse(controller.ActivePods(pods)) }
-			pod, _, err := cmdutil.GetFirstPod(kc, t.Namespace, selector, 1*time.Minute, f)
-			return pod, err
-		default:
-			return kAttachablePodForObjectFunc(object)
-		}
-	}
-	kUpdatePodSpecForObject := w.Factory.UpdatePodSpecForObject
-	w.UpdatePodSpecForObject = func(obj runtime.Object, fn func(*api.PodSpec) error) (bool, error) {
-		switch t := obj.(type) {
-		case *deployapi.DeploymentConfig:
-			template := t.Spec.Template
-			if template == nil {
-				t.Spec.Template = template
-				template = &api.PodTemplateSpec{}
-			}
-			return true, fn(&template.Spec)
-		default:
-			return kUpdatePodSpecForObject(obj, fn)
-		}
-	}
-	kProtocolsForObject := w.Factory.ProtocolsForObject
-	w.ProtocolsForObject = func(object runtime.Object) (map[string]string, error) {
-		switch t := object.(type) {
-		case *deployapi.DeploymentConfig:
-			return getProtocols(t.Spec.Template.Spec), nil
-		default:
-			return kProtocolsForObject(object)
-		}
-	}
-
-	kSwaggerSchemaFunc := w.Factory.SwaggerSchema
-	w.Factory.SwaggerSchema = func(gvk unversioned.GroupVersionKind) (*swagger.ApiDeclaration, error) {
-		if !latest.OriginKind(gvk) {
-			return kSwaggerSchemaFunc(gvk)
-		}
-		// TODO: we need to register the OpenShift API under the Kube group, and start returning the OpenShift
-		// group from the scheme.
-		oc, _, _, err := w.Clients()
-		if err != nil {
-			return nil, err
-		}
-		return w.OriginSwaggerSchema(oc.RESTClient, gvk.GroupVersion())
-	}
-
-	w.EditorEnvs = func() []string {
-		return []string{"OC_EDITOR", "EDITOR"}
-	}
-	w.PrintObjectSpecificMessage = func(obj runtime.Object, out io.Writer) {}
-	kPauseObjectFunc := w.Factory.PauseObject
-	w.Factory.PauseObject = func(object runtime.Object) (bool, error) {
-		switch t := object.(type) {
-		case *deployapi.DeploymentConfig:
-			if t.Spec.Paused {
-				return true, nil
-			}
-			t.Spec.Paused = true
-			oc, _, _, err := w.Clients()
-			if err != nil {
-				return false, err
-			}
-			_, err = oc.DeploymentConfigs(t.Namespace).Update(t)
-			// TODO: Pause the deployer containers.
-			return false, err
-		default:
-			return kPauseObjectFunc(object)
-		}
-	}
-	kResumeObjectFunc := w.Factory.ResumeObject
-	w.Factory.ResumeObject = func(object runtime.Object) (bool, error) {
-		switch t := object.(type) {
-		case *deployapi.DeploymentConfig:
-			if !t.Spec.Paused {
-				return true, nil
-			}
-			t.Spec.Paused = false
-			oc, _, _, err := w.Clients()
-			if err != nil {
-				return false, err
-			}
-			_, err = oc.DeploymentConfigs(t.Namespace).Update(t)
-			// TODO: Resume the deployer containers.
-			return false, err
-		default:
-			return kResumeObjectFunc(object)
-		}
-	}
-	kResolveImageFunc := w.Factory.ResolveImage
-	w.Factory.ResolveImage = func(image string) (string, error) {
-		options := w.ImageResolutionOptions.(*imageResolutionOptions)
-		if imageutil.IsDocker(options.Source) {
-			return kResolveImageFunc(image)
-		}
-		oc, _, _, err := w.Clients()
-		if err != nil {
-			return "", err
-		}
-		namespace, _, err := w.DefaultNamespace()
-		if err != nil {
-			return "", err
-		}
-		return imageutil.ResolveImagePullSpec(oc, oc, options.Source, image, namespace)
-	}
-	kHistoryViewerFunc := w.Factory.HistoryViewer
-	w.Factory.HistoryViewer = func(mapping *meta.RESTMapping) (kubectl.HistoryViewer, error) {
-		switch mapping.GroupVersionKind.GroupKind() {
-		case deployapi.Kind("DeploymentConfig"):
-			oc, _, kc, err := w.Clients()
-			if err != nil {
-				return nil, err
-			}
-			return deploycmd.NewDeploymentConfigHistoryViewer(oc, kc), nil
-		}
-		return kHistoryViewerFunc(mapping)
-	}
-	kRollbackerFunc := w.Factory.Rollbacker
-	w.Factory.Rollbacker = func(mapping *meta.RESTMapping) (kubectl.Rollbacker, error) {
-		switch mapping.GroupVersionKind.GroupKind() {
-		case deployapi.Kind("DeploymentConfig"):
-			oc, _, _, err := w.Clients()
-			if err != nil {
-				return nil, err
-			}
-			return deploycmd.NewDeploymentConfigRollbacker(oc), nil
-		}
-		return kRollbackerFunc(mapping)
-	}
-	kStatusViewerFunc := w.Factory.StatusViewer
-	w.Factory.StatusViewer = func(mapping *meta.RESTMapping) (kubectl.StatusViewer, error) {
-		oc, _, _, err := w.Clients()
-		if err != nil {
-			return nil, err
-		}
-
-		switch mapping.GroupVersionKind.GroupKind() {
-		case deployapi.Kind("DeploymentConfig"):
-			return deploycmd.NewDeploymentConfigStatusViewer(oc), nil
-		}
-		return kStatusViewerFunc(mapping)
-	}
-
 	return w
+}
+
+func (f *Factory) Object() (meta.RESTMapper, runtime.ObjectTyper) {
+	defaultMapper := ShortcutExpander{RESTMapper: cmdutil.ShortcutExpander{RESTMapper: registered.RESTMapper()}}
+	defaultTyper := api.Scheme
+
+	// Output using whatever version was negotiated in the client cache. The
+	// version we decode with may not be the same as what the server requires.
+	cfg, err := f.clients.ClientConfigForVersion(nil)
+	if err != nil {
+		return defaultMapper, defaultTyper
+	}
+
+	cmdApiVersion := unversioned.GroupVersion{}
+	if cfg.GroupVersion != nil {
+		cmdApiVersion = *cfg.GroupVersion
+	}
+
+	// at this point we've negotiated and can get the client
+	oclient, err := f.clients.ClientForVersion(nil)
+	if err != nil {
+		return defaultMapper, defaultTyper
+	}
+
+	cacheDir := computeDiscoverCacheDir(filepath.Join(homedir.HomeDir(), ".kube"), cfg.Host)
+	cachedDiscoverClient := NewCachedDiscoveryClient(client.NewDiscoveryClient(oclient.RESTClient), cacheDir, time.Duration(10*time.Minute))
+
+	// if we can't find the server version or its too old to have Kind information in the discovery doc, skip the discovery RESTMapper
+	// and use our hardcoded levels
+	mapper := registered.RESTMapper()
+	if serverVersion, err := cachedDiscoverClient.ServerVersion(); err == nil && useDiscoveryRESTMapper(serverVersion.GitVersion) {
+		mapper = restmapper.NewDiscoveryRESTMapper(cachedDiscoverClient)
+	}
+	mapper = NewShortcutExpander(cachedDiscoverClient, cmdutil.ShortcutExpander{RESTMapper: mapper})
+	return kubectl.OutputVersionMapper{RESTMapper: mapper, OutputVersions: []unversioned.GroupVersion{cmdApiVersion}}, api.Scheme
+}
+
+func (f *Factory) UnstructuredObject() (meta.RESTMapper, runtime.ObjectTyper, error) {
+	// load a discovery client from the default config
+	cfg, err := f.clients.ClientConfigForVersion(nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	dc, err := discovery.NewDiscoveryClientForConfig(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	cacheDir := computeDiscoverCacheDir(filepath.Join(homedir.HomeDir(), ".kube"), cfg.Host)
+	cachedDiscoverClient := NewCachedDiscoveryClient(client.NewDiscoveryClient(dc.RESTClient()), cacheDir, time.Duration(10*time.Minute))
+
+	// enumerate all group resources
+	groupResources, err := discovery.GetAPIGroupResources(cachedDiscoverClient)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Register unknown APIs as third party for now to make
+	// validation happy. TODO perhaps make a dynamic schema
+	// validator to avoid this.
+	for _, group := range groupResources {
+		for _, version := range group.Group.Versions {
+			gv := unversioned.GroupVersion{Group: group.Group.Name, Version: version.Version}
+			if !registered.IsRegisteredVersion(gv) {
+				registered.AddThirdPartyAPIGroupVersions(gv)
+			}
+		}
+	}
+
+	// construct unstructured mapper and typer
+	mapper := discovery.NewRESTMapper(groupResources, meta.InterfacesForUnstructured)
+	typer := discovery.NewUnstructuredObjectTyper(groupResources)
+	return NewShortcutExpander(cachedDiscoverClient, cmdutil.ShortcutExpander{RESTMapper: mapper}), typer, nil
+}
+
+func (f *Factory) ClientForMapping(mapping *meta.RESTMapping) (resource.RESTClient, error) {
+	if latest.OriginKind(mapping.GroupVersionKind) {
+		mappingVersion := mapping.GroupVersionKind.GroupVersion()
+		client, err := f.clients.ClientForVersion(&mappingVersion)
+		if err != nil {
+			return nil, err
+		}
+		return client.RESTClient, nil
+	}
+	return f.Factory.ClientForMapping(mapping)
+}
+
+func (f *Factory) UnstructuredClientForMapping(mapping *meta.RESTMapping) (resource.RESTClient, error) {
+	if latest.OriginKind(mapping.GroupVersionKind) {
+		cfg, err := f.OpenShiftClientConfig.ClientConfig()
+		if err != nil {
+			return nil, err
+		}
+		if err := client.SetOpenShiftDefaults(cfg); err != nil {
+			return nil, err
+		}
+		cfg.APIPath = "/apis"
+		if mapping.GroupVersionKind.Group == api.GroupName {
+			cfg.APIPath = "/oapi"
+		}
+		gv := mapping.GroupVersionKind.GroupVersion()
+		cfg.ContentConfig = dynamic.ContentConfig()
+		cfg.GroupVersion = &gv
+		return restclient.RESTClientFor(cfg)
+	}
+	return f.Factory.UnstructuredClientForMapping(mapping)
+}
+
+func (f *Factory) Describer(mapping *meta.RESTMapping) (kubectl.Describer, error) {
+	if latest.OriginKind(mapping.GroupVersionKind) {
+		oClient, kClient, err := f.Clients()
+		if err != nil {
+			return nil, fmt.Errorf("unable to create client %s: %v", mapping.GroupVersionKind.Kind, err)
+		}
+
+		mappingVersion := mapping.GroupVersionKind.GroupVersion()
+		cfg, err := f.clients.ClientConfigForVersion(&mappingVersion)
+		if err != nil {
+			return nil, fmt.Errorf("unable to load a client %s: %v", mapping.GroupVersionKind.Kind, err)
+		}
+
+		describer, ok := describe.DescriberFor(mapping.GroupVersionKind.GroupKind(), oClient, kClient, cfg.Host)
+		if !ok {
+			return nil, fmt.Errorf("no description has been implemented for %q", mapping.GroupVersionKind.Kind)
+		}
+		return describer, nil
+	}
+	return f.Factory.Describer(mapping)
+}
+
+func (f *Factory) Scaler(mapping *meta.RESTMapping) (kubectl.Scaler, error) {
+	if mapping.GroupVersionKind.GroupKind() == deployapi.Kind("DeploymentConfig") {
+		oc, kc, err := f.Clients()
+		if err != nil {
+			return nil, err
+		}
+		return deploycmd.NewDeploymentConfigScaler(oc, kc), nil
+	}
+	return f.Factory.Scaler(mapping)
+}
+
+func (f *Factory) Reaper(mapping *meta.RESTMapping) (kubectl.Reaper, error) {
+	switch mapping.GroupVersionKind.GroupKind() {
+	case deployapi.Kind("DeploymentConfig"):
+		oc, kc, err := f.Clients()
+		if err != nil {
+			return nil, err
+		}
+		return deploycmd.NewDeploymentConfigReaper(oc, kc), nil
+	case authorizationapi.Kind("Role"):
+		oc, _, err := f.Clients()
+		if err != nil {
+			return nil, err
+		}
+		return authorizationreaper.NewRoleReaper(oc, oc), nil
+	case authorizationapi.Kind("ClusterRole"):
+		oc, _, err := f.Clients()
+		if err != nil {
+			return nil, err
+		}
+		return authorizationreaper.NewClusterRoleReaper(oc, oc, oc), nil
+	case userapi.Kind("User"):
+		oc, kc, err := f.Clients()
+		if err != nil {
+			return nil, err
+		}
+		return authenticationreaper.NewUserReaper(
+			client.UsersInterface(oc),
+			client.GroupsInterface(oc),
+			client.ClusterRoleBindingsInterface(oc),
+			client.RoleBindingsNamespacer(oc),
+			client.OAuthClientAuthorizationsInterface(oc),
+			kc.Core(),
+		), nil
+	case userapi.Kind("Group"):
+		oc, kc, err := f.Clients()
+		if err != nil {
+			return nil, err
+		}
+		return authenticationreaper.NewGroupReaper(
+			client.GroupsInterface(oc),
+			client.ClusterRoleBindingsInterface(oc),
+			client.RoleBindingsNamespacer(oc),
+			kc.Core(),
+		), nil
+	case buildapi.Kind("BuildConfig"):
+		oc, _, err := f.Clients()
+		if err != nil {
+			return nil, err
+		}
+		return buildcmd.NewBuildConfigReaper(oc), nil
+	}
+	return f.Factory.Reaper(mapping)
+}
+
+func (f *Factory) Generators(cmdName string) map[string]kubectl.Generator {
+	originGenerators := DefaultGenerators(cmdName)
+	kubeGenerators := f.Factory.Generators(cmdName)
+
+	ret := map[string]kubectl.Generator{}
+	for k, v := range kubeGenerators {
+		ret[k] = v
+	}
+	for k, v := range originGenerators {
+		ret[k] = v
+	}
+	return ret
+}
+
+func (f *Factory) MapBasedSelectorForObject(object runtime.Object) (string, error) {
+	switch t := object.(type) {
+	case *deployapi.DeploymentConfig:
+		return kubectl.MakeLabels(t.Spec.Selector), nil
+	default:
+		return f.Factory.MapBasedSelectorForObject(object)
+	}
+}
+
+func (f *Factory) PortsForObject(object runtime.Object) ([]string, error) {
+	switch t := object.(type) {
+	case *deployapi.DeploymentConfig:
+		return getPorts(t.Spec.Template.Spec), nil
+	default:
+		return f.Factory.PortsForObject(object)
+	}
+}
+
+func (f *Factory) LogsForObject(object, options runtime.Object) (*restclient.Request, error) {
+	switch t := object.(type) {
+	case *deployapi.DeploymentConfig:
+		dopts, ok := options.(*deployapi.DeploymentLogOptions)
+		if !ok {
+			return nil, errors.New("provided options object is not a DeploymentLogOptions")
+		}
+		oc, _, err := f.Clients()
+		if err != nil {
+			return nil, err
+		}
+		return oc.DeploymentLogs(t.Namespace).Get(t.Name, *dopts), nil
+	case *buildapi.Build:
+		bopts, ok := options.(*buildapi.BuildLogOptions)
+		if !ok {
+			return nil, errors.New("provided options object is not a BuildLogOptions")
+		}
+		if bopts.Version != nil {
+			return nil, errors.New("cannot specify a version and a build")
+		}
+		oc, _, err := f.Clients()
+		if err != nil {
+			return nil, err
+		}
+		return oc.BuildLogs(t.Namespace).Get(t.Name, *bopts), nil
+	case *buildapi.BuildConfig:
+		bopts, ok := options.(*buildapi.BuildLogOptions)
+		if !ok {
+			return nil, errors.New("provided options object is not a BuildLogOptions")
+		}
+		oc, _, err := f.Clients()
+		if err != nil {
+			return nil, err
+		}
+		builds, err := oc.Builds(t.Namespace).List(api.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		builds.Items = buildapi.FilterBuilds(builds.Items, buildapi.ByBuildConfigPredicate(t.Name))
+		if len(builds.Items) == 0 {
+			return nil, fmt.Errorf("no builds found for %q", t.Name)
+		}
+		if bopts.Version != nil {
+			// If a version has been specified, try to get the logs from that build.
+			desired := buildutil.BuildNameForConfigVersion(t.Name, int(*bopts.Version))
+			return oc.BuildLogs(t.Namespace).Get(desired, *bopts), nil
+		}
+		sort.Sort(sort.Reverse(buildapi.BuildSliceByCreationTimestamp(builds.Items)))
+		return oc.BuildLogs(t.Namespace).Get(builds.Items[0].Name, *bopts), nil
+	default:
+		return f.Factory.LogsForObject(object, options)
+	}
+}
+
+// Saves current resource name (or alias if any) in PrintOptions. Once saved, it will not be overwritten by the
+// kubernetes resource alias look-up, as it will notice a non-empty value in `options.Kind`
+func (f *Factory) Printer(mapping *meta.RESTMapping, options kubectl.PrintOptions) (kubectl.ResourcePrinter, error) {
+	if mapping != nil {
+		options.Kind = mapping.Resource
+		if alias, ok := resourceShortFormFor(mapping.Resource); ok {
+			options.Kind = alias
+		}
+	}
+	return describe.NewHumanReadablePrinter(options), nil
+}
+
+// PrintResourceInfos receives a list of resource infos and prints versioned objects if a generic output format was specified
+// otherwise, it iterates through info objects, printing each resource with a unique printer for its mapping
+func (f *Factory) PrintResourceInfos(cmd *cobra.Command, infos []*resource.Info, out io.Writer) error {
+	printer, generic, err := cmdutil.PrinterForCommand(cmd)
+	if err != nil {
+		return nil
+	}
+	if !generic {
+		for _, info := range infos {
+			mapping := info.ResourceMapping()
+			printer, err := f.PrinterForMapping(cmd, mapping, false)
+			if err != nil {
+				return err
+			}
+			if err := printer.PrintObj(info.Object, out); err != nil {
+				return nil
+			}
+		}
+		return nil
+	}
+
+	clientConfig, err := f.ClientConfig()
+	if err != nil {
+		return err
+	}
+	outputVersion, err := cmdutil.OutputVersion(cmd, clientConfig.GroupVersion)
+	if err != nil {
+		return err
+	}
+	object, err := resource.AsVersionedObject(infos, len(infos) != 1, outputVersion, api.Codecs.LegacyCodec(outputVersion))
+	if err != nil {
+		return err
+	}
+	return printer.PrintObj(object, out)
+
+}
+
+func (f *Factory) CanBeExposed(kind unversioned.GroupKind) error {
+	if kind == deployapi.Kind("DeploymentConfig") {
+		return nil
+	}
+	return f.Factory.CanBeExposed(kind)
+}
+
+func (f *Factory) CanBeAutoscaled(kind unversioned.GroupKind) error {
+	if kind == deployapi.Kind("DeploymentConfig") {
+		return nil
+	}
+	return f.Factory.CanBeAutoscaled(kind)
+}
+
+func (f *Factory) AttachablePodForObject(object runtime.Object) (*api.Pod, error) {
+	switch t := object.(type) {
+	case *deployapi.DeploymentConfig:
+		_, kc, err := f.Clients()
+		if err != nil {
+			return nil, err
+		}
+		selector := labels.SelectorFromSet(t.Spec.Selector)
+		f := func(pods []*api.Pod) sort.Interface { return sort.Reverse(controller.ActivePods(pods)) }
+		pod, _, err := cmdutil.GetFirstPod(kc, t.Namespace, selector, 1*time.Minute, f)
+		return pod, err
+	default:
+		return f.Factory.AttachablePodForObject(object)
+	}
+}
+
+func (f *Factory) UpdatePodSpecForObject(obj runtime.Object, fn func(*api.PodSpec) error) (bool, error) {
+	switch t := obj.(type) {
+	case *deployapi.DeploymentConfig:
+		template := t.Spec.Template
+		if template == nil {
+			t.Spec.Template = template
+			template = &api.PodTemplateSpec{}
+		}
+		return true, fn(&template.Spec)
+	default:
+		return f.Factory.UpdatePodSpecForObject(obj, fn)
+	}
+}
+
+func (f *Factory) ProtocolsForObject(object runtime.Object) (map[string]string, error) {
+	switch t := object.(type) {
+	case *deployapi.DeploymentConfig:
+		return getProtocols(t.Spec.Template.Spec), nil
+	default:
+		return f.Factory.ProtocolsForObject(object)
+	}
+}
+
+func (f *Factory) SwaggerSchema(gvk unversioned.GroupVersionKind) (*swagger.ApiDeclaration, error) {
+	if !latest.OriginKind(gvk) {
+		return f.Factory.SwaggerSchema(gvk)
+	}
+	// TODO: we need to register the OpenShift API under the Kube group, and start returning the OpenShift
+	// group from the scheme.
+	oc, _, err := f.Clients()
+	if err != nil {
+		return nil, err
+	}
+	return f.OriginSwaggerSchema(oc.RESTClient, gvk.GroupVersion())
+}
+
+func (f *Factory) EditorEnvs() []string {
+	return []string{"OC_EDITOR", "EDITOR"}
+}
+
+func (f *Factory) PrintObjectSpecificMessage(obj runtime.Object, out io.Writer) {}
+
+func (f *Factory) Pauser(info *resource.Info) (bool, error) {
+	switch t := info.Object.(type) {
+	case *deployapi.DeploymentConfig:
+		if t.Spec.Paused {
+			return true, nil
+		}
+		t.Spec.Paused = true
+		oc, _, err := f.Clients()
+		if err != nil {
+			return false, err
+		}
+		_, err = oc.DeploymentConfigs(t.Namespace).Update(t)
+		// TODO: Pause the deployer containers.
+		return false, err
+	default:
+		return f.Factory.Pauser(info)
+	}
+}
+
+func (f *Factory) Resumer(info *resource.Info) (bool, error) {
+	switch t := info.Object.(type) {
+	case *deployapi.DeploymentConfig:
+		if !t.Spec.Paused {
+			return true, nil
+		}
+		t.Spec.Paused = false
+		oc, _, err := f.Clients()
+		if err != nil {
+			return false, err
+		}
+		_, err = oc.DeploymentConfigs(t.Namespace).Update(t)
+		// TODO: Resume the deployer containers.
+		return false, err
+	default:
+		return f.Factory.Resumer(info)
+	}
+}
+
+func (f *Factory) ResolveImage(image string) (string, error) {
+	options := f.ImageResolutionOptions.(*imageResolutionOptions)
+	if imageutil.IsDocker(options.Source) {
+		return f.Factory.ResolveImage(image)
+	}
+	oc, _, err := f.Clients()
+	if err != nil {
+		return "", err
+	}
+	namespace, _, err := f.DefaultNamespace()
+	if err != nil {
+		return "", err
+	}
+	return imageutil.ResolveImagePullSpec(oc, oc, options.Source, image, namespace)
+}
+
+func (f *Factory) HistoryViewer(mapping *meta.RESTMapping) (kubectl.HistoryViewer, error) {
+	switch mapping.GroupVersionKind.GroupKind() {
+	case deployapi.Kind("DeploymentConfig"):
+		oc, kc, err := f.Clients()
+		if err != nil {
+			return nil, err
+		}
+		return deploycmd.NewDeploymentConfigHistoryViewer(oc, kc), nil
+	}
+	return f.Factory.HistoryViewer(mapping)
+}
+
+func (f *Factory) Rollbacker(mapping *meta.RESTMapping) (kubectl.Rollbacker, error) {
+	switch mapping.GroupVersionKind.GroupKind() {
+	case deployapi.Kind("DeploymentConfig"):
+		oc, _, err := f.Clients()
+		if err != nil {
+			return nil, err
+		}
+		return deploycmd.NewDeploymentConfigRollbacker(oc), nil
+	}
+	return f.Factory.Rollbacker(mapping)
+}
+
+func (f *Factory) StatusViewer(mapping *meta.RESTMapping) (kubectl.StatusViewer, error) {
+	oc, _, err := f.Clients()
+	if err != nil {
+		return nil, err
+	}
+
+	switch mapping.GroupVersionKind.GroupKind() {
+	case deployapi.Kind("DeploymentConfig"):
+		return deploycmd.NewDeploymentConfigStatusViewer(oc), nil
+	}
+	return f.Factory.StatusViewer(mapping)
 }
 
 // FlagBinder represents an interface that allows to bind extra flags into commands.
@@ -770,7 +765,7 @@ func getProtocols(spec api.PodSpec) map[string]string {
 }
 
 func ResourceMapper(f *Factory) *resource.Mapper {
-	mapper, typer := f.Object(false)
+	mapper, typer := f.Object()
 	return &resource.Mapper{
 		RESTMapper:   mapper,
 		ObjectTyper:  typer,
@@ -815,7 +810,7 @@ func (f *Factory) ExtractFileContents(obj runtime.Object) (map[string][]byte, bo
 // ApproximatePodTemplateForObject returns a pod template object for the provided source.
 // It may return both an error and a object. It attempt to return the best possible template
 // available at the current time.
-func (w *Factory) ApproximatePodTemplateForObject(object runtime.Object) (*api.PodTemplateSpec, error) {
+func (f *Factory) ApproximatePodTemplateForObject(object runtime.Object) (*api.PodTemplateSpec, error) {
 	switch t := object.(type) {
 	case *imageapi.ImageStreamTag:
 		// create a minimal pod spec that uses the image referenced by the istag without any introspection
@@ -842,7 +837,7 @@ func (w *Factory) ApproximatePodTemplateForObject(object runtime.Object) (*api.P
 	case *deployapi.DeploymentConfig:
 		fallback := t.Spec.Template
 
-		_, kc, _, err := w.Clients()
+		_, kc, err := f.Clients()
 		if err != nil {
 			return fallback, err
 		}
@@ -872,7 +867,7 @@ func (w *Factory) ApproximatePodTemplateForObject(object runtime.Object) (*api.P
 		return fallback, nil
 
 	default:
-		pod, err := w.AttachablePodForObject(object)
+		pod, err := f.AttachablePodForObject(object)
 		if pod != nil {
 			return &api.PodTemplateSpec{
 				ObjectMeta: pod.ObjectMeta,
@@ -899,7 +894,7 @@ func (f *Factory) PodForResource(resource string, timeout time.Duration) (string
 	if err != nil {
 		return "", err
 	}
-	mapper, _ := f.Object(false)
+	mapper, _ := f.Object()
 	resourceType, name, err := util.ResolveResource(api.Resource("pods"), resource, mapper)
 	if err != nil {
 		return "", err
@@ -909,11 +904,11 @@ func (f *Factory) PodForResource(resource string, timeout time.Duration) (string
 	case api.Resource("pods"):
 		return name, nil
 	case api.Resource("replicationcontrollers"):
-		kc, err := f.Client()
+		kc, err := f.ClientSet()
 		if err != nil {
 			return "", err
 		}
-		rc, err := kc.ReplicationControllers(namespace).Get(name)
+		rc, err := kc.Core().ReplicationControllers(namespace).Get(name)
 		if err != nil {
 			return "", err
 		}
@@ -924,7 +919,7 @@ func (f *Factory) PodForResource(resource string, timeout time.Duration) (string
 		}
 		return pod.Name, nil
 	case deployapi.Resource("deploymentconfigs"):
-		oc, kc, _, err := f.Clients()
+		oc, kc, err := f.Clients()
 		if err != nil {
 			return "", err
 		}
@@ -939,7 +934,7 @@ func (f *Factory) PodForResource(resource string, timeout time.Duration) (string
 		}
 		return pod.Name, nil
 	case extensions.Resource("daemonsets"):
-		kc, err := f.Client()
+		kc, err := f.ClientSet()
 		if err != nil {
 			return "", err
 		}
@@ -957,17 +952,18 @@ func (f *Factory) PodForResource(resource string, timeout time.Duration) (string
 		}
 		return pod.Name, nil
 	case extensions.Resource("jobs"):
-		kc, err := f.Client()
+		kc, err := f.ClientSet()
 		if err != nil {
 			return "", err
 		}
-		job, err := kc.Extensions().Jobs(namespace).Get(name)
+		// TODO/REBASE kc.Extensions() doesn't exist any more. Is this ok?
+		job, err := kc.Batch().Jobs(namespace).Get(name)
 		if err != nil {
 			return "", err
 		}
 		return podNameForJob(job, kc, timeout, sortBy)
 	case batch.Resource("jobs"):
-		kc, err := f.Client()
+		kc, err := f.ClientSet()
 		if err != nil {
 			return "", err
 		}
@@ -986,7 +982,7 @@ func podNameForJob(job *batch.Job, kc kclientset.Interface, timeout time.Duratio
 	if err != nil {
 		return "", err
 	}
-	pod, _, err := cmdutil.GetFirstPod(kc, job.Namespace, selector, timeout, sortBy)
+	pod, _, err := cmdutil.GetFirstPod(kc.Core(), job.Namespace, selector, timeout, sortBy)
 	if err != nil {
 		return "", err
 	}
