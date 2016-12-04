@@ -12,7 +12,7 @@ import (
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	client "k8s.io/kubernetes/pkg/client/unversioned"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/kubectl"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
@@ -26,7 +26,7 @@ import (
 
 type NodeOptions struct {
 	DefaultNamespace string
-	KubeClient       *client.Client
+	KubeClient       kclientset.Interface
 	Writer           io.Writer
 	ErrWriter        io.Writer
 
