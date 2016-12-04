@@ -183,7 +183,7 @@ func Execute(factory *osclientcmd.Factory, command []string, pod *kapi.Pod, in i
 	if err != nil {
 		return err
 	}
-	client, err := factory.Client()
+	client, err := factory.ClientSet()
 	if err != nil {
 		return err
 	}
@@ -198,10 +198,10 @@ func Execute(factory *osclientcmd.Factory, command []string, pod *kapi.Pod, in i
 			Err:           errOut,
 			Stdin:         in != nil,
 		},
-		Executor: &kubecmd.DefaultRemoteExecutor{},
-		Client:   client,
-		Config:   config,
-		Command:  command,
+		Executor:  &kubecmd.DefaultRemoteExecutor{},
+		PodClient: client,
+		Config:    config,
+		Command:   command,
 	}
 	err = execOptions.Validate()
 	if err != nil {
