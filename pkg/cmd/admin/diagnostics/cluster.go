@@ -126,7 +126,7 @@ func (o DiagnosticsOptions) makeClusterClients(rawConfig *clientcmdapi.Config, c
 	serverUrl := rawConfig.Clusters[context.Cluster].Server
 	factory := osclientcmd.NewFactory(clientConfig)
 	o.Logger.Debug("CED1005", fmt.Sprintf("Checking if context is cluster-admin: '%s'", contextName))
-	if osClient, _, kubeClient, err := factory.Clients(); err != nil {
+	if osClient, kubeClient, err := factory.Clients(); err != nil {
 		o.Logger.Debug("CED1006", fmt.Sprintf("Error creating client for context '%s':\n%v", contextName, err))
 		return nil, nil, false, "", nil
 	} else {

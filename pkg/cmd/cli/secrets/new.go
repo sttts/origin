@@ -129,7 +129,7 @@ func (o *CreateSecretOptions) Complete(args []string, f *clientcmd.Factory) erro
 	}
 
 	if f != nil {
-		_, _, kubeClient, err := f.Clients()
+		_, kubeClient, err := f.Clients()
 		if err != nil {
 			return err
 		}

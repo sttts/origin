@@ -192,7 +192,7 @@ func (o *TemplateRouterOptions) Run() error {
 		AllowWildcardRoutes:    o.RouterSelection.AllowWildcardRoutes,
 	}
 
-	oc, _, kc, err := o.Config.Clients()
+	oc, kc, err := o.Config.Clients()
 	if err != nil {
 		return err
 	}

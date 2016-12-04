@@ -49,7 +49,7 @@ func (p *ProjectOptions) Complete(f *clientcmd.Factory, c *cobra.Command, args [
 	if err != nil {
 		return err
 	}
-	oc, _, kc, err := f.Clients()
+	oc, kc, err := f.Clients()
 	if err != nil {
 		return err
 	}

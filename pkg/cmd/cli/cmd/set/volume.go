@@ -343,7 +343,7 @@ func (v *VolumeOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, out, 
 	if err != nil {
 		return err
 	}
-	_, _, kc, err := f.Clients()
+	_, kc, err := f.Clients()
 	if err != nil {
 		return err
 	}
