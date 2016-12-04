@@ -136,7 +136,7 @@ func newResourceStore() *resourceStore {
 func getSecretRefValue(f *clientcmd.Factory, store *resourceStore, secretSelector *kapi.SecretKeySelector) (string, error) {
 	secret, ok := store.secretStore[secretSelector.Name]
 	if !ok {
-		kubeClient, err := f.Client()
+		kubeClient, err := f.ClientSet()
 		if err != nil {
 			return "", err
 		}
@@ -159,7 +159,7 @@ func getSecretRefValue(f *clientcmd.Factory, store *resourceStore, secretSelecto
 func getConfigMapRefValue(f *clientcmd.Factory, store *resourceStore, configMapSelector *kapi.ConfigMapKeySelector) (string, error) {
 	configMap, ok := store.configMapStore[configMapSelector.Name]
 	if !ok {
-		kubeClient, err := f.Client()
+		kubeClient, err := f.ClientSet()
 		if err != nil {
 			return "", err
 		}
