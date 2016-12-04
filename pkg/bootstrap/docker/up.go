@@ -800,7 +800,7 @@ func (c *ClientStartConfig) Clients() (*client.Client, *kclientset.Clientset, er
 	if err != nil {
 		return nil, nil, err
 	}
-	oc, _, kcset, err := f.Clients()
+	oc, kcset, err := f.Clients()
 	if err != nil {
 		return nil, nil, err
 	}
