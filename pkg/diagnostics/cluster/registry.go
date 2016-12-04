@@ -252,7 +252,7 @@ func (d *ClusterRegistry) getRegistryPods(service *kapi.Service, r types.Diagnos
 
 func (d *ClusterRegistry) checkRegistryLogs(pod *kapi.Pod, r types.DiagnosticResult) {
 	// pull out logs from the pod
-	readCloser, err := d.KubeClient.CoreClient.RESTClient.Get().
+	readCloser, err := d.KubeClient.CoreClient.RESTClient().Get().
 		Namespace("default").Name(pod.ObjectMeta.Name).
 		Resource("pods").SubResource("log").
 		Param("follow", "false").
