@@ -439,7 +439,7 @@ func getClients(f *clientcmd.Factory, caBundle string) (*client.Client, *kclient
 
 	switch {
 	case len(clientConfig.BearerToken) > 0:
-		osClient, _, kClient, err = f.Clients()
+		osClient, kClient, err = f.Clients()
 		if err != nil {
 			return nil, nil, nil, err
 		}
