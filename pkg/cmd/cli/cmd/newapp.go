@@ -216,7 +216,7 @@ func (o *NewAppOptions) Complete(baseName, name string, f *clientcmd.Factory, c 
 	o.CommandPath = c.CommandPath()
 	o.BaseName = baseName
 	o.CommandName = name
-	mapper, _ := f.Object(false)
+	mapper, _ := f.Object()
 	o.PrintObject = cmdutil.VersionedPrintObject(f.PrintObject, c, mapper, out)
 	o.LogsForObject = f.LogsForObject
 	if err := CompleteAppConfig(o.Config, f, c, args); err != nil {
@@ -459,7 +459,7 @@ func getDockerClient() (*docker.Client, error) {
 }
 
 func CompleteAppConfig(config *newcmd.AppConfig, f *clientcmd.Factory, c *cobra.Command, args []string) error {
-	mapper, typer := f.Object(false)
+	mapper, typer := f.Object()
 	if config.Mapper == nil {
 		config.Mapper = mapper
 	}
@@ -475,7 +475,7 @@ func CompleteAppConfig(config *newcmd.AppConfig, f *clientcmd.Factory, c *cobra.
 		return err
 	}
 
-	osclient, _, kclient, err := f.Clients()
+	osclient, kclient, err := f.Clients()
 	if err != nil {
 		return err
 	}

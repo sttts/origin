@@ -108,7 +108,7 @@ func (o *ProjectOptions) Complete(f *clientcmd.Factory, args []string, out io.Wr
 	}
 
 	o.ClientFn = func() (*client.Client, kclientset.Interface, error) {
-		oc, _, kc, err := f.Clients()
+		oc, kc, err := f.Clients()
 		return oc, kc, err
 	}
 

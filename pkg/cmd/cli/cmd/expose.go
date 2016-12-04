@@ -81,7 +81,7 @@ func validate(cmd *cobra.Command, f *clientcmd.Factory, args []string) error {
 		return err
 	}
 
-	mapper, typer := f.Object(false)
+	mapper, typer := f.Object()
 	r := resource.NewBuilder(mapper, typer, resource.ClientMapperFunc(f.ClientForMapping), kapi.Codecs.UniversalDecoder()).
 		ContinueOnError().
 		NamespaceParam(namespace).DefaultNamespace().
