@@ -192,7 +192,7 @@ func Run(f *clientcmd.Factory, options *ipfailover.IPFailoverConfigCmdOptions, c
 	list.Items = append(configList, list.Items...)
 
 	if options.Action.ShouldPrint() {
-		mapper, _ := f.Object(false)
+		mapper, _ := f.Object()
 		return cmdutil.VersionedPrintObject(f.PrintObject, cmd, mapper, options.Action.Out)(list)
 	}
 

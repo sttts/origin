@@ -100,7 +100,7 @@ func (o *RolloutLatestOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command
 		return err
 	}
 
-	o.mapper, o.typer = f.Object(false)
+	o.mapper, o.typer = f.Object()
 	o.infos, err = resource.NewBuilder(o.mapper, o.typer, resource.ClientMapperFunc(f.ClientForMapping), f.Decoder(true)).
 		ContinueOnError().
 		NamespaceParam(namespace).

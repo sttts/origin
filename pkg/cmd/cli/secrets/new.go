@@ -92,7 +92,7 @@ func NewCmdCreateSecret(name, fullName string, f *clientcmd.Factory, out io.Writ
 				secret, err := options.BundleSecret()
 				kcmdutil.CheckErr(err)
 
-				mapper, _ := f.Object(false)
+				mapper, _ := f.Object()
 				kcmdutil.CheckErr(f.Factory.PrintObject(c, mapper, secret, out))
 				return
 			}

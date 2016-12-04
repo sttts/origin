@@ -82,7 +82,7 @@ func NewCmdCreateDockerConfigSecret(name, fullName string, f *kcmdutil.Factory, 
 				secret, err := o.NewDockerSecret()
 				kcmdutil.CheckErr(err)
 
-				mapper, _ := f.Object(false)
+				mapper, _ := f.Object()
 				kcmdutil.CheckErr(f.PrintObject(c, mapper, secret, out))
 				return
 			}

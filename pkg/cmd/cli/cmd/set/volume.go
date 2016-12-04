@@ -353,7 +353,7 @@ func (v *VolumeOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, out, 
 	if err != nil {
 		return err
 	}
-	mapper, typer := f.Object(false)
+	mapper, typer := f.Object()
 
 	v.Output = kcmdutil.GetFlagString(cmd, "output")
 	if len(v.Output) > 0 {

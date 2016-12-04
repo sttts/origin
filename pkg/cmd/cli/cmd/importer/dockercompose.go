@@ -118,7 +118,7 @@ func (o *DockerComposeOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command
 
 	o.Action.Bulk.Mapper = clientcmd.ResourceMapper(f)
 	o.Action.Bulk.Op = configcmd.Create
-	mapper, _ := f.Object(false)
+	mapper, _ := f.Object()
 	o.PrintObject = cmdutil.VersionedPrintObject(f.PrintObject, cmd, mapper, o.Action.Out)
 
 	o.Generator, _ = cmd.Flags().GetString("generator")

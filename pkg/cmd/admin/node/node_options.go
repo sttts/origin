@@ -58,7 +58,7 @@ func (n *NodeOptions) Complete(f *clientcmd.Factory, c *cobra.Command, args []st
 	if err != nil {
 		return err
 	}
-	mapper, typer := f.Object(false)
+	mapper, typer := f.Object()
 
 	n.DefaultNamespace = defaultNamespace
 	n.KubeClient = kc

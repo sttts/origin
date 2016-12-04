@@ -135,7 +135,7 @@ func (o *ResourceOptions) Complete(f *clientcmd.Factory, c *cobra.Command) error
 	if err != nil {
 		return err
 	}
-	mapper, _ := f.Object(false)
+	mapper, _ := f.Object()
 
 	resourceNames := sets.NewString()
 	for i, s := range o.Include {
