@@ -51,7 +51,7 @@ type MasterConfig struct {
 
 // BuildDefaultAPIServer constructs the appropriate APIServer and StorageFactory for the kubernetes server.
 // It returns an error if no KubernetesMasterConfig was defined.
-func BuildDefaultAPIServer(options configapi.MasterConfig) (*apiserveroptions.APIServer, genericapiserver.StorageFactory, error) {
+func BuildDefaultAPIServer(options configapi.MasterConfig) (*apiserveroptions.ServerRunOptions, genericapiserver.StorageFactory, error) {
 	if options.KubernetesMasterConfig == nil {
 		return nil, nil, fmt.Errorf("no kubernetesMasterConfig defined, unable to load settings")
 	}
@@ -70,7 +70,7 @@ func BuildDefaultAPIServer(options configapi.MasterConfig) (*apiserveroptions.AP
 	}
 
 	// Defaults are tested in TestAPIServerDefaults
-	server := apiserveroptions.NewAPIServer()
+	server := apiserveroptions.NewServerRunOptions()
 	// Adjust defaults
 	server.EventTTL = 2 * time.Hour
 	server.ServiceClusterIPRange = net.IPNet(flagtypes.DefaultIPNet(options.KubernetesMasterConfig.ServicesSubnet))
