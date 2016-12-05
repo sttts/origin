@@ -1,9 +1,8 @@
 package testclient
 
 import (
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
-
 	templateapi "github.com/openshift/origin/pkg/template/api"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 )
 
 // FakeTemplateConfigs implements TemplateConfigsInterface. Meant to be embedded into a struct to get a default
@@ -14,7 +13,7 @@ type FakeTemplateConfigs struct {
 }
 
 func (c *FakeTemplateConfigs) Create(inObj *templateapi.Template) (*templateapi.Template, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewCreateAction("templateconfigs", c.Namespace, inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewCreateAction(templateapi.SchemeGroupVersion.WithResource("templateconfigs"), c.Namespace, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}

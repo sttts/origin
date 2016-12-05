@@ -2,7 +2,7 @@ package testclient
 
 import (
 	kapi "k8s.io/kubernetes/pkg/api"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 )
@@ -15,7 +15,7 @@ type FakeRoles struct {
 }
 
 func (c *FakeRoles) Get(name string) (*authorizationapi.Role, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewGetAction("roles", c.Namespace, name), &authorizationapi.Role{})
+	obj, err := c.Fake.Invokes(core.NewGetAction(authorizationapi.SchemeGroupVersion.WithResource("roles"), c.Namespace, name), &authorizationapi.Role{})
 	if obj == nil {
 		return nil, err
 	}
@@ -24,7 +24,7 @@ func (c *FakeRoles) Get(name string) (*authorizationapi.Role, error) {
 }
 
 func (c *FakeRoles) List(opts kapi.ListOptions) (*authorizationapi.RoleList, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewListAction("roles", c.Namespace, opts), &authorizationapi.RoleList{})
+	obj, err := c.Fake.Invokes(core.NewListAction(authorizationapi.SchemeGroupVersion.WithResource("roles"), c.Namespace, opts), &authorizationapi.RoleList{})
 	if obj == nil {
 		return nil, err
 	}
@@ -33,7 +33,7 @@ func (c *FakeRoles) List(opts kapi.ListOptions) (*authorizationapi.RoleList, err
 }
 
 func (c *FakeRoles) Create(inObj *authorizationapi.Role) (*authorizationapi.Role, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewCreateAction("roles", c.Namespace, inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewCreateAction(authorizationapi.SchemeGroupVersion.WithResource("roles"), c.Namespace, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func (c *FakeRoles) Create(inObj *authorizationapi.Role) (*authorizationapi.Role
 }
 
 func (c *FakeRoles) Update(inObj *authorizationapi.Role) (*authorizationapi.Role, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewUpdateAction("roles", c.Namespace, inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewUpdateAction(authorizationapi.SchemeGroupVersion.WithResource("roles"), c.Namespace, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -51,6 +51,6 @@ func (c *FakeRoles) Update(inObj *authorizationapi.Role) (*authorizationapi.Role
 }
 
 func (c *FakeRoles) Delete(name string) error {
-	_, err := c.Fake.Invokes(ktestclient.NewDeleteAction("roles", c.Namespace, name), &authorizationapi.Role{})
+	_, err := c.Fake.Invokes(core.NewDeleteAction(authorizationapi.SchemeGroupVersion.WithResource("roles"), c.Namespace, name), &authorizationapi.Role{})
 	return err
 }

@@ -3,7 +3,7 @@ package testclient
 import (
 	"fmt"
 
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 
 	"github.com/openshift/origin/pkg/client"
 	imageapi "github.com/openshift/origin/pkg/image/api"
@@ -22,7 +22,7 @@ var _ client.ImageStreamImageInterface = &FakeImageStreamImages{}
 func (c *FakeImageStreamImages) Get(repo, imageID string) (*imageapi.ImageStreamImage, error) {
 	name := fmt.Sprintf("%s@%s", repo, imageID)
 
-	obj, err := c.Fake.Invokes(ktestclient.NewGetAction("imagestreamimages", c.Namespace, name), &imageapi.ImageStreamImage{})
+	obj, err := c.Fake.Invokes(core.NewGetAction(imageapi.SchemeGroupVersion.WithResource("imagestreamimages"), c.Namespace, name), &imageapi.ImageStreamImage{})
 	if obj == nil {
 		return nil, err
 	}

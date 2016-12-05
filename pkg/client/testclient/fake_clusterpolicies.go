@@ -2,7 +2,7 @@ package testclient
 
 import (
 	kapi "k8s.io/kubernetes/pkg/api"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 	"k8s.io/kubernetes/pkg/watch"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
@@ -15,7 +15,7 @@ type FakeClusterPolicies struct {
 }
 
 func (c *FakeClusterPolicies) Get(name string) (*authorizationapi.ClusterPolicy, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootGetAction("clusterpolicies", name), &authorizationapi.ClusterPolicy{})
+	obj, err := c.Fake.Invokes(core.NewRootGetAction(authorizationapi.SchemeGroupVersion.WithResource("clusterpolicies"), name), &authorizationapi.ClusterPolicy{})
 	if obj == nil {
 		return nil, err
 	}
@@ -24,7 +24,7 @@ func (c *FakeClusterPolicies) Get(name string) (*authorizationapi.ClusterPolicy,
 }
 
 func (c *FakeClusterPolicies) List(opts kapi.ListOptions) (*authorizationapi.ClusterPolicyList, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootListAction("clusterpolicies", opts), &authorizationapi.ClusterPolicyList{})
+	obj, err := c.Fake.Invokes(core.NewRootListAction(authorizationapi.SchemeGroupVersion.WithResource("clusterpolicies"), opts), &authorizationapi.ClusterPolicyList{})
 	if obj == nil {
 		return nil, err
 	}
@@ -33,10 +33,10 @@ func (c *FakeClusterPolicies) List(opts kapi.ListOptions) (*authorizationapi.Clu
 }
 
 func (c *FakeClusterPolicies) Delete(name string) error {
-	_, err := c.Fake.Invokes(ktestclient.NewRootDeleteAction("clusterpolicies", name), &authorizationapi.ClusterPolicy{})
+	_, err := c.Fake.Invokes(core.NewRootDeleteAction(authorizationapi.SchemeGroupVersion.WithResource("clusterpolicies"), name), &authorizationapi.ClusterPolicy{})
 	return err
 }
 
 func (c *FakeClusterPolicies) Watch(opts kapi.ListOptions) (watch.Interface, error) {
-	return c.Fake.InvokesWatch(ktestclient.NewRootWatchAction("clusterpolicies", opts))
+	return c.Fake.InvokesWatch(core.NewRootWatchAction(authorizationapi.SchemeGroupVersion.WithResource("clusterpolicies"), opts))
 }

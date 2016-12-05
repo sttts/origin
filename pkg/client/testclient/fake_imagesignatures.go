@@ -1,10 +1,9 @@
 package testclient
 
 import (
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
-
 	"github.com/openshift/origin/pkg/client"
 	imageapi "github.com/openshift/origin/pkg/image/api"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 )
 
 // FakeImageSignatures implements ImageSignatureInterface. Meant to
@@ -17,11 +16,11 @@ type FakeImageSignatures struct {
 var _ client.ImageSignatureInterface = &FakeImageSignatures{}
 
 func (c *FakeImageSignatures) Create(inObj *imageapi.ImageSignature) (*imageapi.ImageSignature, error) {
-	_, err := c.Fake.Invokes(ktestclient.NewRootCreateAction("imagesignatures", inObj), inObj)
+	_, err := c.Fake.Invokes(core.NewRootCreateAction(imageapi.SchemeGroupVersion.WithResource("imagesignatures"), inObj), inObj)
 	return inObj, err
 }
 
 func (c *FakeImageSignatures) Delete(name string) error {
-	_, err := c.Fake.Invokes(ktestclient.NewRootDeleteAction("imagesignatures", name), &imageapi.ImageSignature{})
+	_, err := c.Fake.Invokes(core.NewRootDeleteAction(imageapi.SchemeGroupVersion.WithResource("imagesignatures"), name), &imageapi.ImageSignature{})
 	return err
 }

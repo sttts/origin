@@ -1,9 +1,8 @@
 package testclient
 
 import (
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
-
 	oauthapi "github.com/openshift/origin/pkg/oauth/api"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 )
 
 type FakeOAuthAuthorizeTokens struct {
@@ -11,12 +10,12 @@ type FakeOAuthAuthorizeTokens struct {
 }
 
 func (c *FakeOAuthAuthorizeTokens) Delete(name string) error {
-	_, err := c.Fake.Invokes(ktestclient.NewRootDeleteAction("oauthauthorizetokens", name), &oauthapi.OAuthAuthorizeToken{})
+	_, err := c.Fake.Invokes(core.NewRootDeleteAction(oauthapi.SchemeGroupVersion.WithResource("oauthauthorizetokens"), name), &oauthapi.OAuthAuthorizeToken{})
 	return err
 }
 
 func (c *FakeOAuthAuthorizeTokens) Create(inObj *oauthapi.OAuthAuthorizeToken) (*oauthapi.OAuthAuthorizeToken, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootCreateAction("oauthauthorizetokens", inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewRootCreateAction(oauthapi.SchemeGroupVersion.WithResource("oauthauthorizetokens"), inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}

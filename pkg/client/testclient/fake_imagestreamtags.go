@@ -1,10 +1,9 @@
 package testclient
 
 import (
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
-
 	"github.com/openshift/origin/pkg/client"
 	imageapi "github.com/openshift/origin/pkg/image/api"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 )
 
 // FakeImageStreamTags implements ImageStreamTagInterface. Meant to be
@@ -18,7 +17,7 @@ type FakeImageStreamTags struct {
 var _ client.ImageStreamTagInterface = &FakeImageStreamTags{}
 
 func (c *FakeImageStreamTags) Get(name, tag string) (*imageapi.ImageStreamTag, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewGetAction("imagestreamtags", c.Namespace, imageapi.JoinImageStreamTag(name, tag)), &imageapi.ImageStreamTag{})
+	obj, err := c.Fake.Invokes(core.NewGetAction(imageapi.SchemeGroupVersion.WithResource("imagestreamtags"), c.Namespace, imageapi.JoinImageStreamTag(name, tag)), &imageapi.ImageStreamTag{})
 	if obj == nil {
 		return nil, err
 	}
@@ -27,7 +26,7 @@ func (c *FakeImageStreamTags) Get(name, tag string) (*imageapi.ImageStreamTag, e
 }
 
 func (c *FakeImageStreamTags) Update(inObj *imageapi.ImageStreamTag) (*imageapi.ImageStreamTag, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewUpdateAction("imagestreamtags", c.Namespace, inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewUpdateAction(imageapi.SchemeGroupVersion.WithResource("imagestreamtags"), c.Namespace, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -36,7 +35,7 @@ func (c *FakeImageStreamTags) Update(inObj *imageapi.ImageStreamTag) (*imageapi.
 }
 
 func (c *FakeImageStreamTags) Create(inObj *imageapi.ImageStreamTag) (*imageapi.ImageStreamTag, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewCreateAction("imagestreamtags", c.Namespace, inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewCreateAction(imageapi.SchemeGroupVersion.WithResource("imagestreamtags"), c.Namespace, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -45,6 +44,6 @@ func (c *FakeImageStreamTags) Create(inObj *imageapi.ImageStreamTag) (*imageapi.
 }
 
 func (c *FakeImageStreamTags) Delete(name, tag string) error {
-	_, err := c.Fake.Invokes(ktestclient.NewDeleteAction("imagestreamtags", c.Namespace, imageapi.JoinImageStreamTag(name, tag)), &imageapi.ImageStreamTag{})
+	_, err := c.Fake.Invokes(core.NewDeleteAction(imageapi.SchemeGroupVersion.WithResource("imagestreamtags"), c.Namespace, imageapi.JoinImageStreamTag(name, tag)), &imageapi.ImageStreamTag{})
 	return err
 }

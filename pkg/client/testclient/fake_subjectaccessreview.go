@@ -1,9 +1,8 @@
 package testclient
 
 import (
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
-
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 )
 
 // FakeClusterSubjectAccessReviews implements the ClusterSubjectAccessReviews interface.
@@ -14,7 +13,7 @@ type FakeClusterSubjectAccessReviews struct {
 }
 
 func (c *FakeClusterSubjectAccessReviews) Create(inObj *authorizationapi.SubjectAccessReview) (*authorizationapi.SubjectAccessReviewResponse, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootCreateAction("subjectaccessreviews", inObj), &authorizationapi.SubjectAccessReviewResponse{})
+	obj, err := c.Fake.Invokes(core.NewRootCreateAction(authorizationapi.SchemeGroupVersion.WithResource("subjectaccessreviews"), inObj), &authorizationapi.SubjectAccessReviewResponse{})
 	if cast, ok := obj.(*authorizationapi.SubjectAccessReviewResponse); ok {
 		return cast, err
 	}

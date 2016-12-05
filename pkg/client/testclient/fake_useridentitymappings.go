@@ -1,9 +1,8 @@
 package testclient
 
 import (
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
-
 	userapi "github.com/openshift/origin/pkg/user/api"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 )
 
 // FakeUserIdentityMappings implements UserIdentityMappingInterface. Meant to be embedded into a struct to get a default
@@ -13,7 +12,7 @@ type FakeUserIdentityMappings struct {
 }
 
 func (c *FakeUserIdentityMappings) Get(name string) (*userapi.UserIdentityMapping, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootGetAction("useridentitymappings", name), &userapi.UserIdentityMapping{})
+	obj, err := c.Fake.Invokes(core.NewRootGetAction(userapi.SchemeGroupVersion.WithResource("useridentitymappings"), name), &userapi.UserIdentityMapping{})
 	if obj == nil {
 		return nil, err
 	}
@@ -22,7 +21,7 @@ func (c *FakeUserIdentityMappings) Get(name string) (*userapi.UserIdentityMappin
 }
 
 func (c *FakeUserIdentityMappings) Create(inObj *userapi.UserIdentityMapping) (*userapi.UserIdentityMapping, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootCreateAction("useridentitymappings", inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewRootCreateAction(userapi.SchemeGroupVersion.WithResource("useridentitymappings"), inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -31,7 +30,7 @@ func (c *FakeUserIdentityMappings) Create(inObj *userapi.UserIdentityMapping) (*
 }
 
 func (c *FakeUserIdentityMappings) Update(inObj *userapi.UserIdentityMapping) (*userapi.UserIdentityMapping, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootUpdateAction("useridentitymappings", inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewRootUpdateAction(userapi.SchemeGroupVersion.WithResource("useridentitymappings"), inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -40,6 +39,6 @@ func (c *FakeUserIdentityMappings) Update(inObj *userapi.UserIdentityMapping) (*
 }
 
 func (c *FakeUserIdentityMappings) Delete(name string) error {
-	_, err := c.Fake.Invokes(ktestclient.NewRootDeleteAction("useridentitymappings", name), &userapi.UserIdentityMapping{})
+	_, err := c.Fake.Invokes(core.NewRootDeleteAction(userapi.SchemeGroupVersion.WithResource("useridentitymappings"), name), &userapi.UserIdentityMapping{})
 	return err
 }

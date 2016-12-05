@@ -1,7 +1,7 @@
 package testclient
 
 import (
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 
 	sdnapi "github.com/openshift/origin/pkg/sdn/api"
 )
@@ -13,7 +13,7 @@ type FakeClusterNetwork struct {
 }
 
 func (c *FakeClusterNetwork) Get(name string) (*sdnapi.ClusterNetwork, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootGetAction("clusternetworks", name), &sdnapi.ClusterNetwork{})
+	obj, err := c.Fake.Invokes(core.NewRootGetAction(sdnapi.SchemeGroupVersion.WithResource("clusternetworks"), name), &sdnapi.ClusterNetwork{})
 	if obj == nil {
 		return nil, err
 	}
@@ -22,7 +22,7 @@ func (c *FakeClusterNetwork) Get(name string) (*sdnapi.ClusterNetwork, error) {
 }
 
 func (c *FakeClusterNetwork) Create(inObj *sdnapi.ClusterNetwork) (*sdnapi.ClusterNetwork, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootCreateAction("clusternetworks", inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewRootCreateAction(sdnapi.SchemeGroupVersion.WithResource("clusternetworks"), inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -31,7 +31,7 @@ func (c *FakeClusterNetwork) Create(inObj *sdnapi.ClusterNetwork) (*sdnapi.Clust
 }
 
 func (c *FakeClusterNetwork) Update(inObj *sdnapi.ClusterNetwork) (*sdnapi.ClusterNetwork, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootUpdateAction("clusternetworks", inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewRootUpdateAction(sdnapi.SchemeGroupVersion.WithResource("clusternetworks"), inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}

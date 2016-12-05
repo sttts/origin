@@ -2,7 +2,7 @@ package testclient
 
 import (
 	kapi "k8s.io/kubernetes/pkg/api"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 	"k8s.io/kubernetes/pkg/watch"
 
 	quotaapi "github.com/openshift/origin/pkg/quota/api"
@@ -15,7 +15,7 @@ type FakeClusterResourceQuotas struct {
 }
 
 func (c *FakeClusterResourceQuotas) Get(name string) (*quotaapi.ClusterResourceQuota, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootGetAction("clusterresourcequotas", name), &quotaapi.ClusterResourceQuota{})
+	obj, err := c.Fake.Invokes(core.NewRootGetAction(quotaapi.SchemeGroupVersion.WithResource("clusterresourcequotas"), name), &quotaapi.ClusterResourceQuota{})
 	if obj == nil {
 		return nil, err
 	}
@@ -24,7 +24,7 @@ func (c *FakeClusterResourceQuotas) Get(name string) (*quotaapi.ClusterResourceQ
 }
 
 func (c *FakeClusterResourceQuotas) List(opts kapi.ListOptions) (*quotaapi.ClusterResourceQuotaList, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootListAction("clusterresourcequotas", opts), &quotaapi.ClusterResourceQuotaList{})
+	obj, err := c.Fake.Invokes(core.NewRootListAction(quotaapi.SchemeGroupVersion.WithResource("clusterresourcequotas"), opts), &quotaapi.ClusterResourceQuotaList{})
 	if obj == nil {
 		return nil, err
 	}
@@ -33,7 +33,7 @@ func (c *FakeClusterResourceQuotas) List(opts kapi.ListOptions) (*quotaapi.Clust
 }
 
 func (c *FakeClusterResourceQuotas) Create(inObj *quotaapi.ClusterResourceQuota) (*quotaapi.ClusterResourceQuota, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootCreateAction("clusterresourcequotas", inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewRootCreateAction(quotaapi.SchemeGroupVersion.WithResource("clusterresourcequotas"), inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func (c *FakeClusterResourceQuotas) Create(inObj *quotaapi.ClusterResourceQuota)
 }
 
 func (c *FakeClusterResourceQuotas) Update(inObj *quotaapi.ClusterResourceQuota) (*quotaapi.ClusterResourceQuota, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootUpdateAction("clusterresourcequotas", inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewRootUpdateAction(quotaapi.SchemeGroupVersion.WithResource("clusterresourcequotas"), inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -50,18 +50,18 @@ func (c *FakeClusterResourceQuotas) Update(inObj *quotaapi.ClusterResourceQuota)
 	return obj.(*quotaapi.ClusterResourceQuota), err
 }
 func (c *FakeClusterResourceQuotas) Delete(name string) error {
-	_, err := c.Fake.Invokes(ktestclient.NewRootDeleteAction("clusterresourcequotas", name), &quotaapi.ClusterResourceQuota{})
+	_, err := c.Fake.Invokes(core.NewRootDeleteAction(quotaapi.SchemeGroupVersion.WithResource("clusterresourcequotas"), name), &quotaapi.ClusterResourceQuota{})
 	return err
 }
 
 func (c *FakeClusterResourceQuotas) Watch(opts kapi.ListOptions) (watch.Interface, error) {
-	return c.Fake.InvokesWatch(ktestclient.NewRootWatchAction("clusterresourcequotas", opts))
+	return c.Fake.InvokesWatch(core.NewRootWatchAction(quotaapi.SchemeGroupVersion.WithResource("clusterresourcequotas"), opts))
 }
 
 func (c *FakeClusterResourceQuotas) UpdateStatus(inObj *quotaapi.ClusterResourceQuota) (*quotaapi.ClusterResourceQuota, error) {
-	action := ktestclient.UpdateActionImpl{}
+	action := core.UpdateActionImpl{}
 	action.Verb = "update"
-	action.Resource = "clusterresourcequotas"
+	action.Resource = quotaapi.SchemeGroupVersion.WithResource("clusterresourcequotas")
 	action.Subresource = "status"
 	action.Object = inObj
 
