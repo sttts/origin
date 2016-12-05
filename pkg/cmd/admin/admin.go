@@ -75,7 +75,7 @@ func NewCommandAdmin(name, fullName string, in io.Reader, out io.Writer, errout 
 				node.NewCommandManageNode(f, node.ManageNodeCommandName, fullName+" "+node.ManageNodeCommandName, out, errout),
 				cmdutil.ReplaceCommandName("kubectl", fullName, templates.Normalize(kubectl.NewCmdCordon(f.Factory, out))),
 				cmdutil.ReplaceCommandName("kubectl", fullName, templates.Normalize(kubectl.NewCmdUncordon(f.Factory, out))),
-				cmdutil.ReplaceCommandName("kubectl", fullName, templates.Normalize(kubectl.NewCmdDrain(f.Factory, out))),
+				cmdutil.ReplaceCommandName("kubectl", fullName, templates.Normalize(kubectl.NewCmdDrain(f.Factory, out, errout))),
 				cmdutil.ReplaceCommandName("kubectl", fullName, templates.Normalize(kubectl.NewCmdTaint(f.Factory, out))),
 				network.NewCmdPodNetwork(network.PodNetworkCommandName, fullName+" "+network.PodNetworkCommandName, f, out, errout),
 			},
