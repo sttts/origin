@@ -23,7 +23,6 @@ import (
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/genericapiserver"
 	"k8s.io/kubernetes/pkg/genericapiserver/authorizer"
-	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
 	"k8s.io/kubernetes/pkg/master"
 	"k8s.io/kubernetes/pkg/registry/cachesize"
 	kerrors "k8s.io/kubernetes/pkg/util/errors"
@@ -161,12 +160,6 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 		return nil, errors.New("insufficient information to build KubernetesMasterConfig")
 	}
 
-	kubeletClientConfig := configapi.GetKubeletClientConfig(options)
-	kubeletClient, err := kubeletclient.NewStaticKubeletClient(kubeletClientConfig)
-	if err != nil {
-		return nil, fmt.Errorf("unable to configure Kubelet client: %v", err)
-	}
-
 	// in-order list of plug-ins that should intercept admission decisions
 	// TODO: Push node environment support to upstream in future
 
@@ -238,7 +231,7 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 	}
 
 	m := &master.Config{
-		Config: &genericapiserver.Config{
+		GenericConfig: &genericapiserver.Config{
 
 			PublicAddress: publicAddress,
 			ReadWritePort: server.SecurePort,
@@ -246,11 +239,6 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 			Authenticator:    originAuthenticator, // this is used to fulfill the tokenreviews endpoint which is used by node authentication
 			Authorizer:       authorizer.NewAlwaysAllowAuthorizer(),
 			AdmissionControl: admissionControl,
-
-			StorageFactory: storageFactory,
-
-			ServiceClusterIPRange: (*net.IPNet)(&server.ServiceClusterIPRange),
-			ServiceNodePortRange:  server.ServiceNodePortRange,
 
 			RequestContextMapper: requestContextMapper,
 
@@ -279,9 +267,14 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 			KubernetesServiceNodePort: server.KubernetesServiceNodePort,
 		},
 
+		StorageFactory: storageFactory,
+
+		ServiceIPRange:       (*net.IPNet)(&server.ServiceClusterIPRange),
+		ServiceNodePortRange: server.ServiceNodePortRange,
+
 		EventTTL: server.EventTTL,
 
-		KubeletClient: kubeletClient,
+		KubeletClient: configapi.GetKubeletClientConfig(options),
 
 		EnableCoreControllers: true,
 
