@@ -4796,11 +4796,6 @@
 			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
 		},
 		{
-			"ImportPath": "k8s.io/kubernetes/pkg/client/unversioned/testclient",
-			"Comment": "v1.5.0-beta.2-30-g014dd1e",
-			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
-		},
-		{
 			"ImportPath": "k8s.io/kubernetes/pkg/cloudprovider",
 			"Comment": "v1.5.0-beta.2-30-g014dd1e",
 			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
