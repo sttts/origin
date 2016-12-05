@@ -1,12 +1,14 @@
 {
 	"ImportPath": "github.com/openshift/origin",
 	"GoVersion": "go1.6",
-	"GodepVersion": "v63",
+	"GodepVersion": "v75",
 	"Packages": [
 		"github.com/elazarl/goproxy",
 		"github.com/golang/mock/gomock",
 		"github.com/containernetworking/cni/plugins/ipam/host-local",
 		"github.com/containernetworking/cni/plugins/main/loopback",
+		"k8s.io/kubernetes/cmd/libs/go2idl/go-to-protobuf/protoc-gen-gogo",
+		"k8s.io/kubernetes/cmd/libs/go2idl/client-gen",
 		"./..."
 	],
 	"Deps": [
@@ -3776,6 +3778,31 @@
 			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
 		},
 		{
+			"ImportPath": "k8s.io/kubernetes/cmd/libs/go2idl/client-gen",
+			"Comment": "v1.5.0-beta.2-30-g014dd1e",
+			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
+		},
+		{
+			"ImportPath": "k8s.io/kubernetes/cmd/libs/go2idl/client-gen/args",
+			"Comment": "v1.5.0-beta.2-30-g014dd1e",
+			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
+		},
+		{
+			"ImportPath": "k8s.io/kubernetes/cmd/libs/go2idl/client-gen/generators",
+			"Comment": "v1.5.0-beta.2-30-g014dd1e",
+			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
+		},
+		{
+			"ImportPath": "k8s.io/kubernetes/cmd/libs/go2idl/client-gen/generators/fake",
+			"Comment": "v1.5.0-beta.2-30-g014dd1e",
+			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
+		},
+		{
+			"ImportPath": "k8s.io/kubernetes/cmd/libs/go2idl/client-gen/types",
+			"Comment": "v1.5.0-beta.2-30-g014dd1e",
+			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
+		},
+		{
 			"ImportPath": "k8s.io/kubernetes/cmd/libs/go2idl/conversion-gen/generators",
 			"Comment": "v1.5.0-beta.2-30-g014dd1e",
 			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
@@ -3792,6 +3819,11 @@
 		},
 		{
 			"ImportPath": "k8s.io/kubernetes/cmd/libs/go2idl/go-to-protobuf/protobuf",
+			"Comment": "v1.5.0-beta.2-30-g014dd1e",
+			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
+		},
+		{
+			"ImportPath": "k8s.io/kubernetes/cmd/libs/go2idl/go-to-protobuf/protoc-gen-gogo",
 			"Comment": "v1.5.0-beta.2-30-g014dd1e",
 			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
 		},
