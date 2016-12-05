@@ -4,13 +4,13 @@ import (
 	"testing"
 
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client/unversioned/testclient"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 
 	"github.com/openshift/origin/pkg/image/api"
 )
 
 func TestGetSecrets(t *testing.T) {
-	fake := testclient.NewSimpleFake(&kapi.SecretList{
+	fake := fake.NewSimpleClientset(&kapi.SecretList{
 		Items: []kapi.Secret{
 			{
 				ObjectMeta: kapi.ObjectMeta{Name: "secret-1"},
@@ -34,7 +34,7 @@ func TestGetSecrets(t *testing.T) {
 			},
 		},
 	})
-	rest := NewREST(fake)
+	rest := NewREST(fake.Core())
 	opts, _, _ := rest.NewGetOptions()
 	obj, err := rest.Get(kapi.NewDefaultContext(), "", opts)
 	if err != nil {
