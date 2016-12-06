@@ -24,7 +24,8 @@ func TestRoleReaper(t *testing.T) {
 			name: "no bindings",
 			role: &authorizationapi.Role{
 				ObjectMeta: kapi.ObjectMeta{
-					Name: "role",
+					Namespace: "foo",
+					Name:      "role",
 				},
 			},
 		},
