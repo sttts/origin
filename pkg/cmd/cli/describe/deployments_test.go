@@ -6,6 +6,7 @@ import (
 
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/apis/autoscaling"
+	kfake "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 	"k8s.io/kubernetes/pkg/client/testing/core"
 	"k8s.io/kubernetes/pkg/kubectl"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -25,7 +26,7 @@ func TestDeploymentConfigDescriber(t *testing.T) {
 	fake.PrependReactor("get", "deploymentconfigs", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 		return true, config, nil
 	})
-	kFake := &core.Fake{}
+	kFake := kfake.NewSimpleClientset()
 	kFake.PrependReactor("list", "horizontalpodautoscalers", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 		return true, &autoscaling.HorizontalPodAutoscalerList{
 			Items: []autoscaling.HorizontalPodAutoscaler{
