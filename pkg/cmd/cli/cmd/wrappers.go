@@ -709,3 +709,29 @@ func NewCmdConfig(parentName, name string, out, errOut io.Writer) *cobra.Command
 	adjustCmdExamples(cmd, parentName, name)
 	return cmd
 }
+
+var (
+	cpExample = templates.Examples(`
+	    # !!!Important Note!!!
+	    # Requires that the 'tar' binary is present in your container
+	    # image.  If 'tar' is not present, 'kubectl cp' will fail.
+
+	    # Copy /tmp/foo_dir local directory to /tmp/bar_dir in a remote pod in the default namespace
+		%[1]s cp /tmp/foo_dir <some-pod>:/tmp/bar_dir
+
+        # Copy /tmp/foo local file to /tmp/bar in a remote pod in a specific container
+		%[1]s cp /tmp/foo <some-pod>:/tmp/bar -c <specific-container>
+
+		# Copy /tmp/foo local file to /tmp/bar in a remote pod in namespace <some-namespace>
+		%[1]s cp /tmp/foo <some-namespace>/<some-pod>:/tmp/bar
+
+		# Copy /tmp/foo from a remote pod to /tmp/bar locally
+		%[1]s cp <some-namespace>/<some-pod>:/tmp/foo /tmp/bar`)
+)
+
+// NewCmdCp is a wrapper for the Kubernetes cli cp command
+func NewCmdCp(fullName string, f *clientcmd.Factory, in io.Reader, out, errout io.Writer) *cobra.Command {
+	cmd := kcmd.NewCmdCp(f.Factory, in, out, errout)
+	cmd.Example = fmt.Sprintf(cpExample, fullName)
+	return cmd
+}

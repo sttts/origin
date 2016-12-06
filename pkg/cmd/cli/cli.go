@@ -146,6 +146,7 @@ func NewCommandCLI(name, fullName string, in io.Reader, out, errout io.Writer) *
 				cmd.NewCmdProxy(fullName, f, out),
 				cmd.NewCmdAttach(fullName, f, in, out, errout),
 				cmd.NewCmdRun(fullName, f, in, out, errout),
+				cmd.NewCmdCp(fullName, f, in, out, errout),
 			},
 		},
 		{
