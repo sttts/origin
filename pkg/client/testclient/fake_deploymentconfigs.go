@@ -2,6 +2,7 @@ package testclient
 
 import (
 	kapi "k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/client/testing/core"
 	"k8s.io/kubernetes/pkg/watch"
@@ -16,8 +17,10 @@ type FakeDeploymentConfigs struct {
 	Namespace string
 }
 
+var deploymentConfigsResource = unversioned.GroupVersionResource{Group: "", Version: "", Resource: "deploymentconfigs"}
+
 func (c *FakeDeploymentConfigs) Get(name string) (*deployapi.DeploymentConfig, error) {
-	obj, err := c.Fake.Invokes(core.NewGetAction(deployapi.SchemeGroupVersion.WithResource("deploymentconfigs"), c.Namespace, name), &deployapi.DeploymentConfig{})
+	obj, err := c.Fake.Invokes(core.NewGetAction(deploymentConfigsResource, c.Namespace, name), &deployapi.DeploymentConfig{})
 	if obj == nil {
 		return nil, err
 	}
@@ -26,7 +29,7 @@ func (c *FakeDeploymentConfigs) Get(name string) (*deployapi.DeploymentConfig, e
 }
 
 func (c *FakeDeploymentConfigs) List(opts kapi.ListOptions) (*deployapi.DeploymentConfigList, error) {
-	obj, err := c.Fake.Invokes(core.NewListAction(deployapi.SchemeGroupVersion.WithResource("deploymentconfigs"), c.Namespace, opts), &deployapi.DeploymentConfigList{})
+	obj, err := c.Fake.Invokes(core.NewListAction(deploymentConfigsResource, c.Namespace, opts), &deployapi.DeploymentConfigList{})
 	if obj == nil {
 		return nil, err
 	}
@@ -35,7 +38,7 @@ func (c *FakeDeploymentConfigs) List(opts kapi.ListOptions) (*deployapi.Deployme
 }
 
 func (c *FakeDeploymentConfigs) Create(inObj *deployapi.DeploymentConfig) (*deployapi.DeploymentConfig, error) {
-	obj, err := c.Fake.Invokes(core.NewCreateAction(deployapi.SchemeGroupVersion.WithResource("deploymentconfigs"), c.Namespace, inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewCreateAction(deploymentConfigsResource, c.Namespace, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -44,7 +47,7 @@ func (c *FakeDeploymentConfigs) Create(inObj *deployapi.DeploymentConfig) (*depl
 }
 
 func (c *FakeDeploymentConfigs) Update(inObj *deployapi.DeploymentConfig) (*deployapi.DeploymentConfig, error) {
-	obj, err := c.Fake.Invokes(core.NewUpdateAction(deployapi.SchemeGroupVersion.WithResource("deploymentconfigs"), c.Namespace, inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewUpdateAction(deploymentConfigsResource, c.Namespace, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -53,12 +56,12 @@ func (c *FakeDeploymentConfigs) Update(inObj *deployapi.DeploymentConfig) (*depl
 }
 
 func (c *FakeDeploymentConfigs) Delete(name string) error {
-	_, err := c.Fake.Invokes(core.NewDeleteAction(deployapi.SchemeGroupVersion.WithResource("deploymentconfigs"), c.Namespace, name), &deployapi.DeploymentConfig{})
+	_, err := c.Fake.Invokes(core.NewDeleteAction(deploymentConfigsResource, c.Namespace, name), &deployapi.DeploymentConfig{})
 	return err
 }
 
 func (c *FakeDeploymentConfigs) Watch(opts kapi.ListOptions) (watch.Interface, error) {
-	return c.Fake.InvokesWatch(core.NewWatchAction(deployapi.SchemeGroupVersion.WithResource("deploymentconfigs"), c.Namespace, opts))
+	return c.Fake.InvokesWatch(core.NewWatchAction(deploymentConfigsResource, c.Namespace, opts))
 }
 
 func (c *FakeDeploymentConfigs) Generate(name string) (*deployapi.DeploymentConfig, error) {

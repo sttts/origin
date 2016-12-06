@@ -19,7 +19,7 @@ func (c *FakeDeploymentLogs) Get(name string, opt api.DeploymentLogOptions) *res
 	action := core.GenericActionImpl{}
 	action.Verb = "get"
 	action.Namespace = c.Namespace
-	action.Resource = api.SchemeGroupVersion.WithResource("deploymentconfigs")
+	action.Resource = deploymentConfigsResource
 	action.Subresource = "log"
 	action.Value = opt
 

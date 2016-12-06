@@ -6,6 +6,7 @@ import (
 	"net/url"
 
 	kapi "k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/testing/core"
 	"k8s.io/kubernetes/pkg/watch"
 
@@ -20,8 +21,10 @@ type FakeBuildConfigs struct {
 	Namespace string
 }
 
+var buildConfigsResource = unversioned.GroupVersionResource{Group: "", Version: "", Resource: "buildconfigs"}
+
 func (c *FakeBuildConfigs) Get(name string) (*buildapi.BuildConfig, error) {
-	obj, err := c.Fake.Invokes(core.NewGetAction(buildapi.SchemeGroupVersion.WithResource("buildconfigs"), c.Namespace, name), &buildapi.BuildConfig{})
+	obj, err := c.Fake.Invokes(core.NewGetAction(buildConfigsResource, c.Namespace, name), &buildapi.BuildConfig{})
 	if obj == nil {
 		return nil, err
 	}
@@ -30,7 +33,7 @@ func (c *FakeBuildConfigs) Get(name string) (*buildapi.BuildConfig, error) {
 }
 
 func (c *FakeBuildConfigs) List(opts kapi.ListOptions) (*buildapi.BuildConfigList, error) {
-	obj, err := c.Fake.Invokes(core.NewListAction(buildapi.SchemeGroupVersion.WithResource("buildconfigs"), c.Namespace, opts), &buildapi.BuildConfigList{})
+	obj, err := c.Fake.Invokes(core.NewListAction(buildConfigsResource, c.Namespace, opts), &buildapi.BuildConfigList{})
 	if obj == nil {
 		return nil, err
 	}
@@ -39,7 +42,7 @@ func (c *FakeBuildConfigs) List(opts kapi.ListOptions) (*buildapi.BuildConfigLis
 }
 
 func (c *FakeBuildConfigs) Create(inObj *buildapi.BuildConfig) (*buildapi.BuildConfig, error) {
-	obj, err := c.Fake.Invokes(core.NewCreateAction(buildapi.SchemeGroupVersion.WithResource("buildconfigs"), c.Namespace, inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewCreateAction(buildConfigsResource, c.Namespace, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -48,7 +51,7 @@ func (c *FakeBuildConfigs) Create(inObj *buildapi.BuildConfig) (*buildapi.BuildC
 }
 
 func (c *FakeBuildConfigs) Update(inObj *buildapi.BuildConfig) (*buildapi.BuildConfig, error) {
-	obj, err := c.Fake.Invokes(core.NewUpdateAction(buildapi.SchemeGroupVersion.WithResource("buildconfigs"), c.Namespace, inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewUpdateAction(buildConfigsResource, c.Namespace, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -57,12 +60,12 @@ func (c *FakeBuildConfigs) Update(inObj *buildapi.BuildConfig) (*buildapi.BuildC
 }
 
 func (c *FakeBuildConfigs) Delete(name string) error {
-	_, err := c.Fake.Invokes(core.NewDeleteAction(buildapi.SchemeGroupVersion.WithResource("buildconfigs"), c.Namespace, name), &buildapi.BuildConfig{})
+	_, err := c.Fake.Invokes(core.NewDeleteAction(buildConfigsResource, c.Namespace, name), &buildapi.BuildConfig{})
 	return err
 }
 
 func (c *FakeBuildConfigs) Watch(opts kapi.ListOptions) (watch.Interface, error) {
-	return c.Fake.InvokesWatch(core.NewWatchAction(buildapi.SchemeGroupVersion.WithResource("buildconfigs"), c.Namespace, opts))
+	return c.Fake.InvokesWatch(core.NewWatchAction(buildConfigsResource, c.Namespace, opts))
 }
 
 func (c *FakeBuildConfigs) WebHookURL(name string, trigger *buildapi.BuildTriggerPolicy) (*url.URL, error) {

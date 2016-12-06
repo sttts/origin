@@ -14,8 +14,10 @@ type FakeProjectRequests struct {
 	Fake *Fake
 }
 
+var newProjectsResource = unversioned.GroupVersionResource{Group: "", Version: "", Resource: "newprojects"}
+
 func (c *FakeProjectRequests) List(opts kapi.ListOptions) (*unversioned.Status, error) {
-	obj, err := c.Fake.Invokes(core.NewRootListAction(projectapi.SchemeGroupVersion.WithResource("newprojects"), opts), &unversioned.Status{})
+	obj, err := c.Fake.Invokes(core.NewRootListAction(newProjectsResource, opts), &unversioned.Status{})
 	if obj == nil {
 		return nil, err
 	}
@@ -24,7 +26,7 @@ func (c *FakeProjectRequests) List(opts kapi.ListOptions) (*unversioned.Status, 
 }
 
 func (c *FakeProjectRequests) Create(inObj *projectapi.ProjectRequest) (*projectapi.Project, error) {
-	obj, err := c.Fake.Invokes(core.NewRootCreateAction(projectapi.SchemeGroupVersion.WithResource("newprojects"), inObj), &projectapi.Project{})
+	obj, err := c.Fake.Invokes(core.NewRootCreateAction(newProjectsResource, inObj), &projectapi.Project{})
 	if obj == nil {
 		return nil, err
 	}
