@@ -24,13 +24,13 @@ import (
 )
 
 func TestAPIServerDefaults(t *testing.T) {
-	defaults := apiserveroptions.NewAPIServer()
+	defaults := apiserveroptions.NewServerRunOptions()
 
 	// This is a snapshot of the default config
 	// If the default changes (new fields are added, or default values change), we want to know
 	// Once we've reacted to the changes appropriately in BuildKubernetesMasterConfig(), update this expected default to match the new upstream defaults
-	expectedDefaults := &apiserveroptions.APIServer{
-		ServerRunOptions: &genericapiserveroptions.ServerRunOptions{
+	expectedDefaults := &apiserveroptions.ServerRunOptions{
+		GenericServerRunOptions: &genericapiserveroptions.ServerRunOptions{
 			BindAddress:            net.ParseIP("0.0.0.0"),
 			CertDirectory:          "/var/run/kubernetes",
 			InsecureBindAddress:    net.ParseIP("127.0.0.1"),
@@ -38,9 +38,6 @@ func TestAPIServerDefaults(t *testing.T) {
 			LongRunningRequestRE:   "(/|^)((watch|proxy)(/|$)|(logs?|portforward|exec|attach)/?$)",
 			MaxRequestsInFlight:    400,
 			SecurePort:             6443,
-			APIGroupPrefix:         "/apis",
-			APIPrefix:              "/api",
-			EnableLogsSupport:      true,
 			EnableProfiling:        true,
 			EnableWatchCache:       true,
 			MinRequestTimeout:      1800,
@@ -52,7 +49,7 @@ func TestAPIServerDefaults(t *testing.T) {
 			StorageConfig: storagebackend.Config{
 				ServerList: nil,
 				Prefix:     "/registry",
-				DeserializationCacheSize: genericapiserveroptions.DefaultDeserializationCacheSize,
+				DeserializationCacheSize: 0,
 			},
 			DefaultStorageMediaType:                  "application/json",
 			AdmissionControl:                         "AlwaysAdmit",

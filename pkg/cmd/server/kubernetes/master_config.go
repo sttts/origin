@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -73,14 +74,12 @@ func BuildDefaultAPIServer(options configapi.MasterConfig) (*apiserveroptions.Se
 	server := apiserveroptions.NewServerRunOptions()
 	// Adjust defaults
 	server.EventTTL = 2 * time.Hour
-	server.ServiceClusterIPRange = net.IPNet(flagtypes.DefaultIPNet(options.KubernetesMasterConfig.ServicesSubnet))
-	server.ServiceNodePortRange = *portRange
-	server.EnableLogsSupport = false // don't expose server logs
-	server.EnableProfiling = false
-	server.APIPrefix = KubeAPIPrefix
-	server.APIGroupPrefix = KubeAPIGroupPrefix
-	server.SecurePort = port
-	server.MasterCount = options.KubernetesMasterConfig.MasterCount
+	server.GenericServerRunOptions.ServiceClusterIPRange = net.IPNet(flagtypes.DefaultIPNet(options.KubernetesMasterConfig.ServicesSubnet))
+	server.GenericServerRunOptions.ServiceNodePortRange = *portRange
+	server.GenericServerRunOptions.EnableProfiling = false
+	server.GenericServerRunOptions.SecurePort = port
+	server.GenericServerRunOptions.InsecurePort = 0
+	server.GenericServerRunOptions.MasterCount = options.KubernetesMasterConfig.MasterCount
 
 	// resolve extended arguments
 	// TODO: this should be done in config validation (along with the above) so we can provide
@@ -114,13 +113,13 @@ func BuildDefaultAPIServer(options configapi.MasterConfig) (*apiserveroptions.Se
 		autoscaling.SchemeGroupVersion,
 	)
 
-	storageGroupsToEncodingVersion, err := server.StorageGroupsToEncodingVersion()
+	storageGroupsToEncodingVersion, err := server.GenericServerRunOptions.StorageGroupsToEncodingVersion()
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// use the stock storage config based on args, but override bits from our config where appropriate
-	etcdConfig := server.StorageConfig
+	etcdConfig := server.GenericServerRunOptions.StorageConfig
 	etcdConfig.Prefix = options.EtcdStorageConfig.KubernetesStoragePrefix
 	etcdConfig.ServerList = options.EtcdClientInfo.URLs
 	etcdConfig.KeyFile = options.EtcdClientInfo.ClientCert.KeyFile
@@ -129,13 +128,13 @@ func BuildDefaultAPIServer(options configapi.MasterConfig) (*apiserveroptions.Se
 
 	storageFactory, err := genericapiserver.BuildDefaultStorageFactory(
 		etcdConfig,
-		server.DefaultStorageMediaType,
+		server.GenericServerRunOptions.DefaultStorageMediaType,
 		kapi.Codecs,
 		genericapiserver.NewDefaultResourceEncodingConfig(),
 		storageGroupsToEncodingVersion,
 		// FIXME: this GroupVersionResource override should be configurable
 		[]unversioned.GroupVersionResource{batch.Resource("cronjobs").WithVersion("v2alpha1")},
-		master.DefaultAPIResourceConfigSource(), server.RuntimeConfig,
+		master.DefaultAPIResourceConfigSource(), server.GenericServerRunOptions.RuntimeConfig,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -230,59 +229,48 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 		glog.Infof("Will report %v as public IP address.", publicAddress)
 	}
 
+	genericConfig := genericapiserver.NewConfig().ApplyOptions(server)
+
+	genericConfig.PublicAddress = publicAddress
+	genericConfig.Authenticator = originAuthenticator // this is used to fulfill the tokenreviews endpoint which is used by node authentication
+	genericConfig.Authorizer = authorizer.NewAlwaysAllowAuthorizer()
+	genericConfig.AdmissionControl = admissionControl
+	genericConfig.RequestContextMapper = requestContextMapper
+	genericConfig.APIResourceConfigSource = getAPIResourceConfig(options)
+
 	m := &master.Config{
-		GenericConfig: &genericapiserver.Config{
+		GenericConfig: genericConfig,
+		MasterCount:   server.GenericServerRunOptions.MasterCount,
 
-			PublicAddress: publicAddress,
-			ReadWritePort: server.SecurePort,
-
-			Authenticator:    originAuthenticator, // this is used to fulfill the tokenreviews endpoint which is used by node authentication
-			Authorizer:       authorizer.NewAlwaysAllowAuthorizer(),
-			AdmissionControl: admissionControl,
-
-			RequestContextMapper: requestContextMapper,
-
-			APIResourceConfigSource: getAPIResourceConfig(options),
-			APIPrefix:               server.APIPrefix,
-			APIGroupPrefix:          server.APIGroupPrefix,
-
-			MasterCount: server.MasterCount,
-
-			// Set the TLS options for proxying to pods and services
-			// Proxying to nodes uses the kubeletClient TLS config (so can provide a different cert, and verify the node hostname)
-			ProxyTLSClientConfig: &tls.Config{
+		// Set the TLS options for proxying to pods and services
+		// Proxying to nodes uses the kubeletClient TLS config (so can provide a different cert, and verify the node hostname)
+		ProxyTransport: knet.SetTransportDefaults(&http.Transport{
+			TLSClientConfig: &tls.Config{
 				// Proxying to pods and services cannot verify hostnames, since they are contacted on randomly allocated IPs
 				InsecureSkipVerify: true,
 				Certificates:       proxyClientCerts,
 			},
+		}),
 
-			Serializer: kapi.Codecs,
-
-			EnableLogsSupport:         server.EnableLogsSupport,
-			EnableProfiling:           server.EnableProfiling,
-			EnableWatchCache:          server.EnableWatchCache,
-			MasterServiceNamespace:    server.MasterServiceNamespace,
-			ExternalHost:              server.ExternalHost,
-			MinRequestTimeout:         server.MinRequestTimeout,
-			KubernetesServiceNodePort: server.KubernetesServiceNodePort,
-		},
+		EnableWatchCache:          server.GenericServerRunOptions.EnableWatchCache,
+		KubernetesServiceNodePort: server.GenericServerRunOptions.KubernetesServiceNodePort,
+		ServiceIPRange:            (*net.IPNet)(&server.GenericServerRunOptions.ServiceClusterIPRange),
+		ServiceNodePortRange:      server.GenericServerRunOptions.ServiceNodePortRange,
 
 		StorageFactory: storageFactory,
 
-		ServiceIPRange:       (*net.IPNet)(&server.ServiceClusterIPRange),
-		ServiceNodePortRange: server.ServiceNodePortRange,
-
 		EventTTL: server.EventTTL,
 
-		KubeletClient: configapi.GetKubeletClientConfig(options),
+		KubeletClientConfig: configapi.GetKubeletClientConfig(options),
 
+		EnableLogsSupport:     false, // don't expose server logs
 		EnableCoreControllers: true,
 
-		DeleteCollectionWorkers: server.DeleteCollectionWorkers,
+		DeleteCollectionWorkers: server.GenericServerRunOptions.DeleteCollectionWorkers,
 	}
 
-	if server.EnableWatchCache {
-		cachesize.SetWatchCacheSizes(server.WatchCacheSizes)
+	if m.EnableWatchCache {
+		cachesize.SetWatchCacheSizes(server.GenericServerRunOptions.WatchCacheSizes)
 	}
 
 	if options.DNSConfig != nil {

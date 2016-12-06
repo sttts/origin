@@ -48,6 +48,7 @@ import (
 	servicecontroller "k8s.io/kubernetes/pkg/controller/service"
 	attachdetachcontroller "k8s.io/kubernetes/pkg/controller/volume/attachdetach"
 	persistentvolumecontroller "k8s.io/kubernetes/pkg/controller/volume/persistentvolume"
+	"k8s.io/kubernetes/pkg/genericapiserver"
 	"k8s.io/kubernetes/pkg/master"
 	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -78,11 +79,11 @@ import (
 	osclient "github.com/openshift/origin/pkg/client"
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
 	"github.com/openshift/origin/pkg/cmd/server/election"
+	"k8s.io/kubernetes/pkg/genericapiserver"
 )
 
 const (
-	KubeAPIPrefix      = "/api"
-	KubeAPIGroupPrefix = "/apis"
+	KubeAPIPrefix = genericapiserver.DefaultLegacyAPIPrefix // "/api"
 )
 
 // InstallAPI starts a Kubernetes master and registers the supported REST APIs
@@ -147,7 +148,7 @@ func (c *MasterConfig) InstallAPI(container *restful.Container) ([]string, error
 	}
 	for _, ver := range versions {
 		if configapi.HasKubernetesAPIVersion(c.Options, ver) {
-			messages = append(messages, fmt.Sprintf("Started Kubernetes API %s at %%s%s", ver.String(), KubeAPIGroupPrefix))
+			messages = append(messages, fmt.Sprintf("Started Kubernetes API %s at %%s%s", ver.String(), genericapiserver.APIGroupPrefix))
 		}
 	}
 
