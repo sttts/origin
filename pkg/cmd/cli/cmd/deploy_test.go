@@ -133,17 +133,17 @@ func TestCmdDeploy_retryOk(t *testing.T) {
 	}
 
 	kubeClient := fake.NewSimpleClientset()
-	kubeClient.AddReactor("get", "replicationcontrollers", func(action core.Action) (handled bool, ret runtime.Object, err error) {
+	kubeClient.PrependReactor("get", "replicationcontrollers", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 		return true, existingDeployment, nil
 	})
-	kubeClient.AddReactor("update", "replicationcontrollers", func(action core.Action) (handled bool, ret runtime.Object, err error) {
+	kubeClient.PrependReactor("update", "replicationcontrollers", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 		updatedDeployment = action.(core.UpdateAction).GetObject().(*kapi.ReplicationController)
 		return true, updatedDeployment, nil
 	})
-	kubeClient.AddReactor("list", "pods", func(action core.Action) (handled bool, ret runtime.Object, err error) {
+	kubeClient.PrependReactor("list", "pods", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 		return true, &kapi.PodList{Items: existingDeployerPods}, nil
 	})
-	kubeClient.AddReactor("delete", "pods", func(action core.Action) (handled bool, ret runtime.Object, err error) {
+	kubeClient.PrependReactor("delete", "pods", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 		deletedPods = append(deletedPods, action.(core.DeleteAction).GetName())
 		return true, nil, nil
 	})
@@ -244,12 +244,12 @@ func TestCmdDeploy_cancelOk(t *testing.T) {
 		}
 
 		kubeClient := fake.NewSimpleClientset()
-		kubeClient.AddReactor("update", "replicationcontrollers", func(action core.Action) (handled bool, ret runtime.Object, err error) {
+		kubeClient.PrependReactor("update", "replicationcontrollers", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 			updated := action.(core.UpdateAction).GetObject().(*kapi.ReplicationController)
 			updatedDeployments = append(updatedDeployments, *updated)
 			return true, updated, nil
 		})
-		kubeClient.AddReactor("list", "replicationcontrollers", func(action core.Action) (handled bool, ret runtime.Object, err error) {
+		kubeClient.PrependReactor("list", "replicationcontrollers", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 			return true, existingDeployments, nil
 		})
 
