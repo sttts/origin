@@ -95,7 +95,7 @@ func TestCmdDeploy_latestConcurrentRejection(t *testing.T) {
 // existing deployments can't be looked up due to some fatal server error.
 func TestCmdDeploy_latestLookupError(t *testing.T) {
 	kubeClient := fake.NewSimpleClientset()
-	kubeClient.AddReactor("get", "replicationcontrollers", func(action core.Action) (handled bool, ret runtime.Object, err error) {
+	kubeClient.PrependReactor("get", "replicationcontrollers", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 		return true, nil, kerrors.NewInternalError(fmt.Errorf("internal error"))
 	})
 
