@@ -18,6 +18,12 @@ import (
 	_ "github.com/openshift/origin/pkg/api/install"
 )
 
+var (
+	groupsResource              = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "groups"}
+	clusterRoleBindingsResource = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "clusterrolebindings"}
+	roleBindingsResource        = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "rolebindings"}
+)
+
 func TestGroupReaper(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -30,7 +36,7 @@ func TestGroupReaper(t *testing.T) {
 			group:   "mygroup",
 			objects: []runtime.Object{},
 			expected: []interface{}{
-				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "groups"}, Name: "mygroup"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: groupsResource}, Name: "mygroup"},
 			},
 		},
 		{
@@ -54,12 +60,12 @@ func TestGroupReaper(t *testing.T) {
 				},
 			},
 			expected: []interface{}{
-				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", Resource: "clusterrolebindings"}, Object: &authorizationapi.ClusterRoleBinding{
+				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", clusterRoleBindingsResource}, Object: &authorizationapi.ClusterRoleBinding{
 					ObjectMeta: kapi.ObjectMeta{Name: "binding-one-subject"},
 					RoleRef:    kapi.ObjectReference{Name: "role"},
 					Subjects:   []kapi.ObjectReference{},
 				}},
-				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "groups"}, Name: "mygroup"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: groupsResource}, Name: "mygroup"},
 			},
 		},
 		{
@@ -83,12 +89,12 @@ func TestGroupReaper(t *testing.T) {
 				},
 			},
 			expected: []interface{}{
-				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", Resource: "rolebindings", Namespace: "ns2"}, Object: &authorizationapi.RoleBinding{
+				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", Resource: roleBindingsResource, Namespace: "ns2"}, Object: &authorizationapi.RoleBinding{
 					ObjectMeta: kapi.ObjectMeta{Name: "binding-one-subject", Namespace: "ns2"},
 					RoleRef:    kapi.ObjectReference{Name: "role"},
 					Subjects:   []kapi.ObjectReference{},
 				}},
-				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "groups"}, Name: "mygroup"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: groupsResource}, Name: "mygroup"},
 			},
 		},
 		{
@@ -114,7 +120,7 @@ func TestGroupReaper(t *testing.T) {
 					ObjectMeta: kapi.ObjectMeta{Name: "scc-one-subject"},
 					Groups:     []string{},
 				}},
-				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "groups"}, Name: "mygroup"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: groupsResource}, Name: "mygroup"},
 			},
 		},
 	}

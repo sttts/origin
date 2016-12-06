@@ -84,7 +84,7 @@ func checkResult(t *testing.T, err error, c *testclient.Fake, admitter *StatusAd
 		t.Fatalf("unexpected actions: %#v", c.Actions())
 	}
 	action := c.Actions()[actionInd]
-	if action.GetVerb() != "update" || action.GetResource() != "routes" || action.GetSubresource() != "status" {
+	if action.GetVerb() != "update" || action.GetResource().Resource != "routes" || action.GetSubresource() != "status" {
 		t.Fatalf("unexpected action: %#v", action)
 	}
 	obj := c.Actions()[actionInd].(core.UpdateAction).GetObject().(*routeapi.Route)
@@ -212,7 +212,7 @@ func TestStatusRecordRejection(t *testing.T) {
 		t.Fatalf("unexpected actions: %#v", c.Actions())
 	}
 	action := c.Actions()[0]
-	if action.GetVerb() != "update" || action.GetResource() != "routes" || action.GetSubresource() != "status" {
+	if action.GetVerb() != "update" || action.GetResource().Resource != "routes" || action.GetSubresource() != "status" {
 		t.Fatalf("unexpected action: %#v", action)
 	}
 	obj := c.Actions()[0].(core.UpdateAction).GetObject().(*routeapi.Route)
@@ -296,7 +296,7 @@ func TestStatusRecordRejectionWithStatus(t *testing.T) {
 		t.Fatalf("unexpected actions: %#v", c.Actions())
 	}
 	action := c.Actions()[0]
-	if action.GetVerb() != "update" || action.GetResource() != "routes" || action.GetSubresource() != "status" {
+	if action.GetVerb() != "update" || action.GetResource().Resource != "routes" || action.GetSubresource() != "status" {
 		t.Fatalf("unexpected action: %#v", action)
 	}
 	obj := c.Actions()[0].(core.UpdateAction).GetObject().(*routeapi.Route)
@@ -345,7 +345,7 @@ func TestStatusRecordRejectionOnHostUpdateOnly(t *testing.T) {
 		t.Fatalf("unexpected actions: %#v", c.Actions())
 	}
 	action := c.Actions()[0]
-	if action.GetVerb() != "update" || action.GetResource() != "routes" || action.GetSubresource() != "status" {
+	if action.GetVerb() != "update" || action.GetResource().Resource != "routes" || action.GetSubresource() != "status" {
 		t.Fatalf("unexpected action: %#v", action)
 	}
 	obj := c.Actions()[0].(core.UpdateAction).GetObject().(*routeapi.Route)
@@ -392,7 +392,7 @@ func TestStatusRecordRejectionConflict(t *testing.T) {
 		t.Fatalf("unexpected actions: %#v", c.Actions())
 	}
 	action := c.Actions()[0]
-	if action.GetVerb() != "update" || action.GetResource() != "routes" || action.GetSubresource() != "status" {
+	if action.GetVerb() != "update" || action.GetResource().Resource != "routes" || action.GetSubresource() != "status" {
 		t.Fatalf("unexpected action: %#v", action)
 	}
 	obj := c.Actions()[0].(core.UpdateAction).GetObject().(*routeapi.Route)

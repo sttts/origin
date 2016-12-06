@@ -40,18 +40,18 @@ func TestSyncNamespaceThatIsTerminating(t *testing.T) {
 
 	// TODO: we will expect a finalize namespace call after rebase
 	expectedActionSet := []core.Action{
-		core.NewListAction("buildconfigs", "", kapi.ListOptions{}),
-		core.NewListAction("policies", "", kapi.ListOptions{}),
-		core.NewListAction("imagestreams", "", kapi.ListOptions{}),
-		core.NewListAction("policybindings", "", kapi.ListOptions{}),
-		core.NewListAction("rolebindings", "", kapi.ListOptions{}),
-		core.NewListAction("roles", "", kapi.ListOptions{}),
-		core.NewListAction("routes", "", kapi.ListOptions{}),
-		core.NewListAction("templates", "", kapi.ListOptions{}),
-		core.NewListAction("builds", "", kapi.ListOptions{}),
-		core.NewListAction("namespace", "", kapi.ListOptions{}),
-		core.NewListAction("deploymentconfig", "", kapi.ListOptions{}),
-		core.NewListAction("egressnetworkpolicy", "", kapi.ListOptions{}),
+		core.NewListAction(unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "buildconfigs"}, "", kapi.ListOptions{}),
+		core.NewListAction(unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "policies"}, "", kapi.ListOptions{}),
+		core.NewListAction(unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "imagestreams"}, "", kapi.ListOptions{}),
+		core.NewListAction(unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "policybindings"}, "", kapi.ListOptions{}),
+		core.NewListAction(unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "rolebindings"}, "", kapi.ListOptions{}),
+		core.NewListAction(unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "roles"}, "", kapi.ListOptions{}),
+		core.NewListAction(unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "routes"}, "", kapi.ListOptions{}),
+		core.NewListAction(unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "templates"}, "", kapi.ListOptions{}),
+		core.NewListAction(unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "builds"}, "", kapi.ListOptions{}),
+		core.NewListAction(unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "namespace"}, "", kapi.ListOptions{}),
+		core.NewListAction(unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "deploymentconfig"}, "", kapi.ListOptions{}),
+		core.NewListAction(unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "egressnetworkpolicy"}, "", kapi.ListOptions{}),
 	}
 	kubeActionSet := []core.Action{}
 	originActionSet := []core.Action{}
