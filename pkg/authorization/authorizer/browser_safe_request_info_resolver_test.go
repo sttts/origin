@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	kapi "k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/apiserver/request"
 	"k8s.io/kubernetes/pkg/auth/user"
 	"k8s.io/kubernetes/pkg/util/sets"
 )
@@ -30,22 +31,22 @@ func TestUpstreamInfoResolver(t *testing.T) {
 	}
 
 	for k, tc := range testcases {
-		resolver := &request.RequestInfoResolver{
+		resolver := &request.RequestInfoFactory{
 			APIPrefixes:          sets.NewString("api", "osapi", "oapi", "apis"),
 			GrouplessAPIPrefixes: sets.NewString("api", "osapi", "oapi"),
 		}
 
-		info, err := resolver.GetRequestInfo(tc.Request)
+		info, err := resolver.NewRequestInfo(tc.Request)
 		if err != nil {
 			t.Errorf("%s: unexpected error: %v", k, err)
 			continue
 		}
 
 		if info.Verb != tc.ExpectedVerb {
-			t.Errorf("%s: expected verb %s, got %s. If request.RequestInfoResolver now adjusts attributes for proxy safety, investigate removing the NewBrowserSafeRequestInfoResolver wrapper.", k, tc.ExpectedVerb, info.Verb)
+			t.Errorf("%s: expected verb %s, got %s. If request.RequestInfoFactory now adjusts attributes for proxy safety, investigate removing the NewBrowserSafeRequestInfoResolver wrapper.", k, tc.ExpectedVerb, info.Verb)
 		}
 		if info.Subresource != tc.ExpectedSubresource {
-			t.Errorf("%s: expected verb %s, got %s. If request.RequestInfoResolver now adjusts attributes for proxy safety, investigate removing the NewBrowserSafeRequestInfoResolver wrapper.", k, tc.ExpectedSubresource, info.Subresource)
+			t.Errorf("%s: expected verb %s, got %s. If request.RequestInfoFactory now adjusts attributes for proxy safety, investigate removing the NewBrowserSafeRequestInfoResolver wrapper.", k, tc.ExpectedSubresource, info.Subresource)
 		}
 	}
 }

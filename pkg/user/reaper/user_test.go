@@ -18,6 +18,15 @@ import (
 	authenticationapi "github.com/openshift/origin/pkg/user/api"
 )
 
+var (
+	usersResource                     = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "users"}
+	groupsResource                    = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "groups"}
+	clusterRoleBindingsResource       = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "clusterrolebindings"}
+	roleBindingsResource              = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "rolebindings"}
+	securityContextContraintsResource = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "securitycontextconstraints"}
+	oAuthClientAuthorizationsResource = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "oauthclientauthorizations"}
+)
+
 func TestUserReaper(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -30,7 +39,7 @@ func TestUserReaper(t *testing.T) {
 			user:    "bob",
 			objects: []runtime.Object{},
 			expected: []interface{}{
-				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "users"}, Name: "bob"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: usersResource}, Name: "bob"},
 			},
 		},
 		{
@@ -54,12 +63,12 @@ func TestUserReaper(t *testing.T) {
 				},
 			},
 			expected: []interface{}{
-				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", Resource: "clusterrolebindings"}, Object: &authorizationapi.ClusterRoleBinding{
+				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", Resource: clusterRoleBindingsResource}, Object: &authorizationapi.ClusterRoleBinding{
 					ObjectMeta: kapi.ObjectMeta{Name: "binding-one-subject"},
 					RoleRef:    kapi.ObjectReference{Name: "role"},
 					Subjects:   []kapi.ObjectReference{},
 				}},
-				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "users"}, Name: "bob"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: usersResource}, Name: "bob"},
 			},
 		},
 		{
@@ -83,12 +92,12 @@ func TestUserReaper(t *testing.T) {
 				},
 			},
 			expected: []interface{}{
-				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", Resource: "rolebindings", Namespace: "ns2"}, Object: &authorizationapi.RoleBinding{
+				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", Resource: roleBindingsResource, Namespace: "ns2"}, Object: &authorizationapi.RoleBinding{
 					ObjectMeta: kapi.ObjectMeta{Name: "binding-one-subject", Namespace: "ns2"},
 					RoleRef:    kapi.ObjectReference{Name: "role"},
 					Subjects:   []kapi.ObjectReference{},
 				}},
-				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "users"}, Name: "bob"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: usersResource}, Name: "bob"},
 			},
 		},
 		{
@@ -110,11 +119,11 @@ func TestUserReaper(t *testing.T) {
 				},
 			},
 			expected: []interface{}{
-				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", Resource: unversioned.GroupVersionResource{Resource: "securitycontextconstraints"}}, Object: &kapi.SecurityContextConstraints{
+				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", Resource: securityContextContraintsResource}, Object: &kapi.SecurityContextConstraints{
 					ObjectMeta: kapi.ObjectMeta{Name: "scc-one-subject"},
 					Users:      []string{},
 				}},
-				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "users"}, Name: "bob"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: usersResource}, Name: "bob"},
 			},
 		},
 		{
@@ -140,7 +149,7 @@ func TestUserReaper(t *testing.T) {
 			},
 			expected: []interface{}{
 				// Make sure identities are not messed with, only the user is removed
-				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "users"}, Name: "bob"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: usersResource}, Name: "bob"},
 			},
 		},
 		{
@@ -165,15 +174,15 @@ func TestUserReaper(t *testing.T) {
 				},
 			},
 			expected: []interface{}{
-				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", Resource: "groups"}, Object: &authenticationapi.Group{
+				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", Resource: groupsResource}, Object: &authenticationapi.Group{
 					ObjectMeta: kapi.ObjectMeta{Name: "group-one-user"},
 					Users:      []string{},
 				}},
-				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", Resource: "groups"}, Object: &authenticationapi.Group{
+				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", Resource: groupsResource}, Object: &authenticationapi.Group{
 					ObjectMeta: kapi.ObjectMeta{Name: "group-multiple-users"},
 					Users:      []string{"bob2", "steve"},
 				}},
-				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "users"}, Name: "bob"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: usersResource}, Name: "bob"},
 			},
 		},
 		{
@@ -197,9 +206,9 @@ func TestUserReaper(t *testing.T) {
 				},
 			},
 			expected: []interface{}{
-				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "oauthclientauthorizations"}, Name: "bob-authorization-1"},
-				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "oauthclientauthorizations"}, Name: "bob-authorization-2"},
-				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: "users"}, Name: "bob"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: oAuthClientAuthorizationsResource}, Name: "bob-authorization-1"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: oAuthClientAuthorizationsResource}, Name: "bob-authorization-2"},
+				core.DeleteActionImpl{ActionImpl: core.ActionImpl{Verb: "delete", Resource: usersResource}, Name: "bob"},
 			},
 		},
 	}

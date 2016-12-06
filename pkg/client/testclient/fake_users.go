@@ -2,6 +2,7 @@ package testclient
 
 import (
 	kapi "k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/testing/core"
 	"k8s.io/kubernetes/pkg/watch"
 
@@ -14,8 +15,10 @@ type FakeUsers struct {
 	Fake *Fake
 }
 
+var usersResource = unversioned.GroupVersionResource{Group: "", Version: "", Resource: "users"}
+
 func (c *FakeUsers) Get(name string) (*userapi.User, error) {
-	obj, err := c.Fake.Invokes(core.NewRootGetAction(userapi.SchemeGroupVersion.WithResource("users"), name), &userapi.User{})
+	obj, err := c.Fake.Invokes(core.NewRootGetAction(usersResource, name), &userapi.User{})
 	if obj == nil {
 		return nil, err
 	}
@@ -24,7 +27,7 @@ func (c *FakeUsers) Get(name string) (*userapi.User, error) {
 }
 
 func (c *FakeUsers) List(opts kapi.ListOptions) (*userapi.UserList, error) {
-	obj, err := c.Fake.Invokes(core.NewRootListAction(userapi.SchemeGroupVersion.WithResource("users"), opts), &userapi.UserList{})
+	obj, err := c.Fake.Invokes(core.NewRootListAction(usersResource, opts), &userapi.UserList{})
 	if obj == nil {
 		return nil, err
 	}
@@ -33,7 +36,7 @@ func (c *FakeUsers) List(opts kapi.ListOptions) (*userapi.UserList, error) {
 }
 
 func (c *FakeUsers) Create(inObj *userapi.User) (*userapi.User, error) {
-	obj, err := c.Fake.Invokes(core.NewRootCreateAction(userapi.SchemeGroupVersion.WithResource("users"), inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewRootCreateAction(usersResource, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -42,7 +45,7 @@ func (c *FakeUsers) Create(inObj *userapi.User) (*userapi.User, error) {
 }
 
 func (c *FakeUsers) Update(inObj *userapi.User) (*userapi.User, error) {
-	obj, err := c.Fake.Invokes(core.NewRootUpdateAction(userapi.SchemeGroupVersion.WithResource("users"), inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewRootUpdateAction(usersResource, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -51,10 +54,10 @@ func (c *FakeUsers) Update(inObj *userapi.User) (*userapi.User, error) {
 }
 
 func (c *FakeUsers) Delete(name string) error {
-	_, err := c.Fake.Invokes(core.NewRootDeleteAction(userapi.SchemeGroupVersion.WithResource("users"), name), nil)
+	_, err := c.Fake.Invokes(core.NewRootDeleteAction(usersResource, name), nil)
 	return err
 }
 
 func (c *FakeUsers) Watch(opts kapi.ListOptions) (watch.Interface, error) {
-	return c.Fake.InvokesWatch(core.NewRootWatchAction(userapi.SchemeGroupVersion.WithResource("users"), opts))
+	return c.Fake.InvokesWatch(core.NewRootWatchAction(usersResource, opts))
 }

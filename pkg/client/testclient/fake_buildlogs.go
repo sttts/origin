@@ -18,7 +18,7 @@ func (c *FakeBuildLogs) Get(name string, opt buildapi.BuildLogOptions) *restclie
 	action := core.GenericActionImpl{}
 	action.Verb = "get"
 	action.Namespace = c.Namespace
-	action.Resource = buildapi.SchemeGroupVersion.WithResource("builds")
+	action.Resource = buildsResource
 	action.Subresource = "log"
 	action.Value = opt
 

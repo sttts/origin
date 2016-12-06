@@ -38,6 +38,8 @@ func NewSimpleFake(objects ...runtime.Object) *Fake {
 	fakeClient := &Fake{}
 	fakeClient.AddReactor("*", "*", core.ObjectReaction(o, registered.RESTMapper()))
 
+	fakeClient.AddWatchReactor("*", core.DefaultWatchReactor(watch.NewFake(), nil))
+
 	return fakeClient
 }
 

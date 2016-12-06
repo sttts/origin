@@ -2,6 +2,7 @@ package testclient
 
 import (
 	kapi "k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/testing/core"
 	"k8s.io/kubernetes/pkg/watch"
 
@@ -14,8 +15,10 @@ type FakeClusterPolicyBindings struct {
 	Fake *Fake
 }
 
+var clusterPolicyBindingsResource = unversioned.GroupVersionResource{Group: "", Version: "", Resource: "clusterpolicybindings"}
+
 func (c *FakeClusterPolicyBindings) Get(name string) (*authorizationapi.ClusterPolicyBinding, error) {
-	obj, err := c.Fake.Invokes(core.NewRootGetAction(authorizationapi.SchemeGroupVersion.WithResource("clusterpolicybindings"), name), &authorizationapi.ClusterPolicyBinding{})
+	obj, err := c.Fake.Invokes(core.NewRootGetAction(clusterPolicyBindingsResource, name), &authorizationapi.ClusterPolicyBinding{})
 	if obj == nil {
 		return nil, err
 	}
@@ -24,7 +27,7 @@ func (c *FakeClusterPolicyBindings) Get(name string) (*authorizationapi.ClusterP
 }
 
 func (c *FakeClusterPolicyBindings) List(opts kapi.ListOptions) (*authorizationapi.ClusterPolicyBindingList, error) {
-	obj, err := c.Fake.Invokes(core.NewRootListAction(authorizationapi.SchemeGroupVersion.WithResource("clusterpolicybindings"), opts), &authorizationapi.ClusterPolicyBindingList{})
+	obj, err := c.Fake.Invokes(core.NewRootListAction(clusterPolicyBindingsResource, opts), &authorizationapi.ClusterPolicyBindingList{})
 	if obj == nil {
 		return nil, err
 	}
@@ -33,7 +36,7 @@ func (c *FakeClusterPolicyBindings) List(opts kapi.ListOptions) (*authorizationa
 }
 
 func (c *FakeClusterPolicyBindings) Create(inObj *authorizationapi.ClusterPolicyBinding) (*authorizationapi.ClusterPolicyBinding, error) {
-	obj, err := c.Fake.Invokes(core.NewRootCreateAction(authorizationapi.SchemeGroupVersion.WithResource("clusterpolicybindings"), inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewRootCreateAction(clusterPolicyBindingsResource, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -42,10 +45,10 @@ func (c *FakeClusterPolicyBindings) Create(inObj *authorizationapi.ClusterPolicy
 }
 
 func (c *FakeClusterPolicyBindings) Delete(name string) error {
-	_, err := c.Fake.Invokes(core.NewRootDeleteAction(authorizationapi.SchemeGroupVersion.WithResource("clusterpolicybindings"), name), &authorizationapi.ClusterPolicyBinding{})
+	_, err := c.Fake.Invokes(core.NewRootDeleteAction(clusterPolicyBindingsResource, name), &authorizationapi.ClusterPolicyBinding{})
 	return err
 }
 
 func (c *FakeClusterPolicyBindings) Watch(opts kapi.ListOptions) (watch.Interface, error) {
-	return c.Fake.InvokesWatch(core.NewRootWatchAction(authorizationapi.SchemeGroupVersion.WithResource("clusterpolicybindings"), opts))
+	return c.Fake.InvokesWatch(core.NewRootWatchAction(clusterPolicyBindingsResource, opts))
 }

@@ -2,6 +2,7 @@ package testclient
 
 import (
 	kapi "k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/testing/core"
 	"k8s.io/kubernetes/pkg/watch"
 
@@ -14,8 +15,10 @@ type FakeNetNamespace struct {
 	Fake *Fake
 }
 
+var netNamespacesResource = unversioned.GroupVersionResource{Group: "", Version: "", Resource: "netnamespaces"}
+
 func (c *FakeNetNamespace) Get(name string) (*sdnapi.NetNamespace, error) {
-	obj, err := c.Fake.Invokes(core.NewRootGetAction(sdnapi.SchemeGroupVersion.WithResource("netnamespaces"), name), &sdnapi.NetNamespace{})
+	obj, err := c.Fake.Invokes(core.NewRootGetAction(netNamespacesResource, name), &sdnapi.NetNamespace{})
 	if obj == nil {
 		return nil, err
 	}
@@ -24,7 +27,7 @@ func (c *FakeNetNamespace) Get(name string) (*sdnapi.NetNamespace, error) {
 }
 
 func (c *FakeNetNamespace) List(opts kapi.ListOptions) (*sdnapi.NetNamespaceList, error) {
-	obj, err := c.Fake.Invokes(core.NewRootListAction(sdnapi.SchemeGroupVersion.WithResource("netnamespaces"), opts), &sdnapi.NetNamespaceList{})
+	obj, err := c.Fake.Invokes(core.NewRootListAction(netNamespacesResource, opts), &sdnapi.NetNamespaceList{})
 	if obj == nil {
 		return nil, err
 	}
@@ -33,7 +36,7 @@ func (c *FakeNetNamespace) List(opts kapi.ListOptions) (*sdnapi.NetNamespaceList
 }
 
 func (c *FakeNetNamespace) Create(inObj *sdnapi.NetNamespace) (*sdnapi.NetNamespace, error) {
-	obj, err := c.Fake.Invokes(core.NewRootCreateAction(sdnapi.SchemeGroupVersion.WithResource("netnamespaces"), inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewRootCreateAction(netNamespacesResource, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -42,7 +45,7 @@ func (c *FakeNetNamespace) Create(inObj *sdnapi.NetNamespace) (*sdnapi.NetNamesp
 }
 
 func (c *FakeNetNamespace) Update(inObj *sdnapi.NetNamespace) (*sdnapi.NetNamespace, error) {
-	obj, err := c.Fake.Invokes(core.NewRootUpdateAction(sdnapi.SchemeGroupVersion.WithResource("netnamespaces"), inObj), inObj)
+	obj, err := c.Fake.Invokes(core.NewRootUpdateAction(netNamespacesResource, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -51,10 +54,10 @@ func (c *FakeNetNamespace) Update(inObj *sdnapi.NetNamespace) (*sdnapi.NetNamesp
 }
 
 func (c *FakeNetNamespace) Delete(name string) error {
-	_, err := c.Fake.Invokes(core.NewRootDeleteAction(sdnapi.SchemeGroupVersion.WithResource("netnamespaces"), name), &sdnapi.NetNamespace{})
+	_, err := c.Fake.Invokes(core.NewRootDeleteAction(netNamespacesResource, name), &sdnapi.NetNamespace{})
 	return err
 }
 
 func (c *FakeNetNamespace) Watch(opts kapi.ListOptions) (watch.Interface, error) {
-	return c.Fake.InvokesWatch(core.NewRootWatchAction(sdnapi.SchemeGroupVersion.WithResource("netnamespaces"), opts))
+	return c.Fake.InvokesWatch(core.NewRootWatchAction(netNamespacesResource, opts))
 }
