@@ -24,21 +24,30 @@ type strategy struct {
 
 // Decorator is used to compute duration of a build since its not stored in etcd yet
 var Decorator = func(obj runtime.Object) error {
-	build, ok := obj.(*api.Build)
-	if !ok {
-		return errors.NewBadRequest(fmt.Sprintf("not a build: %v", build))
-	}
-	if build.Status.StartTimestamp == nil {
-		build.Status.Duration = 0
-	} else {
-		completionTimestamp := build.Status.CompletionTimestamp
-		if completionTimestamp == nil {
-			dummy := unversioned.Now()
-			completionTimestamp = &dummy
+	switch t := obj.(type) {
+	case *api.Build:
+		setBuildDuration(t)
+	case *api.BuildList:
+		for _, b := range t.Items {
+			setBuildDuration(&b)
 		}
-		build.Status.Duration = completionTimestamp.Rfc3339Copy().Time.Sub(build.Status.StartTimestamp.Rfc3339Copy().Time)
+	default:
+		return errors.NewBadRequest(fmt.Sprintf("not a Build or BuildList: %v", obj))
 	}
 	return nil
+}
+
+func setBuildDuration(build *api.Build) {
+	if build.Status.StartTimestamp == nil {
+		build.Status.Duration = 0
+		return
+	}
+	completionTimestamp := build.Status.CompletionTimestamp
+	if completionTimestamp == nil {
+		dummy := unversioned.Now()
+		completionTimestamp = &dummy
+		build.Status.Duration = completionTimestamp.Rfc3339Copy().Time.Sub(build.Status.StartTimestamp.Rfc3339Copy().Time)
+	}
 }
 
 // Strategy is the default logic that applies when creating and updating Build objects.
