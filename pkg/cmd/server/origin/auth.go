@@ -13,7 +13,6 @@ import (
 
 	"github.com/RangelReale/osin"
 	"github.com/RangelReale/osincli"
-	restful "github.com/emicklei/go-restful"
 	"github.com/golang/glog"
 	"github.com/pborman/uuid"
 

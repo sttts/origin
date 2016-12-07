@@ -3,7 +3,6 @@ package origin
 import (
 	"fmt"
 	"io/ioutil"
-	"regexp"
 	"time"
 
 	"github.com/golang/glog"
@@ -12,7 +11,6 @@ import (
 	kapierror "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/retry"
-	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/wait"
 
 	"github.com/openshift/origin/pkg/cmd/admin/policy"
