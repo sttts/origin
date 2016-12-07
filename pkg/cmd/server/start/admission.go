@@ -56,6 +56,7 @@ var (
 		imageadmission.PluginName,
 		lifecycle.PluginName,
 		"OriginPodNodeEnvironment",
+		"PodNodeSelector",
 		serviceadmit.ExternalIPPluginName,
 		serviceadmit.RestrictedEndpointsPluginName,
 		"LimitRanger",
