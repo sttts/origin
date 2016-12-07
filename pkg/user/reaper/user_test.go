@@ -19,12 +19,9 @@ import (
 )
 
 var (
-	usersResource                     = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "users"}
-	groupsResource                    = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "groups"}
-	clusterRoleBindingsResource       = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "clusterrolebindings"}
-	roleBindingsResource              = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "rolebindings"}
-	securityContextContraintsResource = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "securitycontextconstraints"}
-	oAuthClientAuthorizationsResource = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "oauthclientauthorizations"}
+	usersResource                     = unversioned.GroupVersionResource{Group: "", Version: "", Resource: "users"}
+	securityContextContraintsResource = unversioned.GroupVersionResource{Group: "", Version: "", Resource: "securitycontextconstraints"}
+	oAuthClientAuthorizationsResource = unversioned.GroupVersionResource{Group: "", Version: "", Resource: "oauthclientauthorizations"}
 )
 
 func TestUserReaper(t *testing.T) {

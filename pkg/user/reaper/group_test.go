@@ -19,9 +19,9 @@ import (
 )
 
 var (
-	groupsResource              = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "groups"}
-	clusterRoleBindingsResource = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "clusterrolebindings"}
-	roleBindingsResource        = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "rolebindings"}
+	groupsResource              = unversioned.GroupVersionResource{Group: "", Version: "", Resource: "groups"}
+	clusterRoleBindingsResource = unversioned.GroupVersionResource{Group: "", Version: "", Resource: "clusterrolebindings"}
+	roleBindingsResource        = unversioned.GroupVersionResource{Group: "", Version: "", Resource: "rolebindings"}
 )
 
 func TestGroupReaper(t *testing.T) {
@@ -60,7 +60,7 @@ func TestGroupReaper(t *testing.T) {
 				},
 			},
 			expected: []interface{}{
-				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", clusterRoleBindingsResource}, Object: &authorizationapi.ClusterRoleBinding{
+				core.UpdateActionImpl{ActionImpl: core.ActionImpl{Verb: "update", Resource: clusterRoleBindingsResource}, Object: &authorizationapi.ClusterRoleBinding{
 					ObjectMeta: kapi.ObjectMeta{Name: "binding-one-subject"},
 					RoleRef:    kapi.ObjectReference{Name: "role"},
 					Subjects:   []kapi.ObjectReference{},
