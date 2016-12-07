@@ -28,11 +28,11 @@ var Decorator = func(obj runtime.Object) error {
 	case *api.Build:
 		setBuildDuration(t)
 	case *api.BuildList:
-		for _, b := range t.Items {
-			setBuildDuration(&b)
+		for i := range t.Items {
+			setBuildDuration(&t.Items[i])
 		}
 	default:
-		return errors.NewBadRequest(fmt.Sprintf("not a Build or BuildList: %v", obj))
+		return errors.NewBadRequest(fmt.Sprintf("not a Build nor BuildList: %v", obj))
 	}
 	return nil
 }
