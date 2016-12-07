@@ -459,15 +459,7 @@ func StartAPI(oc *origin.MasterConfig, kc *kubernetes.MasterConfig) error {
 	oc.RunGroupCache()
 	oc.RunProjectCache()
 
-	unprotectedInstallers := []origin.APIInstaller{}
-
-	if oc.Options.OAuthConfig != nil {
-		authConfig, err := origin.BuildAuthConfig(oc)
-		if err != nil {
-			return err
-		}
-		unprotectedInstallers = append(unprotectedInstallers, authConfig)
-	}
+	// unprotectedInstallers := []origin.APIInstaller{}
 
 	var standaloneAssetConfig, embeddedAssetConfig *origin.AssetConfig
 	if oc.WebConsoleEnabled() {
@@ -497,6 +489,7 @@ func StartAPI(oc *origin.MasterConfig, kc *kubernetes.MasterConfig) error {
 		proxy := &kubernetes.ProxyConfig{
 			ClientConfig: kubeClientConfig,
 		}
+		_ = proxy
 		// TODO(sttts): implement proxy mode
 		panic("1.5 REBASE DOES NOT SUPPORT PROXY MODE YET")
 		//oc.Run([]origin.APIInstaller{proxy}, unprotectedInstallers)
