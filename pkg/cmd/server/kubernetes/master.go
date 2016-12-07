@@ -38,7 +38,6 @@ import (
 	servicecontroller "k8s.io/kubernetes/pkg/controller/service"
 	attachdetachcontroller "k8s.io/kubernetes/pkg/controller/volume/attachdetach"
 	persistentvolumecontroller "k8s.io/kubernetes/pkg/controller/volume/persistentvolume"
-	"k8s.io/kubernetes/pkg/genericapiserver"
 	"k8s.io/kubernetes/pkg/master"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/runtime/serializer"

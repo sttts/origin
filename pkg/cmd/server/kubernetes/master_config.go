@@ -235,7 +235,7 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 		glog.Infof("Will report %v as public IP address.", publicAddress)
 	}
 
-	genericConfig := genericapiserver.NewConfig().ApplyOptions(server)
+	genericConfig := genericapiserver.NewConfig().ApplyOptions(server.GenericServerRunOptions)
 
 	genericConfig.PublicAddress = publicAddress
 	genericConfig.Authenticator = originAuthenticator // this is used to fulfill the tokenreviews endpoint which is used by node authentication
@@ -263,14 +263,14 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 
 		EnableWatchCache:          server.GenericServerRunOptions.EnableWatchCache,
 		KubernetesServiceNodePort: server.GenericServerRunOptions.KubernetesServiceNodePort,
-		ServiceIPRange:            (*net.IPNet)(&server.GenericServerRunOptions.ServiceClusterIPRange),
+		ServiceIPRange:            server.GenericServerRunOptions.ServiceClusterIPRange,
 		ServiceNodePortRange:      server.GenericServerRunOptions.ServiceNodePortRange,
 
 		StorageFactory: storageFactory,
 
 		EventTTL: server.EventTTL,
 
-		KubeletClientConfig: configapi.GetKubeletClientConfig(options),
+		KubeletClientConfig: *configapi.GetKubeletClientConfig(options),
 
 		EnableLogsSupport:     false, // don't expose server logs
 		EnableCoreControllers: true,
