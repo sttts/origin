@@ -429,7 +429,8 @@ func TestVersionSkewFilterDenyOld(t *testing.T) {
 		{UserAgentMatchRule: configapi.UserAgentMatchRule{Regex: `\w+/v1\.1\.10 \(.+/.+\) kubernetes/\w{7}`, HTTPVerbs: verbs}, RejectionMessage: "rejected for reasons!"},
 		{UserAgentMatchRule: configapi.UserAgentMatchRule{Regex: `\w+/v(?:(?:1\.1\.1)|(?:1\.0\.1)) \(.+/.+\) openshift/\w{7}`, HTTPVerbs: verbs}, RejectionMessage: "rejected for reasons!"},
 	}
-	server := httptest.NewServer(config.versionSkewFilter(doNothingHandler))
+	requestContextMapper := kapi.NewRequestContextMapper()
+	server := httptest.NewServer(config.versionSkewFilter(doNothingHandler, requestContextMapper))
 	defer server.Close()
 
 	testCases := []versionSkewTestCase{
@@ -476,7 +477,8 @@ func TestVersionSkewFilterDenySkewed(t *testing.T) {
 		{Regex: `\w+/` + openshiftServerVersion + ` \(.+/.+\) openshift/\w{7}`, HTTPVerbs: verbs},
 	}
 	config.Options.PolicyConfig.UserAgentMatchingConfig.DefaultRejectionMessage = "rejected for reasons!"
-	server := httptest.NewServer(config.versionSkewFilter(doNothingHandler))
+	requestContextMapper := kapi.NewRequestContextMapper()
+	server := httptest.NewServer(config.versionSkewFilter(doNothingHandler, requestContextMapper))
 	defer server.Close()
 
 	testCases := []versionSkewTestCase{
@@ -526,7 +528,8 @@ func TestVersionSkewFilterSkippedOnNonAPIRequest(t *testing.T) {
 		{Regex: `\w+/` + openshiftServerVersion + ` \(.+/.+\) openshift/\w{7}`, HTTPVerbs: verbs},
 	}
 	config.Options.PolicyConfig.UserAgentMatchingConfig.DefaultRejectionMessage = "rejected for reasons!"
-	server := httptest.NewServer(config.versionSkewFilter(doNothingHandler))
+	requestContextMapper := kapi.NewRequestContextMapper()
+	server := httptest.NewServer(config.versionSkewFilter(doNothingHandler, requestContextMapper))
 	defer server.Close()
 
 	testCases := []versionSkewTestCase{

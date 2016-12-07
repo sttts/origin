@@ -330,7 +330,7 @@ func (c *MasterConfig) buildHandlerChain(assetConfig *AssetConfig) (func(apiHand
 
 	// TODO(sttts): resync with upstream handler chain and re-use upstream filters as much as possible
 	return func(apiHandler http.Handler, kc *master.Config) (secure, insecure http.Handler) {
-		handler := c.versionSkewFilter(apiHandler)
+		handler := c.versionSkewFilter(apiHandler, c.getRequestContextMapper())
 		handler = c.authorizationFilter(handler)
 		handler = c.impersonationFilter(handler)
 
