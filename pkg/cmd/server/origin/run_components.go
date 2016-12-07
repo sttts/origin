@@ -24,6 +24,7 @@ import (
 	"k8s.io/kubernetes/pkg/serviceaccount"
 	"k8s.io/kubernetes/pkg/util/cert"
 	"k8s.io/kubernetes/pkg/util/flowcontrol"
+	"k8s.io/kubernetes/pkg/util/wait"
 	utilwait "k8s.io/kubernetes/pkg/util/wait"
 	serviceaccountadmission "k8s.io/kubernetes/plugin/pkg/admission/serviceaccount"
 
@@ -106,7 +107,7 @@ func (c *MasterConfig) RunServiceAccountsController() {
 	}
 
 	//REBASE: add new args to NewServiceAccountsController
-	sacontroller.NewServiceAccountsController(c.Informers.KubernetesInformers().ServiceAccounts(), c.Informers.KubernetesInformers().Namespaces(), c.KubeClientset(), options).Run()
+	sacontroller.NewServiceAccountsController(c.Informers.KubernetesInformers().ServiceAccounts(), c.Informers.KubernetesInformers().Namespaces(), c.KubeClientset(), options).Run(1, wait.NeverStop)
 }
 
 // RunServiceAccountTokensController starts the service account token controller
