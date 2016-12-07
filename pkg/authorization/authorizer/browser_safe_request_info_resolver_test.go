@@ -105,14 +105,14 @@ func TestBrowserSafeRequestInfoResolver(t *testing.T) {
 		resolver := NewBrowserSafeRequestInfoResolver(
 			&testContextMapper{tc.Context},
 			sets.NewString("system:authenticated"),
-			&testInfoResolver{tc.RequestInfo},
+			&testInfoFactory{&tc.RequestInfo},
 		)
 
 		req, _ := http.NewRequest("GET", "/", nil)
 		req.Host = tc.Host
 		req.Header = tc.Headers
 
-		info, err := resolver.GetRequestInfo(req)
+		info, err := resolver.NewRequestInfo(req)
 		if err != nil {
 			t.Errorf("%s: unexpected error: %v", k, err)
 			continue
@@ -138,10 +138,10 @@ func (t *testContextMapper) Update(req *http.Request, ctx kapi.Context) error {
 	return nil
 }
 
-type testInfoResolver struct {
-	info request.RequestInfo
+type testInfoFactory struct {
+	info *request.RequestInfo
 }
 
-func (t *testInfoResolver) GetRequestInfo(req *http.Request) (request.RequestInfo, error) {
+func (t *testInfoFactory) NewRequestInfo(req *http.Request) (*request.RequestInfo, error) {
 	return t.info, nil
 }
