@@ -288,7 +288,7 @@ func (c *MasterConfig) versionSkewFilter(handler http.Handler) http.Handler {
 
 // If we know the location of the asset server, redirect to it when / is requested
 // and the Accept header supports text/html
-func assetServerRedirect(handler http.Handler, assetPublicURL string) http.Handler {
+func WithAssetServerRedirect(handler http.Handler, assetPublicURL string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/" {
 			if httprequest.PrefersHTML(req) {

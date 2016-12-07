@@ -274,16 +274,3 @@ func (c *MasterConfig) ensureComponentAuthorizationRules() {
 		glog.Errorf("Could not auto reconcile role bindings: %v\n", err)
 	}
 }
-
-// ensureCORSAllowedOrigins takes a string list of origins and attempts to covert them to CORS origin
-// regexes, or exits if it cannot.
-func (c *MasterConfig) ensureCORSAllowedOrigins() []*regexp.Regexp {
-	if len(c.Options.CORSAllowedOrigins) == 0 {
-		return []*regexp.Regexp{}
-	}
-	allowedOriginRegexps, err := util.CompileRegexps(c.Options.CORSAllowedOrigins)
-	if err != nil {
-		glog.Fatalf("Invalid --cors-allowed-origins: %v", err)
-	}
-	return allowedOriginRegexps
-}

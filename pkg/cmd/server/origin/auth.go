@@ -80,13 +80,11 @@ const (
 )
 
 // WithOAuth decorates the given handler by serving the OAuth2 endpoints while
-// passing through all other requests to the given handler. It then returns an
-// array of strings indicating what endpoints were started (these are format
-// strings that will expect to be sent a single string value).
-func (c *AuthConfig) WithOAuth(handler http.Handler) (http.Handler, []string, error) {
+// passing through all other requests to the given handler.
+func (c *AuthConfig) WithOAuth(handler http.Handler) (http.Handler, error) {
 	mux, err := c.handler()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	oauthPrefixes := []string{
@@ -105,7 +103,7 @@ func (c *AuthConfig) WithOAuth(handler http.Handler) (http.Handler, []string, er
 		}
 
 		handler.ServeHTTP(w, req)
-	}), []string{fmt.Sprintf("Started OAuth2 API at %%s%s", OpenShiftOAuthAPIPrefix)}, nil
+	}), nil
 }
 
 func (c *AuthConfig) handler() (http.Handler, error) {

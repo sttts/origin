@@ -26,6 +26,10 @@ import (
 	"k8s.io/kubernetes/pkg/genericapiserver/authorizer"
 	"k8s.io/kubernetes/pkg/master"
 	"k8s.io/kubernetes/pkg/registry/cachesize"
+	"k8s.io/kubernetes/pkg/registry/core/endpoint"
+	endpointsetcd "k8s.io/kubernetes/pkg/registry/core/endpoint/etcd"
+	"k8s.io/kubernetes/pkg/registry/generic"
+	storagefactory "k8s.io/kubernetes/pkg/storage/storagebackend/factory"
 	kerrors "k8s.io/kubernetes/pkg/util/errors"
 	"k8s.io/kubernetes/pkg/util/intstr"
 	knet "k8s.io/kubernetes/pkg/util/net"
@@ -33,8 +37,11 @@ import (
 
 	"github.com/openshift/origin/pkg/cmd/flagtypes"
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
+	"github.com/openshift/origin/pkg/cmd/server/election"
+	"github.com/openshift/origin/pkg/cmd/server/origin"
 	cmdflags "github.com/openshift/origin/pkg/cmd/util/flags"
 	"github.com/openshift/origin/pkg/controller/shared"
+	"k8s.io/kubernetes/pkg/util/sets"
 )
 
 // MasterConfig defines the required values to start a Kubernetes master
@@ -80,6 +87,7 @@ func BuildDefaultAPIServer(options configapi.MasterConfig) (*apiserveroptions.Se
 	server.GenericServerRunOptions.SecurePort = port
 	server.GenericServerRunOptions.InsecurePort = 0
 	server.GenericServerRunOptions.MasterCount = options.KubernetesMasterConfig.MasterCount
+	server.GenericServerRunOptions.MaxRequestsInFlight = options.ServingInfo.MaxRequestsInFlight
 
 	// resolve extended arguments
 	// TODO: this should be done in config validation (along with the above) so we can provide
@@ -237,6 +245,10 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 	genericConfig.AdmissionControl = admissionControl
 	genericConfig.RequestContextMapper = requestContextMapper
 	genericConfig.APIResourceConfigSource = getAPIResourceConfig(options)
+	genericConfig.EnableIndex = false          // TODO(sttts): get rid of our indexAPIPaths and use this
+	genericConfig.EnableOpenAPISupport = false // TODO(sttts): use this instead of our OpenAPI support
+	genericConfig.EnableSwaggerSupport = false // TODO(sttts): use this instead of our Swagger support
+	genericConfig.LegacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, origin.OpenShiftAPIPrefix)
 
 	m := &master.Config{
 		GenericConfig: genericConfig,
@@ -271,6 +283,37 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 
 	if m.EnableWatchCache {
 		cachesize.SetWatchCacheSizes(server.GenericServerRunOptions.WatchCacheSizes)
+	}
+
+	if m.EnableCoreControllers {
+		glog.V(2).Info("Using the lease endpoint reconciler")
+		config, err := m.StorageFactory.NewConfig(kapi.Resource("apiServerIPInfo"))
+		if err != nil {
+			return nil, err
+		}
+		leaseStorage, _, err := storagefactory.Create(*config)
+		if err != nil {
+			return nil, err
+		}
+		masterLeases := newMasterLeases(leaseStorage)
+
+		endpointConfig, err := m.StorageFactory.NewConfig(kapi.Resource("endpoints"))
+		if err != nil {
+			return nil, err
+		}
+		endpointsStorage := endpointsetcd.NewREST(generic.RESTOptions{
+			StorageConfig:           endpointConfig,
+			Decorator:               generic.UndecoratedStorage,
+			DeleteCollectionWorkers: 0,
+			ResourcePrefix:          m.StorageFactory.ResourcePrefix(kapi.Resource("endpoints")),
+		})
+
+		endpointRegistry := endpoint.NewRegistry(endpointsStorage)
+
+		m.EndpointReconcilerConfig = master.EndpointReconcilerConfig{
+			Reconciler: election.NewLeaseEndpointReconciler(endpointRegistry, masterLeases),
+			Interval:   master.DefaultEndpointReconcilerInterval,
+		}
 	}
 
 	if options.DNSConfig != nil {

@@ -15,7 +15,6 @@ import (
 	"github.com/openshift/origin/pkg/api"
 	"github.com/openshift/origin/pkg/api/latest"
 	"github.com/openshift/origin/pkg/assets"
-	"github.com/openshift/origin/pkg/assets/java"
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
 	"github.com/openshift/origin/pkg/cmd/server/crypto"
 	cmdutil "github.com/openshift/origin/pkg/cmd/util"
@@ -32,18 +31,20 @@ import (
 
 // WithAssets decorates a handler by serving static assets for the subpath of
 // the public URL and passing through all other requests to the given handler.
-// It then returns an array of strings indicating what endpoints were started
-// (these are format strings that will expect to be sent a single string value).
-func (c *AssetConfig) WithAssets(handler http.Handler) (http.Handler, []string, error) {
+func (c *AssetConfig) WithAssets(handler http.Handler) (http.Handler, error) {
+	if c == nil {
+		return handler, nil
+	}
+
 	publicURL, err := url.Parse(c.Options.PublicURL)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	mux := http.NewServeMux()
 	err = c.addHandlers(mux)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -52,7 +53,7 @@ func (c *AssetConfig) WithAssets(handler http.Handler) (http.Handler, []string, 
 		} else {
 			handler.ServeHTTP(w, req)
 		}
-	}), []string{fmt.Sprintf("Started Web Console %%s%s", publicURL.Path)}, nil
+	}), nil
 }
 
 // Run starts an http server for the static assets listening on the configured

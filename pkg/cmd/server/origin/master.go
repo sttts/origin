@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
@@ -19,26 +19,37 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"gopkg.in/natefinch/lumberjack.v2"
 
+	federationv1beta1 "k8s.io/kubernetes/federation/apis/federation/v1beta1"
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/api/unversioned"
+	"k8s.io/kubernetes/pkg/api/v1"
 	kubeapiv1 "k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/apimachinery/registered"
+	appsv1beta1 "k8s.io/kubernetes/pkg/apis/apps/v1beta1"
+	autoscalingv1 "k8s.io/kubernetes/pkg/apis/autoscaling/v1"
+	batchv1 "k8s.io/kubernetes/pkg/apis/batch/v1"
+	batchv2alpha1 "k8s.io/kubernetes/pkg/apis/batch/v2alpha1"
+	certificatesv1alpha1 "k8s.io/kubernetes/pkg/apis/certificates/v1alpha1"
+	extv1beta1 "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
 	v1beta1extensions "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
+	policyv1alpha1 "k8s.io/kubernetes/pkg/apis/policy/v1alpha1"
 	"k8s.io/kubernetes/pkg/apiserver"
-	"k8s.io/kubernetes/pkg/apiserver/filters"
+	kapiserverfilters "k8s.io/kubernetes/pkg/apiserver/filters"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/genericapiserver"
+	kgenericfilters "k8s.io/kubernetes/pkg/genericapiserver/filters"
 	"k8s.io/kubernetes/pkg/genericapiserver/openapi"
+	openapicommon "k8s.io/kubernetes/pkg/genericapiserver/openapi/common"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
+	"k8s.io/kubernetes/pkg/master"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util/flowcontrol"
 	"k8s.io/kubernetes/pkg/util/sets"
 	utilwait "k8s.io/kubernetes/pkg/util/wait"
 
-	"github.com/openshift/origin/pkg/api/v1"
 	buildclient "github.com/openshift/origin/pkg/build/client"
 	buildgenerator "github.com/openshift/origin/pkg/build/generator"
 	buildregistry "github.com/openshift/origin/pkg/build/registry/build"
@@ -122,6 +133,7 @@ import (
 	"github.com/openshift/origin/pkg/authorization/registry/subjectaccessreview"
 	"github.com/openshift/origin/pkg/authorization/registry/subjectrulesreview"
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
+	"github.com/openshift/origin/pkg/cmd/server/kubernetes"
 	routeplugin "github.com/openshift/origin/pkg/route/allocation/simple"
 	"github.com/openshift/origin/pkg/security/registry/podsecuritypolicyreview"
 	"github.com/openshift/origin/pkg/security/registry/podsecuritypolicyselfsubjectreview"
@@ -137,6 +149,7 @@ const (
 	OpenShiftAPIV1           = "v1"
 	OpenShiftAPIPrefixV1     = OpenShiftAPIPrefix + "/" + OpenShiftAPIV1
 	swaggerAPIPrefix         = "/swaggerapi/"
+	openAPIServePath         = "/swagger.json"
 	// Discovery endpoint for OAuth 2.0 Authorization Server Metadata
 	// See IETF Draft:
 	// https://tools.ietf.org/html/draft-ietf-oauth-discovery-04#section-2
@@ -145,9 +158,6 @@ const (
 
 var (
 	excludedV1Types = sets.NewString()
-
-	// TODO: correctly solve identifying requests by type
-	longRunningRE = regexp.MustCompile("watch|proxy|logs?|exec|portforward|attach")
 )
 
 // APIInstaller installs additional API components into this server
@@ -164,82 +174,55 @@ func (fn APIInstallFunc) InstallAPI(container *restful.Container) ([]string, err
 	return fn(container)
 }
 
-// Run launches the OpenShift master. It takes optional installers that may install additional endpoints into the server.
-// All endpoints get configured CORS behavior
-// Protected installers' endpoints are protected by API authentication and authorization.
-// Unprotected installers' endpoints do not have any additional protection added.
-func (c *MasterConfig) Run(protected []APIInstaller, unprotected []APIInstaller) {
+// Run launches the OpenShift master by creating a kubernetes master, installing
+// OpenShift APIs into it and then running it.
+func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig) {
 	var extra []string
 
-	safe := genericapiserver.NewHandlerContainer(http.NewServeMux(), kapi.Codecs)
-	open := genericapiserver.NewHandlerContainer(http.NewServeMux(), kapi.Codecs)
+	kc.Master.GenericConfig.BuildHandlerChainsFunc, extra = c.buildHandlerChain(assetConfig)
 
-	// enforce authentication on protected endpoints
-	protected = append(protected, APIInstallFunc(c.InstallProtectedAPI))
-	for _, i := range protected {
-		msgs, err := i.InstallAPI(safe)
-		if err != nil {
-			glog.Fatalf("error installing api %v", err)
+	kmaster, err := kc.Master.Complete().New()
+	if err != nil {
+		glog.Fatalf("Failed to launch master: %v", err)
+	}
+
+	// v1 has to be printed separately since it's served from different endpoint than groups
+	if configapi.HasKubernetesAPIVersion(c.Options, v1.SchemeGroupVersion) {
+		extra = append(extra, fmt.Sprintf("Started Kubernetes API at %%s%s", genericapiserver.DefaultLegacyAPIPrefix))
+	}
+	// TODO: this is a bit much - it exist in some code somewhere
+	versions := []unversioned.GroupVersion{
+		extv1beta1.SchemeGroupVersion,
+		batchv1.SchemeGroupVersion,
+		batchv2alpha1.SchemeGroupVersion,
+		autoscalingv1.SchemeGroupVersion,
+		certificatesv1alpha1.SchemeGroupVersion,
+		appsv1beta1.SchemeGroupVersion,
+		policyv1alpha1.SchemeGroupVersion,
+		federationv1beta1.SchemeGroupVersion,
+	}
+	for _, ver := range versions {
+		if configapi.HasKubernetesAPIVersion(c.Options, ver) {
+			extra = append(extra, fmt.Sprintf("Started Kubernetes API %s at %%s%s", ver.String(), genericapiserver.APIGroupPrefix))
 		}
-		extra = append(extra, msgs...)
 	}
-	handler := c.versionSkewFilter(safe)
-	handler = c.authorizationFilter(handler)
-	handler = c.impersonationFilter(handler)
-	// audit handler must comes before the impersonationFilter to read the original user
-	if c.Options.AuditConfig.Enabled {
-		attributeGetter := apiserver.NewRequestAttributeGetter(c.getRequestContextMapper(), c.getRequestInfoResolver())
-		var writer io.Writer
-		if len(c.Options.AuditConfig.AuditFilePath) > 0 {
-			writer = &lumberjack.Logger{
-				Filename:   c.Options.AuditConfig.AuditFilePath,
-				MaxAge:     c.Options.AuditConfig.MaximumFileRetentionDays,
-				MaxBackups: c.Options.AuditConfig.MaximumRetainedFiles,
-				MaxSize:    c.Options.AuditConfig.MaximumFileSizeMegabytes,
-			}
-		} else {
-			// backwards compatible writer to regular log
-			writer = cmdutil.NewGLogWriterV(0)
-		}
-		handler = filters.WithAudit(handler, attributeGetter, writer)
-	}
-	handler = authenticationHandlerFilter(handler, c.Authenticator, c.getRequestContextMapper())
-	handler = namespacingFilter(handler, c.getRequestContextMapper())
-	handler = cacheControlFilter(handler, "no-store") // protected endpoints should not be cached
-
-	// unprotected resources
-	unprotected = append(unprotected, APIInstallFunc(c.InstallUnprotectedAPI))
-	for _, i := range unprotected {
-		msgs, err := i.InstallAPI(open)
-		if err != nil {
-			glog.Fatalf("error installing api %v", err)
-		}
-		extra = append(extra, msgs...)
-	}
-
-	var kubeAPILevels []string
-	if c.Options.KubernetesMasterConfig != nil {
-		kubeAPILevels = configapi.GetEnabledAPIVersionsForGroup(*c.Options.KubernetesMasterConfig, kapi.GroupName)
-	}
-
-	handler = indexAPIPaths(c.Options.APILevels, kubeAPILevels, handler)
-
-	open.Handle("/", handler)
 
 	// install swagger
+	// TODO(sttts): use upstream Swagger route
+	webServices := kmaster.GenericAPIServer.HandlerContainer.RegisteredWebServices()
 	swaggerConfig := swagger.Config{
 		WebServicesUrl:   c.Options.MasterPublicURL,
-		WebServices:      append(safe.RegisteredWebServices(), open.RegisteredWebServices()...),
+		WebServices:      webServices,
 		ApiPath:          swaggerAPIPrefix,
 		PostBuildHandler: customizeSwaggerDefinition,
 	}
 	// log nothing from swagger
 	swagger.LogInfo = func(format string, v ...interface{}) {}
-	swagger.RegisterSwaggerService(swaggerConfig, open)
+	swagger.RegisterSwaggerService(swaggerConfig, kmaster.GenericAPIServer.HandlerContainer)
 	extra = append(extra, fmt.Sprintf("Started Swagger Schema API at %%s%s", swaggerAPIPrefix))
 
-	openAPIConfig := openapi.Config{
-		SwaggerConfig:  &swaggerConfig,
+	// TODO(sttts): use upstream OpenAPI route
+	openAPIConfig := openapicommon.Config{
 		IgnorePrefixes: []string{"/swaggerapi"},
 		Info: &spec.Info{
 			InfoProps: spec.InfoProps{
@@ -320,48 +303,103 @@ func (c *MasterConfig) Run(protected []APIInstaller, unprotected []APIInstaller)
 			},
 		},
 	}
-	err := openapi.RegisterOpenAPIService(&openAPIConfig, open)
-	if err != nil {
+	if err := openapi.RegisterOpenAPIService(openAPIServePath, webServices, &openAPIConfig, kmaster.GenericAPIServer.HandlerContainer); err != nil {
 		glog.Fatalf("Failed to generate open api spec: %v", err)
 	}
-	extra = append(extra, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openapi.OpenAPIServePath))
+	extra = append(extra, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
 
-	handler = open
-
-	// add CORS support
-	if origins := c.ensureCORSAllowedOrigins(); len(origins) != 0 {
-		handler = apiserver.CORS(handler, origins, nil, nil, "true")
-	}
-
-	if c.WebConsoleEnabled() {
-		handler = assetServerRedirect(handler, c.Options.AssetConfig.PublicURL)
-	}
-
-	// Make the outermost filter the requestContextMapper to ensure all components share the same context
-	if contextHandler, err := kapi.NewRequestContextFilter(c.getRequestContextMapper(), handler); err != nil {
-		glog.Fatalf("Error setting up request context filter: %v", err)
-	} else {
-		handler = contextHandler
-	}
-
-	longRunningRequestCheck := apiserver.BasicLongRunningRequestCheck(longRunningRE, map[string]string{"watch": "true"})
-	// TODO: MaxRequestsInFlight should be subdivided by intent, type of behavior, and speed of
-	// execution - updates vs reads, long reads vs short reads, fat reads vs skinny reads.
-	if c.Options.ServingInfo.MaxRequestsInFlight > 0 {
-		sem := make(chan bool, c.Options.ServingInfo.MaxRequestsInFlight)
-		handler = apiserver.MaxInFlightLimit(sem, longRunningRequestCheck, handler)
-	}
-
-	c.serve(handler, extra)
+	// TODO(sttts): use master.GenericAPIServer.PrepareRun().Run(utilwait.NeverStop)
+	c.serve(kmaster.GenericAPIServer.Handler, extra)
 
 	// Attempt to verify the server came up for 20 seconds (100 tries * 100ms, 100ms timeout per try)
 	cmdutil.WaitForSuccessfulDial(c.TLS, c.Options.ServingInfo.BindNetwork, c.Options.ServingInfo.BindAddress, 100*time.Millisecond, 100*time.Millisecond, 100)
 }
 
+func (c *MasterConfig) buildHandlerChain(assetConfig *AssetConfig) (func(apiHandler http.Handler, c *master.Config) (secure, insecure http.Handler), []string) {
+	var extra []string
+	if c.Options.OAuthConfig != nil {
+		extra = append(extra, fmt.Sprintf("Started OAuth2 API at %%s%s", OpenShiftOAuthAPIPrefix))
+	}
+
+	if assetConfig != nil {
+		publicURL, err := url.Parse(assetConfig.Options.PublicURL)
+		if err != nil {
+			return nil, nil, err
+		}
+		extra = append(extra, fmt.Sprintf("Started Web Console %%s%s", publicURL.Path))
+	}
+
+	// TODO(sttts): resync with upstream handler chain and re-use upstream filters as much as possible
+	return func(apiHandler http.Handler, kc *master.Config) (secure, insecure http.Handler) {
+		handler := c.versionSkewFilter(apiHandler)
+		handler = c.authorizationFilter(handler)
+		handler = c.impersonationFilter(handler)
+
+		// audit handler must comes before the impersonationFilter to read the original user
+		if c.Options.AuditConfig.Enabled {
+			var writer io.Writer
+			if len(c.Options.AuditConfig.AuditFilePath) > 0 {
+				writer = &lumberjack.Logger{
+					Filename:   c.Options.AuditConfig.AuditFilePath,
+					MaxAge:     c.Options.AuditConfig.MaximumFileRetentionDays,
+					MaxBackups: c.Options.AuditConfig.MaximumRetainedFiles,
+					MaxSize:    c.Options.AuditConfig.MaximumFileSizeMegabytes,
+				}
+			} else {
+				// backwards compatible writer to regular log
+				writer = cmdutil.NewGLogWriterV(0)
+			}
+			handler = kapiserverfilters.WithAudit(handler, c.RequestContextMapper, writer)
+		}
+		handler = authenticationHandlerFilter(handler, c.Authenticator, c.getRequestContextMapper())
+		handler = namespacingFilter(handler, c.getRequestContextMapper())
+		handler = cacheControlFilter(handler, "no-store") // protected endpoints should not be cached
+
+		if c.Options.OAuthConfig != nil {
+			authConfig, err := BuildAuthConfig(c)
+			if err != nil {
+				glog.Fatalf("Failed to setup OAuth2: %v", err)
+			}
+			handler, err = authConfig.WithOAuth(handler)
+			if err != nil {
+				glog.Fatalf("Failed to setup OAuth2: %v", err)
+			}
+		}
+
+		handler, err := assetConfig.WithAssets(handler)
+		if err != nil {
+			glog.Fatalf("Failed to setup serving of assets: %v", err)
+		}
+
+		// TODO(sttts): replace with upstream's index handler and make sure the path list matches
+		var kubeAPILevels []string
+		if c.Options.KubernetesMasterConfig != nil {
+			kubeAPILevels = configapi.GetEnabledAPIVersionsForGroup(*c.Options.KubernetesMasterConfig, kapi.GroupName)
+		}
+		handler = indexAPIPaths(c.Options.APILevels, kubeAPILevels, handler)
+
+		if c.WebConsoleEnabled() {
+			handler = WithAssetServerRedirect(handler, c.Options.AssetConfig.PublicURL)
+		}
+
+		handler = kgenericfilters.WithCORS(handler, c.Options.CORSAllowedOrigins, nil, nil, nil, "true")
+		handler = kgenericfilters.WithPanicRecovery(handler, c.RequestContextMapper)
+		handler = kgenericfilters.WithTimeoutForNonLongRunningRequests(handler, kc.GenericConfig.LongRunningFunc)
+		// TODO: MaxRequestsInFlight should be subdivided by intent, type of behavior, and speed of
+		// execution - updates vs reads, long reads vs short reads, fat reads vs skinny reads.
+		// NOTE: read vs. write is implemented in Kube 1.6+
+		handler = kgenericfilters.WithMaxInFlightLimit(handler, kc.GenericConfig.MaxRequestsInFlight, kc.GenericConfig.LongRunningFunc)
+		handler = kapiserverfilters.WithRequestInfo(handler, genericapiserver.NewRequestInfoResolver(kc.GenericConfig), kc.GenericConfig.RequestContextMapper)
+		handler = kapi.WithRequestContext(handler, kc.GenericConfig.RequestContextMapper)
+
+		return handler, nil
+	}, extra
+}
+
 func (c *MasterConfig) RunHealth() {
 	ws := &restful.WebService{}
-	mux := http.NewServeMux()
-	hc := genericapiserver.NewHandlerContainer(mux, kapi.Codecs)
+	hc := restful.NewContainer()
+	apiserver.InstallRecoverHandler(kapi.Codecs, hc)
 	hc.Add(ws)
 
 	initHealthCheckRoute(ws, "/healthz")
@@ -816,10 +854,6 @@ func checkStorageErr(err error) {
 	}
 }
 
-func (c *MasterConfig) InstallUnprotectedAPI(container *restful.Container) ([]string, error) {
-	return []string{}, nil
-}
-
 // initAPIVersionRoute initializes the osapi endpoint to behave similar to the upstream api endpoint
 func initAPIVersionRoute(root *restful.WebService, prefix string, versions ...string) {
 	versionHandler := apiserver.APIVersionHandler(kapi.Codecs, func(req *restful.Request) *unversioned.APIVersions {
@@ -933,23 +967,6 @@ func (c *MasterConfig) getRequestContextMapper() kapi.RequestContextMapper {
 		c.RequestContextMapper = kapi.NewRequestContextMapper()
 	}
 	return c.RequestContextMapper
-}
-
-// getRequestInfoResolver returns a request resolver.
-func (c *MasterConfig) getRequestInfoResolver() *apiserver.RequestInfoResolver {
-	if c.RequestInfoResolver == nil {
-		c.RequestInfoResolver = &apiserver.RequestInfoResolver{
-			APIPrefixes: sets.NewString(strings.Trim(LegacyOpenShiftAPIPrefix, "/"),
-				strings.Trim(OpenShiftAPIPrefix, "/"),
-				strings.Trim(KubernetesAPIPrefix, "/"),
-				strings.Trim(KubernetesAPIGroupPrefix, "/")), // all possible API prefixes
-			GrouplessAPIPrefixes: sets.NewString(strings.Trim(LegacyOpenShiftAPIPrefix, "/"),
-				strings.Trim(OpenShiftAPIPrefix, "/"),
-				strings.Trim(KubernetesAPIPrefix, "/"),
-			), // APIPrefixes that won't have groups (legacy)
-		}
-	}
-	return c.RequestInfoResolver
 }
 
 // RouteAllocator returns a route allocation controller.

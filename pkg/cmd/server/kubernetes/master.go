@@ -7,23 +7,13 @@ import (
 	"os"
 	"time"
 
-	"github.com/emicklei/go-restful"
 	"github.com/golang/glog"
 
 	kctrlmgr "k8s.io/kubernetes/cmd/kube-controller-manager/app"
-	federationv1beta1 "k8s.io/kubernetes/federation/apis/federation/v1beta1"
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/apimachinery/registered"
-	appsv1beta1 "k8s.io/kubernetes/pkg/apis/apps/v1beta1"
-	autoscalingv1 "k8s.io/kubernetes/pkg/apis/autoscaling/v1"
-	batchv1 "k8s.io/kubernetes/pkg/apis/batch/v1"
-	batchv2alpha1 "k8s.io/kubernetes/pkg/apis/batch/v2alpha1"
-	certificatesv1alpha1 "k8s.io/kubernetes/pkg/apis/certificates/v1alpha1"
 	"k8s.io/kubernetes/pkg/apis/componentconfig"
-	extv1beta1 "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
-	policyv1alpha1 "k8s.io/kubernetes/pkg/apis/policy/v1alpha1"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
 	"k8s.io/kubernetes/pkg/client/record"
@@ -50,15 +40,11 @@ import (
 	persistentvolumecontroller "k8s.io/kubernetes/pkg/controller/volume/persistentvolume"
 	"k8s.io/kubernetes/pkg/genericapiserver"
 	"k8s.io/kubernetes/pkg/master"
-	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/runtime/serializer"
 	"k8s.io/kubernetes/pkg/storage"
-	storagefactory "k8s.io/kubernetes/pkg/storage/storagebackend/factory"
 	utilwait "k8s.io/kubernetes/pkg/util/wait"
 
-	"k8s.io/kubernetes/pkg/registry/core/endpoint"
-	endpointsetcd "k8s.io/kubernetes/pkg/registry/core/endpoint/etcd"
 	"k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/volume/aws_ebs"
 	"k8s.io/kubernetes/pkg/volume/cinder"
@@ -77,83 +63,12 @@ import (
 	"k8s.io/kubernetes/plugin/pkg/scheduler/factory"
 
 	osclient "github.com/openshift/origin/pkg/client"
-	configapi "github.com/openshift/origin/pkg/cmd/server/api"
 	"github.com/openshift/origin/pkg/cmd/server/election"
-	"k8s.io/kubernetes/pkg/genericapiserver"
 )
 
 const (
 	KubeAPIPrefix = genericapiserver.DefaultLegacyAPIPrefix // "/api"
 )
-
-// InstallAPI starts a Kubernetes master and registers the supported REST APIs
-// into the provided mux, then returns an array of strings indicating what
-// endpoints were started (these are format strings that will expect to be sent
-// a single string value).
-func (c *MasterConfig) InstallAPI(container *restful.Container) ([]string, error) {
-	c.Master.RestfulContainer = container
-
-	if c.Master.EnableCoreControllers {
-		glog.V(2).Info("Using the lease endpoint reconciler")
-		config, err := c.Master.StorageFactory.NewConfig(kapi.Resource("apiServerIPInfo"))
-		if err != nil {
-			return nil, err
-		}
-		leaseStorage, _, err := storagefactory.Create(*config)
-		if err != nil {
-			return nil, err
-		}
-		masterLeases := newMasterLeases(leaseStorage)
-
-		endpointConfig, err := c.Master.StorageFactory.NewConfig(kapi.Resource("endpoints"))
-		if err != nil {
-			return nil, err
-		}
-		endpointsStorage := endpointsetcd.NewREST(generic.RESTOptions{
-			StorageConfig:           endpointConfig,
-			Decorator:               generic.UndecoratedStorage,
-			DeleteCollectionWorkers: 0,
-			ResourcePrefix:          c.Master.StorageFactory.ResourcePrefix(kapi.Resource("endpoints")),
-		})
-
-		endpointRegistry := endpoint.NewRegistry(endpointsStorage)
-
-		c.Master.EndpointReconcilerConfig = master.EndpointReconcilerConfig{
-			Reconciler: election.NewLeaseEndpointReconciler(endpointRegistry, masterLeases),
-			Interval:   master.DefaultEndpointReconcilerInterval,
-		}
-	}
-
-	_, err := master.New(c.Master)
-	if err != nil {
-		return nil, err
-	}
-
-	messages := []string{}
-	// v1 has to be printed separately since it's served from different endpoint than groups
-	if configapi.HasKubernetesAPIVersion(c.Options, v1.SchemeGroupVersion) {
-		messages = append(messages, fmt.Sprintf("Started Kubernetes API at %%s%s", KubeAPIPrefix))
-	}
-
-	// TODO: this is a bit much - I exist in some code somewhere
-	versions := []unversioned.GroupVersion{
-		extv1beta1.SchemeGroupVersion,
-		batchv1.SchemeGroupVersion,
-		batchv2alpha1.SchemeGroupVersion,
-		autoscalingv1.SchemeGroupVersion,
-		certificatesv1alpha1.SchemeGroupVersion,
-		appsv1beta1.SchemeGroupVersion,
-		policyv1alpha1.SchemeGroupVersion,
-		federationv1beta1.SchemeGroupVersion,
-	}
-	for _, ver := range versions {
-		if configapi.HasKubernetesAPIVersion(c.Options, ver) {
-			messages = append(messages, fmt.Sprintf("Started Kubernetes API %s at %%s%s", ver.String(), genericapiserver.APIGroupPrefix))
-		}
-	}
-
-	return messages, nil
-}
 
 func newMasterLeases(storage storage.Interface) election.Leases {
 	// leaseTTL is in seconds, i.e. 15 means 15 seconds; do NOT do 15*time.Second!
