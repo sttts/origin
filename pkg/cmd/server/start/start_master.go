@@ -468,7 +468,7 @@ func StartAPI(oc *origin.MasterConfig, kc *kubernetes.MasterConfig) error {
 		unprotectedInstallers = append(unprotectedInstallers, authConfig)
 	}
 
-	var standaloneAssetConfig *origin.AssetConfig
+	var standaloneAssetConfig, embeddedAssetConfig *origin.AssetConfig
 	if oc.WebConsoleEnabled() {
 		overrideConfig, err := getResourceOverrideConfig(oc)
 		if err != nil {
@@ -480,14 +480,14 @@ func StartAPI(oc *origin.MasterConfig, kc *kubernetes.MasterConfig) error {
 		}
 
 		if oc.Options.AssetConfig.ServingInfo.BindAddress == oc.Options.ServingInfo.BindAddress {
-			unprotectedInstallers = append(unprotectedInstallers, config)
+			embeddedAssetConfig = config
 		} else {
 			standaloneAssetConfig = config
 		}
 	}
 
 	if kc != nil {
-		oc.Run([]origin.APIInstaller{kc}, unprotectedInstallers)
+		oc.Run(kc, embeddedAssetConfig)
 	} else {
 		_, kubeClientConfig, err := configapi.GetKubeClient(oc.Options.MasterClients.ExternalKubernetesKubeConfig, oc.Options.MasterClients.ExternalKubernetesClientConnectionOverrides)
 		if err != nil {
@@ -496,7 +496,9 @@ func StartAPI(oc *origin.MasterConfig, kc *kubernetes.MasterConfig) error {
 		proxy := &kubernetes.ProxyConfig{
 			ClientConfig: kubeClientConfig,
 		}
-		oc.Run([]origin.APIInstaller{proxy}, unprotectedInstallers)
+		// TODO(sttts): implement proxy mode
+		panic("1.5 REBASE DOES NOT SUPPORT PROXY MODE YET")
+		//oc.Run([]origin.APIInstaller{proxy}, unprotectedInstallers)
 	}
 
 	// start up the informers that we're trying to use in the API server

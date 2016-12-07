@@ -10,13 +10,11 @@ import (
 	"time"
 
 	"github.com/elazarl/go-bindata-assetfs"
-	"github.com/emicklei/go-restful"
 	"github.com/golang/glog"
 
 	"github.com/openshift/origin/pkg/api"
 	"github.com/openshift/origin/pkg/api/latest"
 	"github.com/openshift/origin/pkg/assets"
-	"github.com/openshift/origin/pkg/assets/java"
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
 	"github.com/openshift/origin/pkg/cmd/server/crypto"
 	cmdutil "github.com/openshift/origin/pkg/cmd/util"
@@ -26,26 +24,37 @@ import (
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/apimachinery/registered"
+	"k8s.io/kubernetes/pkg/genericapiserver"
 	"k8s.io/kubernetes/pkg/util/sets"
 	utilwait "k8s.io/kubernetes/pkg/util/wait"
 	kversion "k8s.io/kubernetes/pkg/version"
 )
 
-// InstallAPI adds handlers for serving static assets into the provided mux,
-// then returns an array of strings indicating what endpoints were started
-// (these are format strings that will expect to be sent a single string value).
-func (c *AssetConfig) InstallAPI(container *restful.Container) ([]string, error) {
+// WithAssets decorates a handler by serving static assets for the subpath of
+// the public URL and passing through all other requests to the given handler.
+func (c *AssetConfig) WithAssets(handler http.Handler) (http.Handler, error) {
+	if c == nil {
+		return handler, nil
+	}
+
 	publicURL, err := url.Parse(c.Options.PublicURL)
 	if err != nil {
 		return nil, err
 	}
 
-	err = c.addHandlers(container.ServeMux)
+	mux := http.NewServeMux()
+	err = c.addHandlers(mux)
 	if err != nil {
 		return nil, err
 	}
 
-	return []string{fmt.Sprintf("Started Web Console %%s%s", publicURL.Path)}, nil
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if strings.HasPrefix(req.URL.Path, publicURL.Path) {
+			mux.ServeHTTP(w, req)
+		} else {
+			handler.ServeHTTP(w, req)
+		}
+	}), nil
 }
 
 // Run starts an http server for the static assets listening on the configured
@@ -212,12 +221,12 @@ func (c *AssetConfig) addHandlers(mux *http.ServeMux) error {
 	// Generated web console config and server version
 	config := assets.WebConsoleConfig{
 		APIGroupAddr:          masterURL.Host,
-		APIGroupPrefix:        KubernetesAPIGroupPrefix,
+		APIGroupPrefix:        genericapiserver.APIGroupPrefix,
 		MasterAddr:            masterURL.Host,
 		MasterPrefix:          OpenShiftAPIPrefix,
 		MasterResources:       originResources.List(),
 		KubernetesAddr:        masterURL.Host,
-		KubernetesPrefix:      KubernetesAPIPrefix,
+		KubernetesPrefix:      genericapiserver.DefaultLegacyAPIPrefix,
 		KubernetesResources:   k8sResources.List(),
 		OAuthAuthorizeURI:     OpenShiftOAuthAuthorizeURL(masterURL.String()),
 		OAuthTokenURI:         OpenShiftOAuthTokenURL(masterURL.String()),
