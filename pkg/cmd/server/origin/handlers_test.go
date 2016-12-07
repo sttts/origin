@@ -284,7 +284,7 @@ func TestImpersonationFilter(t *testing.T) {
 			delegate.ServeHTTP(w, req)
 		})
 	}(config.impersonationFilter(doNothingHandler))
-	handler, _ = kapi.NewRequestContextFilter(config.RequestContextMapper, handler)
+	handler = kapi.WithRequestContext(handler, config.RequestContextMapper)
 
 	server := httptest.NewServer(handler)
 	defer server.Close()
