@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/elazarl/go-bindata-assetfs"
-	"github.com/emicklei/go-restful"
 	"github.com/golang/glog"
 
 	"github.com/openshift/origin/pkg/api"
@@ -31,21 +30,29 @@ import (
 	kversion "k8s.io/kubernetes/pkg/version"
 )
 
-// InstallAPI adds handlers for serving static assets into the provided mux,
-// then returns an array of strings indicating what endpoints were started
+// WithAssets decorates a handler by serving static assets for the subpath of
+// the public URL and passing through all other requests to the given handler.
+// It then returns an array of strings indicating what endpoints were started
 // (these are format strings that will expect to be sent a single string value).
-func (c *AssetConfig) InstallAPI(container *restful.Container) ([]string, error) {
+func (c *AssetConfig) WithAssets(handler http.Handler) (http.Handler, []string, error) {
 	publicURL, err := url.Parse(c.Options.PublicURL)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	err = c.addHandlers(container.ServeMux)
+	mux := http.NewServeMux()
+	err = c.addHandlers(mux)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return []string{fmt.Sprintf("Started Web Console %%s%s", publicURL.Path)}, nil
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if strings.HasPrefix(req.URL.Path, publicURL.Path) {
+			mux.ServeHTTP(w, req)
+		} else {
+			handler.ServeHTTP(w, req)
+		}
+	}), []string{fmt.Sprintf("Started Web Console %%s%s", publicURL.Path)}, nil
 }
 
 // Run starts an http server for the static assets listening on the configured
