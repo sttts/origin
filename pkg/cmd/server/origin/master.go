@@ -113,6 +113,7 @@ import (
 	appliedclusterresourcequotaregistry "github.com/openshift/origin/pkg/quota/registry/appliedclusterresourcequota"
 	clusterresourcequotaregistry "github.com/openshift/origin/pkg/quota/registry/clusterresourcequota"
 
+	"github.com/openshift/origin"
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	clusterpolicyregistry "github.com/openshift/origin/pkg/authorization/registry/clusterpolicy"
 	clusterpolicystorage "github.com/openshift/origin/pkg/authorization/registry/clusterpolicy/etcd"
@@ -144,8 +145,6 @@ import (
 const (
 	LegacyOpenShiftAPIPrefix = "/osapi" // TODO: make configurable
 	OpenShiftAPIPrefix       = "/oapi"  // TODO: make configurable
-	KubernetesAPIPrefix      = "/api"   // TODO: make configurable
-	KubernetesAPIGroupPrefix = "/apis"  // TODO: make configurable
 	OpenShiftAPIV1           = "v1"
 	OpenShiftAPIPrefixV1     = OpenShiftAPIPrefix + "/" + OpenShiftAPIV1
 	swaggerAPIPrefix         = "/swaggerapi/"
@@ -179,6 +178,7 @@ func (fn APIInstallFunc) InstallAPI(container *restful.Container) ([]string, err
 func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig) {
 	var extra []string
 
+	kc.Master.GenericConfig.LegacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, OpenShiftAPIPrefix)
 	kc.Master.GenericConfig.BuildHandlerChainsFunc, extra = c.buildHandlerChain(assetConfig)
 
 	kmaster, err := kc.Master.Complete().New()

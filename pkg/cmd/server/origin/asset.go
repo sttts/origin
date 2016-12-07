@@ -24,6 +24,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/apimachinery/registered"
+	"k8s.io/kubernetes/pkg/genericapiserver"
 	"k8s.io/kubernetes/pkg/util/sets"
 	utilwait "k8s.io/kubernetes/pkg/util/wait"
 	kversion "k8s.io/kubernetes/pkg/version"
@@ -220,12 +221,12 @@ func (c *AssetConfig) addHandlers(mux *http.ServeMux) error {
 	// Generated web console config and server version
 	config := assets.WebConsoleConfig{
 		APIGroupAddr:          masterURL.Host,
-		APIGroupPrefix:        KubernetesAPIGroupPrefix,
+		APIGroupPrefix:        genericapiserver.APIGroupPrefix,
 		MasterAddr:            masterURL.Host,
 		MasterPrefix:          OpenShiftAPIPrefix,
 		MasterResources:       originResources.List(),
 		KubernetesAddr:        masterURL.Host,
-		KubernetesPrefix:      KubernetesAPIPrefix,
+		KubernetesPrefix:      genericapiserver.DefaultLegacyAPIPrefix,
 		KubernetesResources:   k8sResources.List(),
 		OAuthAuthorizeURI:     OpenShiftOAuthAuthorizeURL(masterURL.String()),
 		OAuthTokenURI:         OpenShiftOAuthTokenURL(masterURL.String()),

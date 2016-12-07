@@ -38,10 +38,8 @@ import (
 	"github.com/openshift/origin/pkg/cmd/flagtypes"
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
 	"github.com/openshift/origin/pkg/cmd/server/election"
-	"github.com/openshift/origin/pkg/cmd/server/origin"
 	cmdflags "github.com/openshift/origin/pkg/cmd/util/flags"
 	"github.com/openshift/origin/pkg/controller/shared"
-	"k8s.io/kubernetes/pkg/util/sets"
 )
 
 // MasterConfig defines the required values to start a Kubernetes master
@@ -248,7 +246,6 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 	genericConfig.EnableIndex = false          // TODO(sttts): get rid of our indexAPIPaths and use this
 	genericConfig.EnableOpenAPISupport = false // TODO(sttts): use this instead of our OpenAPI support
 	genericConfig.EnableSwaggerSupport = false // TODO(sttts): use this instead of our Swagger support
-	genericConfig.LegacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, origin.OpenShiftAPIPrefix)
 
 	m := &master.Config{
 		GenericConfig: genericConfig,

@@ -66,10 +66,6 @@ import (
 	"github.com/openshift/origin/pkg/cmd/server/election"
 )
 
-const (
-	KubeAPIPrefix = genericapiserver.DefaultLegacyAPIPrefix // "/api"
-)
-
 func newMasterLeases(storage storage.Interface) election.Leases {
 	// leaseTTL is in seconds, i.e. 15 means 15 seconds; do NOT do 15*time.Second!
 	leaseTTL := uint64((master.DefaultEndpointReconcilerInterval + 5*time.Second) / time.Second) // add 5 seconds for wiggle room
