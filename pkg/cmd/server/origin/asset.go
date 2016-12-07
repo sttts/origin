@@ -15,6 +15,7 @@ import (
 	"github.com/openshift/origin/pkg/api"
 	"github.com/openshift/origin/pkg/api/latest"
 	"github.com/openshift/origin/pkg/assets"
+	"github.com/openshift/origin/pkg/assets/java"
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
 	"github.com/openshift/origin/pkg/cmd/server/crypto"
 	cmdutil "github.com/openshift/origin/pkg/cmd/util"
