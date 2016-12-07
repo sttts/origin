@@ -1,7 +1,6 @@
 package deploylog
 
 import (
-	"net/http"
 	"net/url"
 	"reflect"
 	"testing"
@@ -15,6 +14,7 @@ import (
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
 	genericrest "k8s.io/kubernetes/pkg/registry/generic/rest"
 	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/watch"
 
 	"github.com/openshift/origin/pkg/client/testclient"
@@ -82,10 +82,18 @@ var (
 	}
 )
 
+type fakeConnectionInfoGetter struct{}
+
+func (*fakeConnectionInfoGetter) GetConnectionInfo(ctx kapi.Context, nodeName types.NodeName) (*kubeletclient.ConnectionInfo, error) {
+	return &kubeletclient.ConnectionInfo{
+		Scheme:   "https",
+		Hostname: "some-host",
+		Port:     "12345",
+	}, nil
+}
+
 // mockREST mocks a DeploymentLog REST
 func mockREST(version, desired int64, status api.DeploymentStatus) *REST {
-	connectionInfo := &kubeletclient.HTTPKubeletClient{Config: &kubeletclient.KubeletClientConfig{EnableHttps: true, Port: 12345}, Client: &http.Client{}}
-
 	// Fake deploymentConfig
 	config := deploytest.OkDeploymentConfig(version)
 	fakeDn := testclient.NewSimpleFake(config)
@@ -97,7 +105,7 @@ func mockREST(version, desired int64, status api.DeploymentStatus) *REST {
 	if desired > version {
 		return &REST{
 			dn:       fakeDn,
-			connInfo: connectionInfo,
+			connInfo: &fakeConnectionInfoGetter{},
 			timeout:  defaultTimeout,
 		}
 	}
@@ -116,39 +124,6 @@ func mockREST(version, desired int64, status api.DeploymentStatus) *REST {
 	obj.Annotations[api.DeploymentStatusAnnotation] = string(status)
 	go fakeWatch.Add(obj)
 
-	oldPn := core.NewSimpleFake()
-	if status == api.DeploymentStatusComplete {
-		// If the deployment is complete, we will try to get the logs from the oldest
-		// application pod...
-		oldPn.PrependReactor("list", "pods", func(action core.Action) (handled bool, ret runtime.Object, err error) {
-			return true, fakePodList, nil
-		})
-		oldPn.PrependReactor("get", "pods", func(action core.Action) (handled bool, ret runtime.Object, err error) {
-			return true, &fakePodList.Items[0], nil
-		})
-	} else {
-		// ...otherwise try to get the logs from the deployer pod.
-		fakeDeployer := &kapi.Pod{
-			ObjectMeta: kapi.ObjectMeta{
-				Name:      deployutil.DeployerPodNameForDeployment(obj.Name),
-				Namespace: kapi.NamespaceDefault,
-			},
-			Spec: kapi.PodSpec{
-				Containers: []kapi.Container{
-					{
-						Name: deployutil.DeployerPodNameForDeployment(obj.Name) + "-container",
-					},
-				},
-				NodeName: "some-host",
-			},
-			Status: kapi.PodStatus{
-				Phase: kapi.PodRunning,
-			},
-		}
-		oldPn.PrependReactor("get", "pods", func(action core.Action) (handled bool, ret runtime.Object, err error) {
-			return true, fakeDeployer, nil
-		})
-	}
 	fakePn := fake.NewSimpleClientset()
 	if status == api.DeploymentStatusComplete {
 		// If the deployment is complete, we will try to get the logs from the oldest
@@ -187,8 +162,7 @@ func mockREST(version, desired int64, status api.DeploymentStatus) *REST {
 		dn:       fakeDn,
 		rn:       fakeRn.Core(),
 		pn:       fakePn.Core(),
-		oldPn:    oldPn,
-		connInfo: connectionInfo,
+		connInfo: &fakeConnectionInfoGetter{},
 		timeout:  defaultTimeout,
 	}
 }
