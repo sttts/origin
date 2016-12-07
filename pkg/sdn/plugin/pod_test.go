@@ -98,7 +98,7 @@ func (pt *podTester) addExpectedPod(t *testing.T, op *operation) {
 	}
 }
 
-func (pt *podTester) setup(req *cniserver.PodRequest) (*cnitypes.Result, *khostport.RunningPod, error) {
+func (pt *podTester) setup(req *cniserver.PodRequest) (*cnitypes.Result, *khostport.ActivePod, error) {
 	pod, err := pt.getExpectedPod(req.PodNamespace, req.PodName, req.Command)
 	if err != nil {
 		return nil, nil, err
@@ -116,7 +116,7 @@ func (pt *podTester) setup(req *cniserver.PodRequest) (*cnitypes.Result, *khostp
 			},
 		},
 	}
-	runningPod := &khostport.RunningPod{
+	runningPod := &khostport.ActivePod{
 		Pod: &kapi.Pod{
 			TypeMeta: kunversioned.TypeMeta{
 				Kind: "Pod",
