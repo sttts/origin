@@ -19,7 +19,7 @@ import (
 
 	kerrors "k8s.io/kubernetes/pkg/api/errors"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/flag"
 
 	"github.com/openshift/origin/pkg/cmd/server/admin"
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
@@ -33,7 +33,7 @@ type AllInOneOptions struct {
 
 	NodeArgs *NodeArgs
 
-	ConfigDir          util.StringFlag
+	ConfigDir          flag.StringFlag
 	NodeConfigFile     string
 	PrintIP            bool
 	ServiceNetworkCIDR string
