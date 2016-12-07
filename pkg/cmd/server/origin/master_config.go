@@ -100,6 +100,8 @@ type MasterConfig struct {
 	RuleResolver                  rulevalidation.AuthorizationRuleResolver
 	Authenticator                 authenticator.Request
 	Authorizer                    authorizer.Authorizer
+
+	// TODO(sttts): replace AuthorizationAttributeBuilder with kapiserverfilters.NewRequestAttributeGetter
 	AuthorizationAttributeBuilder authorizer.AuthorizationAttributeBuilder
 
 	GroupCache                    *usercache.GroupCache

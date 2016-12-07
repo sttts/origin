@@ -44,7 +44,6 @@ import (
 	"k8s.io/kubernetes/pkg/genericapiserver/openapi"
 	openapicommon "k8s.io/kubernetes/pkg/genericapiserver/openapi/common"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
-	"k8s.io/kubernetes/pkg/master"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util/flowcontrol"
 	"k8s.io/kubernetes/pkg/util/sets"
@@ -175,10 +174,16 @@ func (fn APIInstallFunc) InstallAPI(container *restful.Container) ([]string, err
 // Run launches the OpenShift master by creating a kubernetes master, installing
 // OpenShift APIs into it and then running it.
 func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig) {
-	var extra []string
+	var (
+		extra []string
+		err error
+	)
 
 	kc.Master.GenericConfig.LegacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, OpenShiftAPIPrefix)
-	kc.Master.GenericConfig.BuildHandlerChainsFunc, extra = c.buildHandlerChain(assetConfig)
+	kc.Master.GenericConfig.BuildHandlerChainsFunc, extra, err = c.buildHandlerChain(assetConfig)
+	if err != nil {
+		glog.Fatalf("Failed to launch master: %v", err)
+	}
 
 	kmaster, err := kc.Master.Complete().New()
 	if err != nil {
@@ -186,7 +191,7 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 	}
 
 	// v1 has to be printed separately since it's served from different endpoint than groups
-	if configapi.HasKubernetesAPIVersion(c.Options, v1.SchemeGroupVersion) {
+	if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, v1.SchemeGroupVersion) {
 		extra = append(extra, fmt.Sprintf("Started Kubernetes API at %%s%s", genericapiserver.DefaultLegacyAPIPrefix))
 	}
 	// TODO: this is a bit much - it exist in some code somewhere
@@ -201,7 +206,7 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 		federationv1beta1.SchemeGroupVersion,
 	}
 	for _, ver := range versions {
-		if configapi.HasKubernetesAPIVersion(c.Options, ver) {
+		if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, ver) {
 			extra = append(extra, fmt.Sprintf("Started Kubernetes API %s at %%s%s", ver.String(), genericapiserver.APIGroupPrefix))
 		}
 	}
@@ -217,7 +222,7 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 	}
 	// log nothing from swagger
 	swagger.LogInfo = func(format string, v ...interface{}) {}
-	swagger.RegisterSwaggerService(swaggerConfig, kmaster.GenericAPIServer.HandlerContainer)
+	swagger.RegisterSwaggerService(swaggerConfig, kmaster.GenericAPIServer.HandlerContainer.Container)
 	extra = append(extra, fmt.Sprintf("Started Swagger Schema API at %%s%s", swaggerAPIPrefix))
 
 	// TODO(sttts): use upstream OpenAPI route
@@ -314,7 +319,7 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 	cmdutil.WaitForSuccessfulDial(c.TLS, c.Options.ServingInfo.BindNetwork, c.Options.ServingInfo.BindAddress, 100*time.Millisecond, 100*time.Millisecond, 100)
 }
 
-func (c *MasterConfig) buildHandlerChain(assetConfig *AssetConfig) (func(apiHandler http.Handler, c *master.Config) (secure, insecure http.Handler), []string) {
+func (c *MasterConfig) buildHandlerChain(assetConfig *AssetConfig) (func(http.Handler, *genericapiserver.Config) (secure, insecure http.Handler), []string, error) {
 	var extra []string
 	if c.Options.OAuthConfig != nil {
 		extra = append(extra, fmt.Sprintf("Started OAuth2 API at %%s%s", OpenShiftOAuthAPIPrefix))
@@ -329,7 +334,9 @@ func (c *MasterConfig) buildHandlerChain(assetConfig *AssetConfig) (func(apiHand
 	}
 
 	// TODO(sttts): resync with upstream handler chain and re-use upstream filters as much as possible
-	return func(apiHandler http.Handler, kc *master.Config) (secure, insecure http.Handler) {
+	return func(apiHandler http.Handler, kc *genericapiserver.Config) (secure, insecure http.Handler) {
+		attributeGetter := kapiserverfilters.NewRequestAttributeGetter(c.RequestContextMapper)
+
 		handler := c.versionSkewFilter(apiHandler, c.getRequestContextMapper())
 		handler = c.authorizationFilter(handler)
 		handler = c.impersonationFilter(handler)
@@ -348,7 +355,7 @@ func (c *MasterConfig) buildHandlerChain(assetConfig *AssetConfig) (func(apiHand
 				// backwards compatible writer to regular log
 				writer = cmdutil.NewGLogWriterV(0)
 			}
-			handler = kapiserverfilters.WithAudit(handler, c.RequestContextMapper, writer)
+			handler = kapiserverfilters.WithAudit(handler, attributeGetter, writer)
 		}
 		handler = authenticationHandlerFilter(handler, c.Authenticator, c.getRequestContextMapper())
 		handler = namespacingFilter(handler, c.getRequestContextMapper())
@@ -383,16 +390,16 @@ func (c *MasterConfig) buildHandlerChain(assetConfig *AssetConfig) (func(apiHand
 
 		handler = kgenericfilters.WithCORS(handler, c.Options.CORSAllowedOrigins, nil, nil, nil, "true")
 		handler = kgenericfilters.WithPanicRecovery(handler, c.RequestContextMapper)
-		handler = kgenericfilters.WithTimeoutForNonLongRunningRequests(handler, kc.GenericConfig.LongRunningFunc)
+		handler = kgenericfilters.WithTimeoutForNonLongRunningRequests(handler, kc.LongRunningFunc)
 		// TODO: MaxRequestsInFlight should be subdivided by intent, type of behavior, and speed of
 		// execution - updates vs reads, long reads vs short reads, fat reads vs skinny reads.
 		// NOTE: read vs. write is implemented in Kube 1.6+
-		handler = kgenericfilters.WithMaxInFlightLimit(handler, kc.GenericConfig.MaxRequestsInFlight, kc.GenericConfig.LongRunningFunc)
-		handler = kapiserverfilters.WithRequestInfo(handler, genericapiserver.NewRequestInfoResolver(kc.GenericConfig), kc.GenericConfig.RequestContextMapper)
-		handler = kapi.WithRequestContext(handler, kc.GenericConfig.RequestContextMapper)
+		handler = kgenericfilters.WithMaxInFlightLimit(handler, kc.MaxRequestsInFlight, kc.LongRunningFunc)
+		handler = kapiserverfilters.WithRequestInfo(handler, genericapiserver.NewRequestInfoResolver(kc), kc.RequestContextMapper)
+		handler = kapi.WithRequestContext(handler, kc.RequestContextMapper)
 
 		return handler, nil
-	}, extra
+	}, extra, nil
 }
 
 func (c *MasterConfig) RunHealth() {
@@ -774,7 +781,7 @@ func (c *MasterConfig) GetRestStorage() map[string]rest.Storage {
 		"deploymentConfigs/scale":       deployConfigScaleStorage,
 		"deploymentConfigs/status":      deployConfigStatusStorage,
 		"deploymentConfigs/rollback":    deployConfigRollbackStorage,
-		"deploymentConfigs/log":         deploylogregistry.NewREST(configClient, kclient, c.DeploymentLogClient(), c.OldDeploymentLogClient(), kubeletClient),
+		"deploymentConfigs/log":         deploylogregistry.NewREST(configClient, kclient, c.DeploymentLogClient(), kubeletClient),
 		"deploymentConfigs/instantiate": dcInstantiateStorage,
 
 		// TODO: Deprecate these
@@ -829,7 +836,7 @@ func (c *MasterConfig) GetRestStorage() map[string]rest.Storage {
 		"clusterResourceQuotas":        restInPeace(clusterresourcequotaregistry.NewStorage(c.RESTOptionsGetter)),
 		"clusterResourceQuotas/status": updateInPeace(clusterresourcequotaregistry.NewStatusStorage(c.RESTOptionsGetter)),
 		"appliedClusterResourceQuotas": appliedclusterresourcequotaregistry.NewREST(
-			c.ClusterQuotaMappingController.GetClusterQuotaMapper(), c.Informers.ClusterResourceQuotas().Lister(), c.Informers.Namespaces().Lister()),
+			c.ClusterQuotaMappingController.GetClusterQuotaMapper(), c.Informers.ClusterResourceQuotas().Lister(), c.Informers.KubernetesInformers().Namespaces().Lister()),
 	}
 
 	if configapi.IsBuildEnabled(&c.Options) {
