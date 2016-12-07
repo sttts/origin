@@ -156,7 +156,7 @@ func (c *MasterConfig) RunServiceAccountTokensController(cm *cmapp.CMServer) {
 		ServiceServingCA: servingServingCABundle,
 	}
 
-	go sacontroller.NewTokensController(clientadapter.FromUnversionedClient(c.KubeClient()), options).Run(int(cm.ConcurrentSATokenSyncs), utilwait.NeverStop)
+	go sacontroller.NewTokensController(c.KubeClientset(), options).Run(int(cm.ConcurrentSATokenSyncs), utilwait.NeverStop)
 }
 
 // RunServiceAccountPullSecretsControllers starts the service account pull secret controllers
@@ -240,7 +240,7 @@ func (c *MasterConfig) RunBuildController(informers shared.InformerFactory) erro
 	groupVersion := unversioned.GroupVersion{Group: "", Version: storageVersion}
 	codec := kapi.Codecs.LegacyCodec(groupVersion)
 
-	admissionControl := admission.InitPlugin("SecurityContextConstraint", clientadapter.FromUnversionedClient(c.PrivilegedLoopbackKubernetesClient), "")
+	admissionControl := admission.InitPlugin("SecurityContextConstraint", c.KubeClientset(), "")
 	if wantsInformers, ok := admissionControl.(cmdadmission.WantsInformers); ok {
 		wantsInformers.SetInformers(informers)
 	}
