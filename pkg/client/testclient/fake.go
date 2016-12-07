@@ -58,6 +58,11 @@ func (c *Fake) AddWatchReactor(resource string, reaction core.WatchReactionFunc)
 	c.WatchReactionChain = append(c.WatchReactionChain, &core.SimpleWatchReactor{Resource: resource, Reaction: reaction})
 }
 
+// PrependWatchReactor adds a reactor to the beginning of the chain.
+func (c *Fake) PrependWatchReactor(resource string, reaction core.WatchReactionFunc) {
+	c.WatchReactionChain = append([]core.WatchReactor{&core.SimpleWatchReactor{resource, reaction}}, c.WatchReactionChain...)
+}
+
 // Invokes records the provided Action and then invokes the ReactFn (if provided).
 // defaultReturnObj is expected to be of the same type a normal call would return.
 func (c *Fake) Invokes(action core.Action, defaultReturnObj runtime.Object) (runtime.Object, error) {
