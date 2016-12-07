@@ -187,6 +187,10 @@ func (fnh *fakeHost) GetNetNS(containerID string) (string, error) {
 	return "", nil
 }
 
+func (fnh *fakeHost) SupportsLegacyFeatures() bool {
+	return false
+}
+
 type podcheck struct {
 	namespace   string
 	name        string
