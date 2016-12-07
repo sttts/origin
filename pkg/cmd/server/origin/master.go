@@ -176,7 +176,7 @@ func (fn APIInstallFunc) InstallAPI(container *restful.Container) ([]string, err
 func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig) {
 	var (
 		extra []string
-		err error
+		err   error
 	)
 
 	kc.Master.GenericConfig.LegacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, OpenShiftAPIPrefix)
@@ -577,9 +577,10 @@ func initOAuthAuthorizationServerMetadataRoute(container *restful.Container, pat
 }
 
 func (c *MasterConfig) GetRestStorage() map[string]rest.Storage {
-	kubeletClient, err := kubeletclient.NewStaticKubeletClient(c.KubeletClientConfig)
+	//TODO/REBASE use something other than c.KubeClientset
+	nodeConnectionInfoGetter, err := kubeletclient.NewNodeConnectionInfoGetter(c.KubeClientset().Core().Nodes(), *c.KubeletClientConfig)
 	if err != nil {
-		glog.Fatalf("Unable to configure Kubelet client: %v", err)
+		glog.Fatalf("Unable to configure the node connection info getter: %v", err)
 	}
 
 	// TODO: allow the system CAs and the local CAs to be joined together.
@@ -781,7 +782,7 @@ func (c *MasterConfig) GetRestStorage() map[string]rest.Storage {
 		"deploymentConfigs/scale":       deployConfigScaleStorage,
 		"deploymentConfigs/status":      deployConfigStatusStorage,
 		"deploymentConfigs/rollback":    deployConfigRollbackStorage,
-		"deploymentConfigs/log":         deploylogregistry.NewREST(configClient, kclient, c.DeploymentLogClient(), kubeletClient),
+		"deploymentConfigs/log":         deploylogregistry.NewREST(configClient, kclient, c.DeploymentLogClient(), nodeConnectionInfoGetter),
 		"deploymentConfigs/instantiate": dcInstantiateStorage,
 
 		// TODO: Deprecate these
@@ -842,13 +843,13 @@ func (c *MasterConfig) GetRestStorage() map[string]rest.Storage {
 	if configapi.IsBuildEnabled(&c.Options) {
 		storage["builds"] = buildStorage
 		storage["builds/clone"] = buildclone.NewStorage(buildGenerator)
-		storage["builds/log"] = buildlogregistry.NewREST(buildStorage, buildStorage, c.BuildLogClient().Core(), kubeletClient)
+		storage["builds/log"] = buildlogregistry.NewREST(buildStorage, buildStorage, c.BuildLogClient().Core(), nodeConnectionInfoGetter)
 		storage["builds/details"] = buildDetailsStorage
 
 		storage["buildConfigs"] = buildConfigStorage
 		storage["buildConfigs/webhooks"] = buildConfigWebHooks
 		storage["buildConfigs/instantiate"] = buildconfiginstantiate.NewStorage(buildGenerator)
-		storage["buildConfigs/instantiatebinary"] = buildconfiginstantiate.NewBinaryStorage(buildGenerator, buildStorage, c.BuildLogClient(), kubeletClient)
+		storage["buildConfigs/instantiatebinary"] = buildconfiginstantiate.NewBinaryStorage(buildGenerator, buildStorage, c.BuildLogClient(), nodeConnectionInfoGetter)
 	}
 
 	return storage
