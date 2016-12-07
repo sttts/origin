@@ -106,7 +106,8 @@ func (c *AuthConfig) WithOAuth(handler http.Handler) (http.Handler, error) {
 }
 
 func (c *AuthConfig) handler() (http.Handler, error) {
-	mux := c.possiblyWrapMux(http.NewServeMux())
+	baseMux := http.NewServeMux()
+	mux := c.possiblyWrapMux(baseMux)
 
 	clientStorage, err := clientetcd.NewREST(c.RESTOptionsGetter)
 	if err != nil {
@@ -209,7 +210,7 @@ func (c *AuthConfig) handler() (http.Handler, error) {
 	// glog.Infof("grant checker: %#v", grantChecker)
 	// glog.Infof("grant handler: %#v", grantHandler)
 
-	return mux, nil
+	return baseMux, nil
 }
 
 func (c *AuthConfig) possiblyWrapMux(mux cmdutil.Mux) cmdutil.Mux {
