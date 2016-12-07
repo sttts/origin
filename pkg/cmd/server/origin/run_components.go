@@ -106,7 +106,7 @@ func (c *MasterConfig) RunServiceAccountsController() {
 	}
 
 	//REBASE: add new args to NewServiceAccountsController
-	sacontroller.NewServiceAccountsController(c.KubeClientset(), options).Run()
+	sacontroller.NewServiceAccountsController(c.Informers.KubernetesInformers().ServiceAccounts(), c.Informers.KubernetesInformers().Namespaces(), c.KubeClientset(), options).Run()
 }
 
 // RunServiceAccountTokensController starts the service account token controller
@@ -136,7 +136,7 @@ func (c *MasterConfig) RunServiceAccountTokensController(cm *cmapp.CMServer) {
 		if err != nil {
 			glog.Fatalf("Error reading ca file for Service Serving Certificate Signer: %s: %v", c.Options.ControllerConfig.ServiceServingCert.Signer.CertFile, err)
 		}
-		if _, err := kcrypto.CertsFromPEM(servingServingCA); err != nil {
+		if _, err := crypto.CertsFromPEM(servingServingCA); err != nil {
 			glog.Fatalf("Error parsing ca file for Service Serving Certificate Signer: %s: %v", c.Options.ControllerConfig.ServiceServingCert.Signer.CertFile, err)
 		}
 
