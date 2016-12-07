@@ -22,9 +22,9 @@ import (
 var (
 	encoder                 = kapi.Codecs.LegacyCodec(oauthapiv1.SchemeGroupVersion)
 	decoder                 = kapi.Codecs.UniversalDecoder()
-	serviceAccountsResource = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "serviceaccounts"}
-	secretsResource         = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
-	routesResource          = unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "routes"}
+	serviceAccountsResource = unversioned.GroupVersionResource{Group: "", Version: "", Resource: "serviceaccounts"}
+	secretsResource         = unversioned.GroupVersionResource{Group: "", Version: "", Resource: "secrets"}
+	routesResource          = unversioned.GroupVersionResource{Group: "", Version: "", Resource: "routes"}
 )
 
 func TestGetClient(t *testing.T) {
