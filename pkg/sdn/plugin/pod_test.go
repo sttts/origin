@@ -18,6 +18,7 @@ import (
 	kunversioned "k8s.io/kubernetes/pkg/api/unversioned"
 	kcontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	kcontainertest "k8s.io/kubernetes/pkg/kubelet/container/testing"
+	"k8s.io/kubernetes/pkg/kubelet/network"
 	khostport "k8s.io/kubernetes/pkg/kubelet/network/hostport"
 	utiltesting "k8s.io/kubernetes/pkg/util/testing"
 
@@ -160,6 +161,8 @@ type fakeHost struct {
 	runtime kcontainer.Runtime
 }
 
+var _ network.Host = &fakeHost{}
+
 func newFakeHost() *fakeHost {
 	return &fakeHost{
 		runtime: &kcontainertest.FakeRuntime{
@@ -178,6 +181,10 @@ func (fnh *fakeHost) GetKubeClient() clientset.Interface {
 
 func (fnh *fakeHost) GetRuntime() kcontainer.Runtime {
 	return fnh.runtime
+}
+
+func (fnh *fakeHost) GetNetNS(containerID string) (string, error) {
+	return "", nil
 }
 
 type podcheck struct {
