@@ -176,6 +176,8 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 		glog.Fatalf("Failed to launch master: %v", err)
 	}
 
+	c.InstallProtectedAPI(kmaster.GenericAPIServer.HandlerContainer.Container)
+
 	// v1 has to be printed separately since it's served from different endpoint than groups
 	if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, v1.SchemeGroupVersion) {
 		extra = append(extra, fmt.Sprintf("Started Kubernetes API at %%s%s", genericapiserver.DefaultLegacyAPIPrefix))
