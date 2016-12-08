@@ -157,20 +157,6 @@ var (
 	excludedV1Types = sets.NewString()
 )
 
-// APIInstaller installs additional API components into this server
-type APIInstaller interface {
-	// InstallAPI returns an array of strings describing what was installed
-	InstallAPI(*restful.Container) ([]string, error)
-}
-
-// APIInstallFunc is a function for installing APIs
-type APIInstallFunc func(*restful.Container) ([]string, error)
-
-// InstallAPI implements APIInstaller
-func (fn APIInstallFunc) InstallAPI(container *restful.Container) ([]string, error) {
-	return fn(container)
-}
-
 // Run launches the OpenShift master by creating a kubernetes master, installing
 // OpenShift APIs into it and then running it.
 func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig) {
