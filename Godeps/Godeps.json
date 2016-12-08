@@ -3967,6 +3967,11 @@
 			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
 		},
 		{
+			"ImportPath": "k8s.io/kubernetes/cmd/libs/go2idl/lister-gen/generators",
+			"Comment": "v1.5.0-beta.2-30-g014dd1e",
+			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
+		},
+		{
 			"ImportPath": "k8s.io/kubernetes/cmd/libs/go2idl/openapi-gen/generators",
 			"Comment": "v1.5.0-beta.2-30-g014dd1e",
 			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
