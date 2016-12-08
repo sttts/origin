@@ -55,7 +55,7 @@ func TestTriggers_manual(t *testing.T) {
 		t.Fatalf("Couldn't create DeploymentConfig: %v %#v", err, config)
 	}
 
-	rcWatch, err := kc.ReplicationControllers(namespace).Watch(kapi.ListOptions{ResourceVersion: dc.ResourceVersion})
+	rcWatch, err := kc.Core().ReplicationControllers(namespace).Watch(kapi.ListOptions{ResourceVersion: dc.ResourceVersion})
 	if err != nil {
 		t.Fatalf("Couldn't subscribe to Deployments: %v", err)
 	}
@@ -580,7 +580,7 @@ func TestTriggers_configChange(t *testing.T) {
 	config.Namespace = namespace
 	config.Spec.Triggers = []deployapi.DeploymentTriggerPolicy{deploytest.OkConfigChangeTrigger()}
 
-	rcWatch, err := kc.ReplicationControllers(namespace).Watch(kapi.ListOptions{})
+	rcWatch, err := kc.Core().ReplicationControllers(namespace).Watch(kapi.ListOptions{})
 	if err != nil {
 		t.Fatalf("Couldn't subscribe to Deployments %v", err)
 	}
@@ -608,7 +608,7 @@ func TestTriggers_configChange(t *testing.T) {
 	// this is required to be done manually since the deployment and deployer pod controllers are not run in this test
 	// get this live or conflicts will never end up resolved
 	retryErr := retry.RetryOnConflict(wait.Backoff{Steps: maxUpdateRetries}, func() error {
-		liveDeployment, err := kc.ReplicationControllers(deployment.Namespace).Get(deployment.Name)
+		liveDeployment, err := kc.Core().ReplicationControllers(deployment.Namespace).Get(deployment.Name)
 		if err != nil {
 			return err
 		}
@@ -616,7 +616,7 @@ func TestTriggers_configChange(t *testing.T) {
 		liveDeployment.Annotations[deployapi.DeploymentStatusAnnotation] = string(deployapi.DeploymentStatusComplete)
 
 		// update the deployment
-		_, err = kc.ReplicationControllers(namespace).Update(liveDeployment)
+		_, err = kc.Core().ReplicationControllers(namespace).Update(liveDeployment)
 		return err
 	})
 	if retryErr != nil {

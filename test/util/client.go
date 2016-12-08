@@ -11,10 +11,8 @@ import (
 	kapi "k8s.io/kubernetes/pkg/api"
 	kerrs "k8s.io/kubernetes/pkg/api/errors"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/unversioned"
+	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
 	"k8s.io/kubernetes/pkg/client/restclient"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
-	adapter "k8s.io/kubernetes/pkg/client/unversioned/adapters/internalclientset"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/quota"
 	"k8s.io/kubernetes/pkg/util/wait"
@@ -39,7 +37,7 @@ func KubeConfigPath() string {
 }
 
 func GetClusterAdminKubeClient(adminKubeConfigFile string) (*kclientset.Clientset, error) {
-	_, c, _, err := configapi.GetKubeClient(adminKubeConfigFile, nil)
+	c, _, err := configapi.GetKubeClient(adminKubeConfigFile, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +57,7 @@ func GetClusterAdminClient(adminKubeConfigFile string) (*client.Client, error) {
 }
 
 func GetClusterAdminClientConfig(adminKubeConfigFile string) (*restclient.Config, error) {
-	_, _, conf, err := configapi.GetKubeClient(adminKubeConfigFile, nil)
+	_, conf, err := configapi.GetKubeClient(adminKubeConfigFile, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +86,7 @@ func GetClientForUser(clientConfig restclient.Config, username string) (*client.
 	return osClient, kubeClientset, &userClientConfig, nil
 }
 
-func GetScopedClientForUser(adminClient *client.Client, clientConfig restclient.Config, username string, scopes []string) (*client.Client, *kclient.Client, *restclient.Config, error) {
+func GetScopedClientForUser(adminClient *client.Client, clientConfig restclient.Config, username string, scopes []string) (*client.Client, kclientset.Interface, *restclient.Config, error) {
 	// make sure the user exists
 	if _, _, _, err := GetClientForUser(clientConfig, username); err != nil {
 		return nil, nil, nil, err
@@ -113,7 +111,7 @@ func GetScopedClientForUser(adminClient *client.Client, clientConfig restclient.
 
 	scopedConfig := clientcmd.AnonymousClientConfig(&clientConfig)
 	scopedConfig.BearerToken = token.Name
-	kubeClient, err := kclient.New(&scopedConfig)
+	kubeClient, err := kclientset.NewForConfig(&scopedConfig)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -160,11 +158,10 @@ func GetClientForServiceAccount(adminClient *kclientset.Clientset, clientConfig 
 	saClientConfig := clientcmd.AnonymousClientConfig(&clientConfig)
 	saClientConfig.BearerToken = token
 
-	kubeClient, err := kclient.New(&saClientConfig)
+	kubeClientset, err := kclientset.NewForConfig(&saClientConfig)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	kubeClientset := adapter.FromUnversionedClient(kubeClient)
 
 	osClient, err := client.New(&saClientConfig)
 	if err != nil {
