@@ -4460,22 +4460,12 @@
 			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
 		},
 		{
-			"ImportPath": "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/autoscaling/unversioned",
-			"Comment": "v1.5.0-beta.2-30-g014dd1e",
-			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
-		},
-		{
 			"ImportPath": "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/batch/internalversion",
 			"Comment": "v1.5.0-beta.2-30-g014dd1e",
 			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
 		},
 		{
 			"ImportPath": "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/batch/internalversion/fake",
-			"Comment": "v1.5.0-beta.2-30-g014dd1e",
-			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
-		},
-		{
-			"ImportPath": "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/batch/unversioned",
 			"Comment": "v1.5.0-beta.2-30-g014dd1e",
 			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
 		},
@@ -4496,11 +4486,6 @@
 		},
 		{
 			"ImportPath": "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion/fake",
-			"Comment": "v1.5.0-beta.2-30-g014dd1e",
-			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
-		},
-		{
-			"ImportPath": "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/unversioned",
 			"Comment": "v1.5.0-beta.2-30-g014dd1e",
 			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
 		},
@@ -4541,11 +4526,6 @@
 		},
 		{
 			"ImportPath": "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/storage/internalversion/fake",
-			"Comment": "v1.5.0-beta.2-30-g014dd1e",
-			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
-		},
-		{
-			"ImportPath": "k8s.io/kubernetes/pkg/client/clientset_generated/release_1_4",
 			"Comment": "v1.5.0-beta.2-30-g014dd1e",
 			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
 		},
@@ -4756,11 +4736,6 @@
 		},
 		{
 			"ImportPath": "k8s.io/kubernetes/pkg/client/unversioned",
-			"Comment": "v1.5.0-beta.2-30-g014dd1e",
-			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
-		},
-		{
-			"ImportPath": "k8s.io/kubernetes/pkg/client/unversioned/adapters/internalclientset",
 			"Comment": "v1.5.0-beta.2-30-g014dd1e",
 			"Rev": "014dd1e8595384e56ba8917522037ec4a36df180"
 		},
