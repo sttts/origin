@@ -39,6 +39,7 @@ REQUIRED_BINS=(
   "github.com/containernetworking/cni/plugins/main/loopback"
   "k8s.io/kubernetes/cmd/libs/go2idl/go-to-protobuf/protoc-gen-gogo"
   "k8s.io/kubernetes/cmd/libs/go2idl/client-gen"
+  "github.com/onsi/ginkgo/ginkgo"
   "./..."
 )
 
