@@ -16,6 +16,7 @@ import (
 	"github.com/emicklei/go-restful/swagger"
 	"github.com/go-openapi/spec"
 	"github.com/golang/glog"
+	openapigenerated "github.com/openshift/origin/pkg/openapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"gopkg.in/natefinch/lumberjack.v2"
 
@@ -37,6 +38,7 @@ import (
 	policyv1alpha1 "k8s.io/kubernetes/pkg/apis/policy/v1alpha1"
 	"k8s.io/kubernetes/pkg/apiserver"
 	kapiserverfilters "k8s.io/kubernetes/pkg/apiserver/filters"
+	apiserveropenapi "k8s.io/kubernetes/pkg/apiserver/openapi"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/genericapiserver"
@@ -215,7 +217,24 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 
 	// TODO(sttts): use upstream OpenAPI route
 	openAPIConfig := openapicommon.Config{
-		IgnorePrefixes: []string{"/swaggerapi"},
+		Definitions:    openapigenerated.OpenAPIDefinitions,
+		IgnorePrefixes: []string{"/swaggerapi", "/healthz", "/controllers", "/metrics", "/version/openshift"},
+		GetOperationIDAndTags: func(servePath string, r *restful.Route) (string, []string, error) {
+			op := r.Operation
+			path := r.Path
+			//TODO/REBASE this is gross
+			if strings.HasPrefix(path, "/oapi/v1/namespaces/{namespace}/processedtemplates") {
+				op = "createNamespacedProcessedTemplate"
+			} else if strings.HasPrefix(path, "/oapi/v1/processedtemplates") {
+				op = "createProcessedTemplateForAllNamespaces"
+			} else if strings.HasPrefix(path, "/oapi/v1/namespaces/{namespace}/generatedeploymentconfigs") {
+				op = "generateNamespacedDeploymentConfig"
+			}
+			if op != r.Operation {
+				return op, []string{}, nil
+			}
+			return apiserveropenapi.GetOperationIDAndTags(servePath, r)
+		},
 		Info: &spec.Info{
 			InfoProps: spec.InfoProps{
 				Title:   "OpenShift API (with Kubernetes)",
@@ -861,7 +880,8 @@ func initAPIVersionRoute(root *restful.WebService, prefix string, versions ...st
 	root.Route(root.GET(prefix).To(versionHandler).
 		Doc("list supported server API versions").
 		Produces(restful.MIME_JSON).
-		Consumes(restful.MIME_JSON))
+		Consumes(restful.MIME_JSON).
+		Operation("get" + strings.Title(prefix[1:]) + "Version"))
 }
 
 // initHealthCheckRoute initializes an HTTP endpoint for health checking.
