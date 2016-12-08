@@ -237,6 +237,9 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 
 	genericConfig := genericapiserver.NewConfig().ApplyOptions(server.GenericServerRunOptions)
 
+	// MUST be in synced with the value in CMServer
+	genericConfig.EnableGarbageCollection = false // disabled until we add the controller
+
 	genericConfig.PublicAddress = publicAddress
 	genericConfig.Authenticator = originAuthenticator // this is used to fulfill the tokenreviews endpoint which is used by node authentication
 	genericConfig.Authorizer = authorizer.NewAlwaysAllowAuthorizer()
