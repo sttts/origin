@@ -165,7 +165,7 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 		err   error
 	)
 
-	kc.Master.GenericConfig.LegacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, OpenShiftAPIPrefix)
+	kc.Master.GenericConfig.LegacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, OpenShiftAPIPrefix, LegacyOpenShiftAPIPrefix)
 	kc.Master.GenericConfig.BuildHandlerChainsFunc, extra, err = c.buildHandlerChain(assetConfig)
 	if err != nil {
 		glog.Fatalf("Failed to launch master: %v", err)
