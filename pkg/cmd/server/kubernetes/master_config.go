@@ -30,6 +30,7 @@ import (
 	endpointsetcd "k8s.io/kubernetes/pkg/registry/core/endpoint/etcd"
 	"k8s.io/kubernetes/pkg/registry/generic"
 	storagefactory "k8s.io/kubernetes/pkg/storage/storagebackend/factory"
+	"k8s.io/kubernetes/pkg/util/config"
 	kerrors "k8s.io/kubernetes/pkg/util/errors"
 	"k8s.io/kubernetes/pkg/util/intstr"
 	knet "k8s.io/kubernetes/pkg/util/net"
@@ -77,15 +78,29 @@ func BuildDefaultAPIServer(options configapi.MasterConfig) (*apiserveroptions.Se
 
 	// Defaults are tested in TestAPIServerDefaults
 	server := apiserveroptions.NewServerRunOptions()
+
 	// Adjust defaults
 	server.EventTTL = 2 * time.Hour
 	server.GenericServerRunOptions.ServiceClusterIPRange = net.IPNet(flagtypes.DefaultIPNet(options.KubernetesMasterConfig.ServicesSubnet))
 	server.GenericServerRunOptions.ServiceNodePortRange = *portRange
 	server.GenericServerRunOptions.EnableProfiling = false
+	server.GenericServerRunOptions.MasterCount = options.KubernetesMasterConfig.MasterCount
+
 	server.GenericServerRunOptions.SecurePort = port
 	server.GenericServerRunOptions.InsecurePort = 0
-	server.GenericServerRunOptions.MasterCount = options.KubernetesMasterConfig.MasterCount
+	server.GenericServerRunOptions.TLSCertFile = options.ServingInfo.ServerCert.CertFile
+	server.GenericServerRunOptions.TLSPrivateKeyFile = options.ServingInfo.ServerCert.KeyFile
+	server.GenericServerRunOptions.ClientCAFile = options.ServingInfo.ClientCA
 	server.GenericServerRunOptions.MaxRequestsInFlight = options.ServingInfo.MaxRequestsInFlight
+	server.GenericServerRunOptions.MinRequestTimeout = options.ServingInfo.RequestTimeoutSeconds
+	for _, nc := range options.ServingInfo.NamedCertificates {
+		sniCert := config.NamedCertKey{
+			CertFile: nc.CertFile,
+			KeyFile:  nc.KeyFile,
+			Names:    nc.Names,
+		}
+		server.GenericServerRunOptions.SNICertKeys = append(server.GenericServerRunOptions.SNICertKeys, sniCert)
+	}
 
 	// resolve extended arguments
 	// TODO: this should be done in config validation (along with the above) so we can provide
@@ -254,6 +269,12 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 		return nil, err
 	}
 	genericConfig.LoopbackClientConfig = loopbackClientConfig
+	genericConfig.SecureServingInfo.BindNetwork = options.ServingInfo.BindNetwork
+
+	serviceIPRange, apiServerServiceIP, err := genericapiserver.DefaultServiceIPRange(server.GenericServerRunOptions.ServiceClusterIPRange)
+	if err != nil {
+		glog.Fatalf("Error determining service IP ranges: %v", err)
+	}
 
 	m := &master.Config{
 		GenericConfig: genericConfig,
@@ -270,9 +291,11 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 		}),
 
 		EnableWatchCache:          server.GenericServerRunOptions.EnableWatchCache,
-		KubernetesServiceNodePort: server.GenericServerRunOptions.KubernetesServiceNodePort,
-		ServiceIPRange:            server.GenericServerRunOptions.ServiceClusterIPRange,
+		ServiceIPRange:            serviceIPRange,
+		APIServerServiceIP:        apiServerServiceIP,
+		APIServerServicePort:      443,
 		ServiceNodePortRange:      server.GenericServerRunOptions.ServiceNodePortRange,
+		KubernetesServiceNodePort: server.GenericServerRunOptions.KubernetesServiceNodePort,
 
 		StorageFactory: storageFactory,
 
