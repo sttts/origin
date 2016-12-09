@@ -61,7 +61,7 @@ func (p *ProjectOptions) Complete(f *clientcmd.Factory, c *cobra.Command, args [
 	p.Out = out
 	p.Mapper = mapper
 	p.Typer = typer
-	p.RESTClientFactory = f.Factory.ClientForMapping
+	p.RESTClientFactory = f.ClientForMapping
 	p.ProjectNames = []string{}
 	if len(args) != 0 {
 		p.ProjectNames = append(p.ProjectNames, args...)

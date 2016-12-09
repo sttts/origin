@@ -368,7 +368,7 @@ func (v *VolumeOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, out, 
 	v.Err = errOut
 	v.Mapper = mapper
 	v.Typer = typer
-	v.RESTClientFactory = f.Factory.ClientForMapping
+	v.RESTClientFactory = f.ClientForMapping
 	v.UpdatePodSpecForObject = f.UpdatePodSpecForObject
 	v.Encoder = f.JSONEncoder()
 

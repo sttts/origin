@@ -66,7 +66,7 @@ func (n *NodeOptions) Complete(f *clientcmd.Factory, c *cobra.Command, args []st
 	n.ErrWriter = errout
 	n.Mapper = mapper
 	n.Typer = typer
-	n.RESTClientFactory = f.Factory.ClientForMapping
+	n.RESTClientFactory = f.ClientForMapping
 	n.Printer = f.Printer
 	n.NodeNames = []string{}
 	n.CmdPrinter = cmdPrinter

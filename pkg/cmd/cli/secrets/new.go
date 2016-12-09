@@ -93,7 +93,7 @@ func NewCmdCreateSecret(name, fullName string, f *clientcmd.Factory, out io.Writ
 				kcmdutil.CheckErr(err)
 
 				mapper, _ := f.Object()
-				kcmdutil.CheckErr(f.Factory.PrintObject(c, mapper, secret, out))
+				kcmdutil.CheckErr(f.PrintObject(c, mapper, secret, out))
 				return
 			}
 
@@ -133,7 +133,7 @@ func (o *CreateSecretOptions) Complete(args []string, f *clientcmd.Factory) erro
 		if err != nil {
 			return err
 		}
-		namespace, _, err := f.Factory.DefaultNamespace()
+		namespace, _, err := f.DefaultNamespace()
 		if err != nil {
 			return err
 		}
