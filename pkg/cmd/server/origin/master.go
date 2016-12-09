@@ -43,6 +43,7 @@ import (
 	"k8s.io/kubernetes/pkg/genericapiserver"
 	kgenericfilters "k8s.io/kubernetes/pkg/genericapiserver/filters"
 	openapicommon "k8s.io/kubernetes/pkg/genericapiserver/openapi/common"
+	"k8s.io/kubernetes/pkg/healthz"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util/flowcontrol"
@@ -155,16 +156,8 @@ const (
 
 var (
 	excludedV1Types = sets.NewString()
-)
 
-// Run launches the OpenShift master by creating a kubernetes master, installing
-// OpenShift APIs into it and then running it.
-func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig) {
-	var (
-		extra []string
-		err   error
-	)
-	openAPIConfig := openapicommon.Config{
+	openAPIConfig = openapicommon.Config{
 		Definitions:    openapigenerated.OpenAPIDefinitions,
 		IgnorePrefixes: []string{"/swaggerapi", "/healthz", "/controllers", "/metrics", "/version/openshift"},
 		GetOperationIDAndTags: func(servePath string, r *restful.Route) (string, []string, error) {
@@ -262,8 +255,16 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 			},
 		},
 	}
-	kc.Master.GenericConfig.OpenAPIConfig = &openAPIConfig
+)
 
+// Run launches the OpenShift master by creating a kubernetes master, installing
+// OpenShift APIs into it and then running it.
+func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig) {
+	var (
+		extra []string
+		err   error
+	)
+	kc.Master.GenericConfig.OpenAPIConfig = &openAPIConfig
 	kc.Master.GenericConfig.LegacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, OpenShiftAPIPrefix, LegacyOpenShiftAPIPrefix)
 	kc.Master.GenericConfig.BuildHandlerChainsFunc, extra, err = c.buildHandlerChain(assetConfig)
 	if err != nil {
@@ -274,6 +275,8 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 	if err != nil {
 		glog.Fatalf("Failed to launch master: %v", err)
 	}
+
+	kmaster.GenericAPIServer.AddHealthzChecks(healthz.PingHealthz)
 
 	c.InstallProtectedAPI(kmaster.GenericAPIServer.HandlerContainer.Container)
 
@@ -322,6 +325,9 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 		extra = append(extra, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
 	*/
 
+	for _, s := range extra {
+		glog.Infof(s, c.Options.ServingInfo.BindAddress)
+	}
 	go kmaster.GenericAPIServer.PrepareRun().Run(utilwait.NeverStop)
 
 	// Attempt to verify the server came up for 20 seconds (100 tries * 100ms, 100ms timeout per try)
