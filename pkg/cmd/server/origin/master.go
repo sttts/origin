@@ -322,8 +322,7 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 		extra = append(extra, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
 	*/
 
-	// TODO(sttts): use master.GenericAPIServer.PrepareRun().Run(utilwait.NeverStop)
-	c.serve(kmaster.GenericAPIServer.Handler, extra)
+	go kmaster.GenericAPIServer.PrepareRun().Run(utilwait.NeverStop)
 
 	// Attempt to verify the server came up for 20 seconds (100 tries * 100ms, 100ms timeout per try)
 	cmdutil.WaitForSuccessfulDial(c.TLS, c.Options.ServingInfo.BindNetwork, c.Options.ServingInfo.BindAddress, 100*time.Millisecond, 100*time.Millisecond, 100)
