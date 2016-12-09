@@ -2912,6 +2912,7 @@ items:
     attributeRestrictions: null
     resources:
     - petsets
+    - statefulsets
     verbs:
     - list
     - watch
@@ -2920,6 +2921,7 @@ items:
     attributeRestrictions: null
     resources:
     - petsets
+    - statefulsets
     verbs:
     - get
   - apiGroups:
