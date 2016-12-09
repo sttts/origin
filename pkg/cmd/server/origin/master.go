@@ -517,9 +517,6 @@ func (c *MasterConfig) InstallProtectedAPI(container *restful.Container) ([]stri
 	initAPIVersionRoute(root, OpenShiftAPIPrefix, currentAPIVersions...)
 
 	initControllerRoutes(root, "/controllers", c.Options.Controllers != configapi.ControllersDisabled, c.ControllerPlug)
-	// this overrides genericapiserver /healthz
-	// TODO(sttts): switch to upstream healthz handler
-	initHealthCheckRoute(root, "/healthz")
 	initReadinessCheckRoute(root, "/healthz/ready", c.ProjectAuthorizationCache.ReadyForAccess)
 	initVersionRoute(container, "/version/openshift")
 
