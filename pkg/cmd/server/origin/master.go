@@ -13,7 +13,6 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	restful "github.com/emicklei/go-restful"
-	"github.com/emicklei/go-restful/swagger"
 	"github.com/go-openapi/spec"
 	"github.com/golang/glog"
 	openapigenerated "github.com/openshift/origin/pkg/openapi"
@@ -43,7 +42,6 @@ import (
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/genericapiserver"
 	kgenericfilters "k8s.io/kubernetes/pkg/genericapiserver/filters"
-	"k8s.io/kubernetes/pkg/genericapiserver/openapi"
 	openapicommon "k8s.io/kubernetes/pkg/genericapiserver/openapi/common"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -166,56 +164,6 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 		extra []string
 		err   error
 	)
-
-	kc.Master.GenericConfig.LegacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, OpenShiftAPIPrefix, LegacyOpenShiftAPIPrefix)
-	kc.Master.GenericConfig.BuildHandlerChainsFunc, extra, err = c.buildHandlerChain(assetConfig)
-	if err != nil {
-		glog.Fatalf("Failed to launch master: %v", err)
-	}
-
-	kmaster, err := kc.Master.Complete().New()
-	if err != nil {
-		glog.Fatalf("Failed to launch master: %v", err)
-	}
-
-	c.InstallProtectedAPI(kmaster.GenericAPIServer.HandlerContainer.Container)
-
-	// v1 has to be printed separately since it's served from different endpoint than groups
-	if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, v1.SchemeGroupVersion) {
-		extra = append(extra, fmt.Sprintf("Started Kubernetes API at %%s%s", genericapiserver.DefaultLegacyAPIPrefix))
-	}
-	// TODO: this is a bit much - it exist in some code somewhere
-	versions := []unversioned.GroupVersion{
-		extv1beta1.SchemeGroupVersion,
-		batchv1.SchemeGroupVersion,
-		batchv2alpha1.SchemeGroupVersion,
-		autoscalingv1.SchemeGroupVersion,
-		certificatesv1alpha1.SchemeGroupVersion,
-		appsv1beta1.SchemeGroupVersion,
-		policyv1alpha1.SchemeGroupVersion,
-		federationv1beta1.SchemeGroupVersion,
-	}
-	for _, ver := range versions {
-		if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, ver) {
-			extra = append(extra, fmt.Sprintf("Started Kubernetes API %s at %%s%s", ver.String(), genericapiserver.APIGroupPrefix))
-		}
-	}
-
-	// install swagger
-	// TODO(sttts): use upstream Swagger route
-	webServices := kmaster.GenericAPIServer.HandlerContainer.RegisteredWebServices()
-	swaggerConfig := swagger.Config{
-		WebServicesUrl:   c.Options.MasterPublicURL,
-		WebServices:      webServices,
-		ApiPath:          swaggerAPIPrefix,
-		PostBuildHandler: customizeSwaggerDefinition,
-	}
-	// log nothing from swagger
-	swagger.LogInfo = func(format string, v ...interface{}) {}
-	swagger.RegisterSwaggerService(swaggerConfig, kmaster.GenericAPIServer.HandlerContainer.Container)
-	extra = append(extra, fmt.Sprintf("Started Swagger Schema API at %%s%s", swaggerAPIPrefix))
-
-	// TODO(sttts): use upstream OpenAPI route
 	openAPIConfig := openapicommon.Config{
 		Definitions:    openapigenerated.OpenAPIDefinitions,
 		IgnorePrefixes: []string{"/swaggerapi", "/healthz", "/controllers", "/metrics", "/version/openshift"},
@@ -314,10 +262,65 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 			},
 		},
 	}
-	if err := openapi.RegisterOpenAPIService(openAPIServePath, webServices, &openAPIConfig, kmaster.GenericAPIServer.HandlerContainer); err != nil {
-		glog.Fatalf("Failed to generate open api spec: %v", err)
+	kc.Master.GenericConfig.OpenAPIConfig = &openAPIConfig
+
+	kc.Master.GenericConfig.LegacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, OpenShiftAPIPrefix, LegacyOpenShiftAPIPrefix)
+	kc.Master.GenericConfig.BuildHandlerChainsFunc, extra, err = c.buildHandlerChain(assetConfig)
+	if err != nil {
+		glog.Fatalf("Failed to launch master: %v", err)
 	}
-	extra = append(extra, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
+
+	kmaster, err := kc.Master.Complete().New()
+	if err != nil {
+		glog.Fatalf("Failed to launch master: %v", err)
+	}
+
+	c.InstallProtectedAPI(kmaster.GenericAPIServer.HandlerContainer.Container)
+
+	// v1 has to be printed separately since it's served from different endpoint than groups
+	if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, v1.SchemeGroupVersion) {
+		extra = append(extra, fmt.Sprintf("Started Kubernetes API at %%s%s", genericapiserver.DefaultLegacyAPIPrefix))
+	}
+	// TODO: this is a bit much - it exist in some code somewhere
+	versions := []unversioned.GroupVersion{
+		extv1beta1.SchemeGroupVersion,
+		batchv1.SchemeGroupVersion,
+		batchv2alpha1.SchemeGroupVersion,
+		autoscalingv1.SchemeGroupVersion,
+		certificatesv1alpha1.SchemeGroupVersion,
+		appsv1beta1.SchemeGroupVersion,
+		policyv1alpha1.SchemeGroupVersion,
+		federationv1beta1.SchemeGroupVersion,
+	}
+	for _, ver := range versions {
+		if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, ver) {
+			extra = append(extra, fmt.Sprintf("Started Kubernetes API %s at %%s%s", ver.String(), genericapiserver.APIGroupPrefix))
+		}
+	}
+
+	// install swagger
+	// TODO(sttts): use upstream Swagger route
+	//webServices := kmaster.GenericAPIServer.HandlerContainer.RegisteredWebServices()
+	/*
+		swaggerConfig := swagger.Config{
+			WebServicesUrl:   c.Options.MasterPublicURL,
+			WebServices:      webServices,
+			ApiPath:          swaggerAPIPrefix,
+			PostBuildHandler: customizeSwaggerDefinition,
+		}
+		// log nothing from swagger
+		swagger.LogInfo = func(format string, v ...interface{}) {}
+		swagger.RegisterSwaggerService(swaggerConfig, kmaster.GenericAPIServer.HandlerContainer.Container)
+		extra = append(extra, fmt.Sprintf("Started Swagger Schema API at %%s%s", swaggerAPIPrefix))
+	*/
+
+	// TODO(sttts): use upstream OpenAPI route
+	/*
+		if err := openapi.RegisterOpenAPIService(openAPIServePath, webServices, &openAPIConfig, kmaster.GenericAPIServer.HandlerContainer); err != nil {
+			glog.Fatalf("Failed to generate open api spec: %v", err)
+		}
+		extra = append(extra, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
+	*/
 
 	// TODO(sttts): use master.GenericAPIServer.PrepareRun().Run(utilwait.NeverStop)
 	c.serve(kmaster.GenericAPIServer.Handler, extra)
