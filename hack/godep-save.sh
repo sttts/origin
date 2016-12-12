@@ -40,6 +40,7 @@ REQUIRED_BINS=(
   "k8s.io/kubernetes/cmd/libs/go2idl/go-to-protobuf/protoc-gen-gogo"
   "k8s.io/kubernetes/cmd/libs/go2idl/client-gen"
   "github.com/onsi/ginkgo/ginkgo"
+  "github.com/jteeuwen/go-bindata/go-bindata"
   "./..."
 )
 
