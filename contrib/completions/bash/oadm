@@ -1,3 +1,17 @@
+
+# Copyright 2016 The Kubernetes Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 # bash completion for oadm                                 -*- shell-script -*-
 
 __debug()
@@ -1942,6 +1956,8 @@ _oadm_drain()
     local_nonpersistent_flags+=("--grace-period=")
     flags+=("--ignore-daemonsets")
     local_nonpersistent_flags+=("--ignore-daemonsets")
+    flags+=("--timeout=")
+    local_nonpersistent_flags+=("--timeout=")
     flags+=("--as=")
     flags+=("--certificate-authority=")
     flags_with_completion+=("--certificate-authority")
@@ -4403,8 +4419,6 @@ _oadm_taint()
 
     flags+=("--all")
     local_nonpersistent_flags+=("--all")
-    flags+=("--include-extended-apis")
-    local_nonpersistent_flags+=("--include-extended-apis")
     flags+=("--no-headers")
     local_nonpersistent_flags+=("--no-headers")
     flags+=("--output=")
