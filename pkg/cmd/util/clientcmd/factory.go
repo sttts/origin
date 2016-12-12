@@ -23,6 +23,7 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/unversioned"
+	"k8s.io/kubernetes/pkg/api/validation"
 	"k8s.io/kubernetes/pkg/apimachinery/registered"
 	"k8s.io/kubernetes/pkg/apis/batch"
 	"k8s.io/kubernetes/pkg/apis/extensions"
@@ -67,7 +68,7 @@ func New(flags *pflag.FlagSet) *Factory {
 	clientConfig := DefaultClientConfig(flags)
 	clientConfig = defaultingClientConfig{clientConfig}
 	f := NewFactory(clientConfig)
-	f.BindFlags(flags)
+	f.Factory.BindFlags(flags)
 
 	return f
 }
@@ -160,13 +161,14 @@ To view or setup config directly use the 'config' command.`)}
 
 // Factory provides common options for OpenShift commands
 type Factory struct {
-	// TODO switch to an actual field instead of embedding
-	cmdutil.Factory
+	Factory               cmdutil.Factory
 	OpenShiftClientConfig kclientcmd.ClientConfig
 	clients               *clientCache
 
 	ImageResolutionOptions FlagBinder
 }
+
+var _ cmdutil.Factory = &Factory{}
 
 func DefaultGenerators(cmdName string) map[string]kubectl.Generator {
 	generators := map[string]map[string]kubectl.Generator{}
@@ -197,6 +199,14 @@ func NewFactory(clientConfig kclientcmd.ClientConfig) *Factory {
 	}
 
 	return w
+}
+
+func (f *Factory) FlagSet() *pflag.FlagSet {
+	return f.Factory.FlagSet()
+}
+
+func (f *Factory) DiscoveryClient() (discovery.CachedDiscoveryInterface, error) {
+	return f.Factory.DiscoveryClient()
 }
 
 func (f *Factory) Object() (meta.RESTMapper, runtime.ObjectTyper) {
@@ -271,6 +281,26 @@ func (f *Factory) UnstructuredObject() (meta.RESTMapper, runtime.ObjectTyper, er
 	return NewShortcutExpander(cachedDiscoverClient, cmdutil.ShortcutExpander{RESTMapper: mapper}), typer, nil
 }
 
+func (f *Factory) Decoder(toInternal bool) runtime.Decoder {
+	return f.Factory.Decoder(toInternal)
+}
+
+func (f *Factory) JSONEncoder() runtime.Encoder {
+	return f.Factory.JSONEncoder()
+}
+
+func (f *Factory) ClientSet() (*kclientset.Clientset, error) {
+	return f.Factory.ClientSet()
+}
+
+func (f *Factory) RESTClient() (*restclient.RESTClient, error) {
+	return f.Factory.RESTClient()
+}
+
+func (f *Factory) ClientConfig() (*restclient.Config, error) {
+	return f.Factory.ClientConfig()
+}
+
 func (f *Factory) ClientForMapping(mapping *meta.RESTMapping) (resource.RESTClient, error) {
 	if latest.OriginKind(mapping.GroupVersionKind) {
 		mappingVersion := mapping.GroupVersionKind.GroupVersion()
@@ -324,6 +354,18 @@ func (f *Factory) Describer(mapping *meta.RESTMapping) (kubectl.Describer, error
 		return describer, nil
 	}
 	return f.Factory.Describer(mapping)
+}
+
+// Saves current resource name (or alias if any) in PrintOptions. Once saved, it will not be overwritten by the
+// kubernetes resource alias look-up, as it will notice a non-empty value in `options.Kind`
+func (f *Factory) Printer(mapping *meta.RESTMapping, options kubectl.PrintOptions) (kubectl.ResourcePrinter, error) {
+	if mapping != nil {
+		options.Kind = mapping.Resource
+		if alias, ok := resourceShortFormFor(mapping.Resource); ok {
+			options.Kind = alias
+		}
+	}
+	return describe.NewHumanReadablePrinter(options), nil
 }
 
 func (f *Factory) Scaler(mapping *meta.RESTMapping) (kubectl.Scaler, error) {
@@ -391,18 +433,41 @@ func (f *Factory) Reaper(mapping *meta.RESTMapping) (kubectl.Reaper, error) {
 	return f.Factory.Reaper(mapping)
 }
 
-func (f *Factory) Generators(cmdName string) map[string]kubectl.Generator {
-	originGenerators := DefaultGenerators(cmdName)
-	kubeGenerators := f.Factory.Generators(cmdName)
+func (f *Factory) HistoryViewer(mapping *meta.RESTMapping) (kubectl.HistoryViewer, error) {
+	switch mapping.GroupVersionKind.GroupKind() {
+	case deployapi.Kind("DeploymentConfig"):
+		oc, kc, err := f.Clients()
+		if err != nil {
+			return nil, err
+		}
+		return deploycmd.NewDeploymentConfigHistoryViewer(oc, kc), nil
+	}
+	return f.Factory.HistoryViewer(mapping)
+}
 
-	ret := map[string]kubectl.Generator{}
-	for k, v := range kubeGenerators {
-		ret[k] = v
+func (f *Factory) Rollbacker(mapping *meta.RESTMapping) (kubectl.Rollbacker, error) {
+	switch mapping.GroupVersionKind.GroupKind() {
+	case deployapi.Kind("DeploymentConfig"):
+		oc, _, err := f.Clients()
+		if err != nil {
+			return nil, err
+		}
+		return deploycmd.NewDeploymentConfigRollbacker(oc), nil
 	}
-	for k, v := range originGenerators {
-		ret[k] = v
+	return f.Factory.Rollbacker(mapping)
+}
+
+func (f *Factory) StatusViewer(mapping *meta.RESTMapping) (kubectl.StatusViewer, error) {
+	oc, _, err := f.Clients()
+	if err != nil {
+		return nil, err
 	}
-	return ret
+
+	switch mapping.GroupVersionKind.GroupKind() {
+	case deployapi.Kind("DeploymentConfig"):
+		return deploycmd.NewDeploymentConfigStatusViewer(oc), nil
+	}
+	return f.Factory.StatusViewer(mapping)
 }
 
 func (f *Factory) MapBasedSelectorForObject(object runtime.Object) (string, error) {
@@ -421,6 +486,19 @@ func (f *Factory) PortsForObject(object runtime.Object) ([]string, error) {
 	default:
 		return f.Factory.PortsForObject(object)
 	}
+}
+
+func (f *Factory) ProtocolsForObject(object runtime.Object) (map[string]string, error) {
+	switch t := object.(type) {
+	case *deployapi.DeploymentConfig:
+		return getProtocols(t.Spec.Template.Spec), nil
+	default:
+		return f.Factory.ProtocolsForObject(object)
+	}
+}
+
+func (f *Factory) LabelsForObject(object runtime.Object) (map[string]string, error) {
+	return f.Factory.LabelsForObject(object)
 }
 
 func (f *Factory) LogsForObject(object, options runtime.Object) (*restclient.Request, error) {
@@ -477,127 +555,6 @@ func (f *Factory) LogsForObject(object, options runtime.Object) (*restclient.Req
 	}
 }
 
-// Saves current resource name (or alias if any) in PrintOptions. Once saved, it will not be overwritten by the
-// kubernetes resource alias look-up, as it will notice a non-empty value in `options.Kind`
-func (f *Factory) Printer(mapping *meta.RESTMapping, options kubectl.PrintOptions) (kubectl.ResourcePrinter, error) {
-	if mapping != nil {
-		options.Kind = mapping.Resource
-		if alias, ok := resourceShortFormFor(mapping.Resource); ok {
-			options.Kind = alias
-		}
-	}
-	return describe.NewHumanReadablePrinter(options), nil
-}
-
-// PrintResourceInfos receives a list of resource infos and prints versioned objects if a generic output format was specified
-// otherwise, it iterates through info objects, printing each resource with a unique printer for its mapping
-func (f *Factory) PrintResourceInfos(cmd *cobra.Command, infos []*resource.Info, out io.Writer) error {
-	printer, generic, err := cmdutil.PrinterForCommand(cmd)
-	if err != nil {
-		return nil
-	}
-	if !generic {
-		for _, info := range infos {
-			mapping := info.ResourceMapping()
-			printer, err := f.PrinterForMapping(cmd, mapping, false)
-			if err != nil {
-				return err
-			}
-			if err := printer.PrintObj(info.Object, out); err != nil {
-				return nil
-			}
-		}
-		return nil
-	}
-
-	clientConfig, err := f.ClientConfig()
-	if err != nil {
-		return err
-	}
-	outputVersion, err := cmdutil.OutputVersion(cmd, clientConfig.GroupVersion)
-	if err != nil {
-		return err
-	}
-	object, err := resource.AsVersionedObject(infos, len(infos) != 1, outputVersion, api.Codecs.LegacyCodec(outputVersion))
-	if err != nil {
-		return err
-	}
-	return printer.PrintObj(object, out)
-
-}
-
-func (f *Factory) CanBeExposed(kind unversioned.GroupKind) error {
-	if kind == deployapi.Kind("DeploymentConfig") {
-		return nil
-	}
-	return f.Factory.CanBeExposed(kind)
-}
-
-func (f *Factory) CanBeAutoscaled(kind unversioned.GroupKind) error {
-	if kind == deployapi.Kind("DeploymentConfig") {
-		return nil
-	}
-	return f.Factory.CanBeAutoscaled(kind)
-}
-
-func (f *Factory) AttachablePodForObject(object runtime.Object) (*api.Pod, error) {
-	switch t := object.(type) {
-	case *deployapi.DeploymentConfig:
-		_, kc, err := f.Clients()
-		if err != nil {
-			return nil, err
-		}
-		selector := labels.SelectorFromSet(t.Spec.Selector)
-		f := func(pods []*api.Pod) sort.Interface { return sort.Reverse(controller.ActivePods(pods)) }
-		pod, _, err := cmdutil.GetFirstPod(kc, t.Namespace, selector, 1*time.Minute, f)
-		return pod, err
-	default:
-		return f.Factory.AttachablePodForObject(object)
-	}
-}
-
-func (f *Factory) UpdatePodSpecForObject(obj runtime.Object, fn func(*api.PodSpec) error) (bool, error) {
-	switch t := obj.(type) {
-	case *deployapi.DeploymentConfig:
-		template := t.Spec.Template
-		if template == nil {
-			t.Spec.Template = template
-			template = &api.PodTemplateSpec{}
-		}
-		return true, fn(&template.Spec)
-	default:
-		return f.Factory.UpdatePodSpecForObject(obj, fn)
-	}
-}
-
-func (f *Factory) ProtocolsForObject(object runtime.Object) (map[string]string, error) {
-	switch t := object.(type) {
-	case *deployapi.DeploymentConfig:
-		return getProtocols(t.Spec.Template.Spec), nil
-	default:
-		return f.Factory.ProtocolsForObject(object)
-	}
-}
-
-func (f *Factory) SwaggerSchema(gvk unversioned.GroupVersionKind) (*swagger.ApiDeclaration, error) {
-	if !latest.OriginKind(gvk) {
-		return f.Factory.SwaggerSchema(gvk)
-	}
-	// TODO: we need to register the OpenShift API under the Kube group, and start returning the OpenShift
-	// group from the scheme.
-	oc, _, err := f.Clients()
-	if err != nil {
-		return nil, err
-	}
-	return f.OriginSwaggerSchema(oc.RESTClient, gvk.GroupVersion())
-}
-
-func (f *Factory) EditorEnvs() []string {
-	return []string{"OC_EDITOR", "EDITOR"}
-}
-
-func (f *Factory) PrintObjectSpecificMessage(obj runtime.Object, out io.Writer) {}
-
 func (f *Factory) Pauser(info *resource.Info) (bool, error) {
 	switch t := info.Object.(type) {
 	case *deployapi.DeploymentConfig:
@@ -652,41 +609,249 @@ func (f *Factory) ResolveImage(image string) (string, error) {
 	return imageutil.ResolveImagePullSpec(oc, oc, options.Source, image, namespace)
 }
 
-func (f *Factory) HistoryViewer(mapping *meta.RESTMapping) (kubectl.HistoryViewer, error) {
-	switch mapping.GroupVersionKind.GroupKind() {
-	case deployapi.Kind("DeploymentConfig"):
-		oc, kc, err := f.Clients()
-		if err != nil {
-			return nil, err
-		}
-		return deploycmd.NewDeploymentConfigHistoryViewer(oc, kc), nil
-	}
-	return f.Factory.HistoryViewer(mapping)
+func (f *Factory) Validator(validate bool, cacheDir string) (validation.Schema, error) {
+	return f.Factory.Validator(validate, cacheDir)
 }
 
-func (f *Factory) Rollbacker(mapping *meta.RESTMapping) (kubectl.Rollbacker, error) {
-	switch mapping.GroupVersionKind.GroupKind() {
-	case deployapi.Kind("DeploymentConfig"):
-		oc, _, err := f.Clients()
-		if err != nil {
-			return nil, err
-		}
-		return deploycmd.NewDeploymentConfigRollbacker(oc), nil
+func (f *Factory) SwaggerSchema(gvk unversioned.GroupVersionKind) (*swagger.ApiDeclaration, error) {
+	if !latest.OriginKind(gvk) {
+		return f.Factory.SwaggerSchema(gvk)
 	}
-	return f.Factory.Rollbacker(mapping)
-}
-
-func (f *Factory) StatusViewer(mapping *meta.RESTMapping) (kubectl.StatusViewer, error) {
+	// TODO: we need to register the OpenShift API under the Kube group, and start returning the OpenShift
+	// group from the scheme.
 	oc, _, err := f.Clients()
 	if err != nil {
 		return nil, err
 	}
+	return f.OriginSwaggerSchema(oc.RESTClient, gvk.GroupVersion())
+}
 
-	switch mapping.GroupVersionKind.GroupKind() {
-	case deployapi.Kind("DeploymentConfig"):
-		return deploycmd.NewDeploymentConfigStatusViewer(oc), nil
+func (f *Factory) DefaultNamespace() (string, bool, error) {
+	return f.Factory.DefaultNamespace()
+}
+
+func (f *Factory) Generators(cmdName string) map[string]kubectl.Generator {
+	originGenerators := DefaultGenerators(cmdName)
+	kubeGenerators := f.Factory.Generators(cmdName)
+
+	ret := map[string]kubectl.Generator{}
+	for k, v := range kubeGenerators {
+		ret[k] = v
 	}
-	return f.Factory.StatusViewer(mapping)
+	for k, v := range originGenerators {
+		ret[k] = v
+	}
+	return ret
+}
+
+func (f *Factory) CanBeExposed(kind unversioned.GroupKind) error {
+	if kind == deployapi.Kind("DeploymentConfig") {
+		return nil
+	}
+	return f.Factory.CanBeExposed(kind)
+}
+
+func (f *Factory) CanBeAutoscaled(kind unversioned.GroupKind) error {
+	if kind == deployapi.Kind("DeploymentConfig") {
+		return nil
+	}
+	return f.Factory.CanBeAutoscaled(kind)
+}
+
+func (f *Factory) AttachablePodForObject(object runtime.Object) (*api.Pod, error) {
+	switch t := object.(type) {
+	case *deployapi.DeploymentConfig:
+		_, kc, err := f.Clients()
+		if err != nil {
+			return nil, err
+		}
+		selector := labels.SelectorFromSet(t.Spec.Selector)
+		f := func(pods []*api.Pod) sort.Interface { return sort.Reverse(controller.ActivePods(pods)) }
+		pod, _, err := cmdutil.GetFirstPod(kc, t.Namespace, selector, 1*time.Minute, f)
+		return pod, err
+	default:
+		return f.Factory.AttachablePodForObject(object)
+	}
+}
+
+func (f *Factory) UpdatePodSpecForObject(obj runtime.Object, fn func(*api.PodSpec) error) (bool, error) {
+	switch t := obj.(type) {
+	case *deployapi.DeploymentConfig:
+		template := t.Spec.Template
+		if template == nil {
+			t.Spec.Template = template
+			template = &api.PodTemplateSpec{}
+		}
+		return true, fn(&template.Spec)
+	default:
+		return f.Factory.UpdatePodSpecForObject(obj, fn)
+	}
+}
+
+func (f *Factory) EditorEnvs() []string {
+	return []string{"OC_EDITOR", "EDITOR"}
+}
+
+func (f *Factory) PrintObjectSpecificMessage(obj runtime.Object, out io.Writer) {}
+
+func (f *Factory) Command() string {
+	return f.Factory.Command()
+}
+
+func (f *Factory) BindFlags(flags *pflag.FlagSet) {
+	f.Factory.BindFlags(flags)
+}
+
+func (f *Factory) BindExternalFlags(flags *pflag.FlagSet) {
+	f.Factory.BindExternalFlags(flags)
+}
+
+func (f *Factory) DefaultResourceFilterOptions(cmd *cobra.Command, withNamespace bool) *kubectl.PrintOptions {
+	return f.Factory.DefaultResourceFilterOptions(cmd, withNamespace)
+}
+
+func (f *Factory) DefaultResourceFilterFunc() kubectl.Filters {
+	return f.Factory.DefaultResourceFilterFunc()
+}
+
+func (f *Factory) PrintObject(cmd *cobra.Command, mapper meta.RESTMapper, obj runtime.Object, out io.Writer) error {
+	return f.Factory.PrintObject(cmd, mapper, obj, out)
+}
+
+// TODO REMOVE ME. COPIED FROM KUBE AS PART OF THE COPY/PASTE FOR
+// PrinterForMapping
+// Whether this cmd need watching objects.
+func isWatch(cmd *cobra.Command) bool {
+	if w, err := cmd.Flags().GetBool("watch"); w && err == nil {
+		return true
+	}
+
+	if wo, err := cmd.Flags().GetBool("watch-only"); wo && err == nil {
+		return true
+	}
+
+	return false
+}
+
+// TODO REMOVE ME. COPIED FROM KUBE AS PART OF THE COPY/PASTE FOR
+// PrinterForMapping
+func maybeWrapSortingPrinter(cmd *cobra.Command, printer kubectl.ResourcePrinter) kubectl.ResourcePrinter {
+	sorting, err := cmd.Flags().GetString("sort-by")
+	if err != nil {
+		// error can happen on missing flag or bad flag type.  In either case, this command didn't intent to sort
+		return printer
+	}
+
+	if len(sorting) != 0 {
+		return &kubectl.SortingPrinter{
+			Delegate:  printer,
+			SortField: fmt.Sprintf("{%s}", sorting),
+		}
+	}
+	return printer
+}
+
+// PrinterForMapping returns a printer suitable for displaying the provided resource type.
+// Requires that printer flags have been added to cmd (see AddPrinterFlags).
+func (f *Factory) PrinterForMapping(cmd *cobra.Command, mapping *meta.RESTMapping, withNamespace bool) (kubectl.ResourcePrinter, error) {
+	// TODO FIX ME. COPIED FROM KUBE AS PART OF THE COPY/PASTE FOR
+	// PrinterForMapping
+	if latest.OriginKind(mapping.GroupVersionKind) {
+		printer, ok, err := cmdutil.PrinterForCommand(cmd)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			clientConfig, err := f.ClientConfig()
+			if err != nil {
+				return nil, err
+			}
+
+			version, err := cmdutil.OutputVersion(cmd, clientConfig.GroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			if version.Empty() && mapping != nil {
+				version = mapping.GroupVersionKind.GroupVersion()
+			}
+			if version.Empty() {
+				return nil, fmt.Errorf("you must specify an output-version when using this output format")
+			}
+
+			if mapping != nil {
+				printer = kubectl.NewVersionedPrinter(printer, mapping.ObjectConvertor, version, mapping.GroupVersionKind.GroupVersion())
+			}
+
+		} else {
+			// Some callers do not have "label-columns" so we can't use the GetFlagStringSlice() helper
+			columnLabel, err := cmd.Flags().GetStringSlice("label-columns")
+			if err != nil {
+				columnLabel = []string{}
+			}
+			printer, err = f.Printer(mapping, kubectl.PrintOptions{
+				NoHeaders:          cmdutil.GetFlagBool(cmd, "no-headers"),
+				WithNamespace:      withNamespace,
+				Wide:               cmdutil.GetWideFlag(cmd),
+				ShowAll:            cmdutil.GetFlagBool(cmd, "show-all"),
+				ShowLabels:         cmdutil.GetFlagBool(cmd, "show-labels"),
+				AbsoluteTimestamps: isWatch(cmd),
+				ColumnLabels:       columnLabel,
+			})
+			if err != nil {
+				return nil, err
+			}
+			printer = maybeWrapSortingPrinter(cmd, printer)
+		}
+
+		return printer, nil
+	}
+
+	return f.Factory.PrinterForMapping(cmd, mapping, withNamespace)
+}
+
+func (f *Factory) NewBuilder() *resource.Builder {
+	return f.Factory.NewBuilder()
+}
+
+func (f *Factory) SuggestedPodTemplateResources() []unversioned.GroupResource {
+	return f.Factory.SuggestedPodTemplateResources()
+}
+
+// PrintResourceInfos receives a list of resource infos and prints versioned objects if a generic output format was specified
+// otherwise, it iterates through info objects, printing each resource with a unique printer for its mapping
+func (f *Factory) PrintResourceInfos(cmd *cobra.Command, infos []*resource.Info, out io.Writer) error {
+	printer, generic, err := cmdutil.PrinterForCommand(cmd)
+	if err != nil {
+		return nil
+	}
+	if !generic {
+		for _, info := range infos {
+			mapping := info.ResourceMapping()
+			printer, err := f.PrinterForMapping(cmd, mapping, false)
+			if err != nil {
+				return err
+			}
+			if err := printer.PrintObj(info.Object, out); err != nil {
+				return nil
+			}
+		}
+		return nil
+	}
+
+	clientConfig, err := f.ClientConfig()
+	if err != nil {
+		return err
+	}
+	outputVersion, err := cmdutil.OutputVersion(cmd, clientConfig.GroupVersion)
+	if err != nil {
+		return err
+	}
+	object, err := resource.AsVersionedObject(infos, len(infos) != 1, outputVersion, api.Codecs.LegacyCodec(outputVersion))
+	if err != nil {
+		return err
+	}
+	return printer.PrintObj(object, out)
+
 }
 
 // FlagBinder represents an interface that allows to bind extra flags into commands.
