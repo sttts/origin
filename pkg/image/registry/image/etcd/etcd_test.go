@@ -235,7 +235,7 @@ func TestCreateSetsMetadata(t *testing.T) {
 	for i, test := range testCases {
 		storage, server := newStorage(t)
 		defer server.Terminate(t)
-	defer storage.Store.DestroyFunc()
+		defer storage.Store.DestroyFunc()
 
 		obj, err := storage.Create(kapi.NewDefaultContext(), test.image)
 		if obj == nil {
@@ -383,7 +383,7 @@ func TestUpdateResetsMetadata(t *testing.T) {
 	for i, test := range testCases {
 		storage, server := newStorage(t)
 		defer server.Terminate(t)
-	defer storage.Store.DestroyFunc()
+		defer storage.Store.DestroyFunc()
 
 		// Clear the resource version before creating
 		test.existing.ResourceVersion = ""
