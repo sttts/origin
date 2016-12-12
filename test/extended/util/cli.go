@@ -182,7 +182,7 @@ func (c *CLI) Verbose() *CLI {
 // Client provides an OpenShift client for the current user. If the user is not
 // set, then it provides client for the cluster admin user
 func (c *CLI) Client() *client.Client {
-	_, _, clientConfig, err := configapi.GetKubeClient(c.configPath, nil)
+	_, clientConfig, err := configapi.GetKubeClient(c.configPath, nil)
 	osClient, err := client.New(clientConfig)
 	if err != nil {
 		FatalErr(err)
@@ -192,7 +192,7 @@ func (c *CLI) Client() *client.Client {
 
 // AdminClient provides an OpenShift client for the cluster admin user.
 func (c *CLI) AdminClient() *client.Client {
-	_, _, clientConfig, err := configapi.GetKubeClient(c.adminConfigPath, nil)
+	_, clientConfig, err := configapi.GetKubeClient(c.adminConfigPath, nil)
 	osClient, err := client.New(clientConfig)
 	if err != nil {
 		FatalErr(err)
@@ -202,7 +202,7 @@ func (c *CLI) AdminClient() *client.Client {
 
 // KubeClient provides a Kubernetes client for the current namespace
 func (c *CLI) KubeClient() *kclientset.Clientset {
-	_, kubeClient, err := configapi.GetKubeClient(c.configPath, nil)
+	kubeClient, _, err := configapi.GetKubeClient(c.configPath, nil)
 	if err != nil {
 		FatalErr(err)
 	}
@@ -211,7 +211,7 @@ func (c *CLI) KubeClient() *kclientset.Clientset {
 
 // AdminKubeClient provides a Kubernetes client for the cluster admin user.
 func (c *CLI) AdminKubeClient() *kclientset.Clientset {
-	_, kubeClient, err := configapi.GetKubeClient(c.adminConfigPath, nil)
+	kubeClient, _, err := configapi.GetKubeClient(c.adminConfigPath, nil)
 	if err != nil {
 		FatalErr(err)
 	}
