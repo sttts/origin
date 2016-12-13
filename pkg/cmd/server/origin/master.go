@@ -42,7 +42,9 @@ import (
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/genericapiserver"
 	kgenericfilters "k8s.io/kubernetes/pkg/genericapiserver/filters"
+	genericmux "k8s.io/kubernetes/pkg/genericapiserver/mux"
 	openapicommon "k8s.io/kubernetes/pkg/genericapiserver/openapi/common"
+	genericroutes "k8s.io/kubernetes/pkg/genericapiserver/routes"
 	"k8s.io/kubernetes/pkg/healthz"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -157,6 +159,8 @@ const (
 var (
 	excludedV1Types = sets.NewString()
 
+	legacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, OpenShiftAPIPrefix, LegacyOpenShiftAPIPrefix)
+
 	openAPIConfig = openapicommon.Config{
 		Definitions:    openapigenerated.OpenAPIDefinitions,
 		IgnorePrefixes: []string{"/swaggerapi", "/healthz", "/controllers", "/metrics", "/version/openshift"},
@@ -265,7 +269,7 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 		err   error
 	)
 	kc.Master.GenericConfig.OpenAPIConfig = &openAPIConfig
-	kc.Master.GenericConfig.LegacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, OpenShiftAPIPrefix, LegacyOpenShiftAPIPrefix)
+	kc.Master.GenericConfig.LegacyAPIGroupPrefixes = legacyAPIGroupPrefixes
 	kc.Master.GenericConfig.BuildHandlerChainsFunc, extra, err = c.buildHandlerChain(assetConfig)
 	if err != nil {
 		glog.Fatalf("Failed to launch master: %v", err)
@@ -276,9 +280,63 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 		glog.Fatalf("Failed to launch master: %v", err)
 	}
 
-	kmaster.GenericAPIServer.AddHealthzChecks(healthz.PingHealthz)
+	extra = append(extra, c.installHandlers(kmaster.GenericAPIServer.HandlerContainer)...)
 
-	c.InstallProtectedAPI(kmaster.GenericAPIServer.HandlerContainer.Container)
+	for _, s := range extra {
+		glog.Infof(s, c.Options.ServingInfo.BindAddress)
+	}
+	go kmaster.GenericAPIServer.PrepareRun().Run(utilwait.NeverStop)
+
+	// Attempt to verify the server came up for 20 seconds (100 tries * 100ms, 100ms timeout per try)
+	cmdutil.WaitForSuccessfulDial(c.TLS, c.Options.ServingInfo.BindNetwork, c.Options.ServingInfo.BindAddress, 100*time.Millisecond, 100*time.Millisecond, 100)
+}
+
+func (c *MasterConfig) RunInProxyMode(proxy *kubernetes.ProxyConfig, assetConfig *AssetConfig) {
+	handlerChain, extra, err := c.buildHandlerChain(assetConfig)
+	if err != nil {
+		glog.Fatalf("Failed to launch master: %v", err)
+	}
+
+	// TODO(sttts): create a genericapiserver here
+	container := genericmux.NewAPIContainer(http.NewServeMux(), kapi.Codecs)
+
+	// install /api proxy forwarder
+	proxyExtra, err := proxy.InstallAPI(container.Container)
+	if err != nil {
+		glog.Fatalf("Failed to launch master: %v", err)
+	}
+	extra = append(extra, proxyExtra...)
+
+	// install GenericAPIServer handlers manually, usually done by GenericAPIServer.PrepareRun()
+	healthz.InstallHandler(&container.NonSwaggerRoutes, healthz.PingHealthz)
+	url, err := url.Parse(c.Options.MasterPublicURL)
+	if err != nil {
+		glog.Fatalf("Failed to parse master public url %q: %v", c.Options.MasterPublicURL, err)
+	}
+	genericroutes.Swagger{ExternalAddress: url.Host}.Install(container)
+	genericroutes.OpenAPI{Config: &openAPIConfig}.Install(container)
+
+	// install origin handlers
+	extra = append(extra, c.installHandlers(container)...)
+
+	// TODO(sttts): split cmd/server/kubernetes config generation into generic and master-specific
+	// until then: create ad-hoc config
+	genericConfig := genericapiserver.NewConfig()
+	genericConfig.RequestContextMapper = c.RequestContextMapper
+	genericConfig.LegacyAPIGroupPrefixes = legacyAPIGroupPrefixes
+	genericConfig.MaxRequestsInFlight = c.Options.ServingInfo.MaxRequestsInFlight
+
+	secureHandler, _ := handlerChain(container.ServeMux, genericConfig)
+	c.serve(secureHandler, extra)
+
+	// Attempt to verify the server came up for 20 seconds (100 tries * 100ms, 100ms timeout per try)
+	cmdutil.WaitForSuccessfulDial(c.TLS, c.Options.ServingInfo.BindNetwork, c.Options.ServingInfo.BindAddress, 100*time.Millisecond, 100*time.Millisecond, 100)
+}
+
+func (c *MasterConfig) installHandlers(apiContainer *genericmux.APIContainer) []string {
+	var extra []string
+
+	c.InstallProtectedAPI(apiContainer.Container)
 
 	// v1 has to be printed separately since it's served from different endpoint than groups
 	if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, v1.SchemeGroupVersion) {
@@ -325,13 +383,7 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 		extra = append(extra, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
 	*/
 
-	for _, s := range extra {
-		glog.Infof(s, c.Options.ServingInfo.BindAddress)
-	}
-	go kmaster.GenericAPIServer.PrepareRun().Run(utilwait.NeverStop)
-
-	// Attempt to verify the server came up for 20 seconds (100 tries * 100ms, 100ms timeout per try)
-	cmdutil.WaitForSuccessfulDial(c.TLS, c.Options.ServingInfo.BindNetwork, c.Options.ServingInfo.BindAddress, 100*time.Millisecond, 100*time.Millisecond, 100)
+	return extra
 }
 
 func (c *MasterConfig) buildHandlerChain(assetConfig *AssetConfig) (func(http.Handler, *genericapiserver.Config) (secure, insecure http.Handler), []string, error) {
