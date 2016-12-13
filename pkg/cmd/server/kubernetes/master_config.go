@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -274,6 +275,11 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 	}
 	genericConfig.LoopbackClientConfig = loopbackClientConfig
 	genericConfig.SecureServingInfo.BindNetwork = options.ServingInfo.BindNetwork
+	url, err := url.Parse(options.MasterPublicURL)
+	if err != nil {
+		glog.Fatalf("Error parsing master public url %q: %v", options.MasterPublicURL, err)
+	}
+	genericConfig.ExternalAddress = url.Host // TODO(sttts): verify that cutting off the path is ok (it's only used as Swagger base URL)
 
 	serviceIPRange, apiServerServiceIP, err := genericapiserver.DefaultServiceIPRange(server.GenericServerRunOptions.ServiceClusterIPRange)
 	if err != nil {
