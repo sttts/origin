@@ -463,7 +463,7 @@ func StartAPI(oc *origin.MasterConfig, kc *kubernetes.MasterConfig) error {
 
 	// unprotectedInstallers := []origin.APIInstaller{}
 
-	var standaloneAssetConfig, embeddedAssetConfig *origin.AssetConfig
+	var standaloneAssetConfig, embeddedAssetConfig, proxyAssetConfig *origin.AssetConfig
 	if oc.WebConsoleEnabled() {
 		overrideConfig, err := getResourceOverrideConfig(oc)
 		if err != nil {
@@ -476,6 +476,7 @@ func StartAPI(oc *origin.MasterConfig, kc *kubernetes.MasterConfig) error {
 
 		if oc.Options.AssetConfig.ServingInfo.BindAddress == oc.Options.ServingInfo.BindAddress {
 			embeddedAssetConfig = config
+			proxyAssetConfig = config
 		} else {
 			standaloneAssetConfig = config
 		}
@@ -491,10 +492,7 @@ func StartAPI(oc *origin.MasterConfig, kc *kubernetes.MasterConfig) error {
 		proxy := &kubernetes.ProxyConfig{
 			ClientConfig: kubeClientConfig,
 		}
-		_ = proxy
-		// TODO(sttts): implement proxy mode
-		panic("1.5 REBASE DOES NOT SUPPORT PROXY MODE YET")
-		//oc.Run([]origin.APIInstaller{proxy}, unprotectedInstallers)
+		oc.RunInProxyMode(proxy, proxyAssetConfig)
 	}
 
 	// start up the informers that we're trying to use in the API server

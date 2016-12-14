@@ -317,7 +317,7 @@ func (c *MasterConfig) RunInProxyMode(proxy *kubernetes.ProxyConfig, assetConfig
 	genericroutes.OpenAPI{Config: &openAPIConfig}.Install(container)
 
 	// install origin handlers
-	extra = append(extra, c.installHandlers(container)...)
+	c.InstallProtectedAPI(container.Container)
 
 	// TODO(sttts): split cmd/server/kubernetes config generation into generic and master-specific
 	// until then: create ad-hoc config
