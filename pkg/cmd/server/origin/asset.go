@@ -49,8 +49,12 @@ func (c *AssetConfig) WithAssets(handler http.Handler) (http.Handler, error) {
 		return nil, err
 	}
 
+	if !strings.HasSuffix(publicURL.Path, "/") {
+		publicURL.Path = publicURL.Path + "/"
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if strings.HasPrefix(req.URL.Path, publicURL.Path) {
+		if strings.HasPrefix(req.URL.Path + "/", publicURL.Path) {
 			mux.ServeHTTP(w, req)
 		} else {
 			handler.ServeHTTP(w, req)
