@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,7 +20,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"gopkg.in/natefinch/lumberjack.v2"
 
-	federationv1beta1 "k8s.io/kubernetes/federation/apis/federation/v1beta1"
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/rest"
@@ -27,14 +27,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/v1"
 	kubeapiv1 "k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/apimachinery/registered"
-	appsv1beta1 "k8s.io/kubernetes/pkg/apis/apps/v1beta1"
-	autoscalingv1 "k8s.io/kubernetes/pkg/apis/autoscaling/v1"
-	batchv1 "k8s.io/kubernetes/pkg/apis/batch/v1"
-	batchv2alpha1 "k8s.io/kubernetes/pkg/apis/batch/v2alpha1"
-	certificatesv1alpha1 "k8s.io/kubernetes/pkg/apis/certificates/v1alpha1"
-	extv1beta1 "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
 	v1beta1extensions "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
-	policyv1alpha1 "k8s.io/kubernetes/pkg/apis/policy/v1alpha1"
 	"k8s.io/kubernetes/pkg/apiserver"
 	kapiserverfilters "k8s.io/kubernetes/pkg/apiserver/filters"
 	apiserveropenapi "k8s.io/kubernetes/pkg/apiserver/openapi"
@@ -333,6 +326,12 @@ func (c *MasterConfig) RunInProxyMode(proxy *kubernetes.ProxyConfig, assetConfig
 	cmdutil.WaitForSuccessfulDial(c.TLS, c.Options.ServingInfo.BindNetwork, c.Options.ServingInfo.BindAddress, 100*time.Millisecond, 100*time.Millisecond, 100)
 }
 
+type sortedGroupVersions []unversioned.GroupVersion
+
+func (s sortedGroupVersions) Len() int           { return len(s) }
+func (s sortedGroupVersions) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+func (s sortedGroupVersions) Less(i, j int) bool { return s[i].Group < s[j].Group }
+
 func (c *MasterConfig) installHandlers(apiContainer *genericmux.APIContainer) []string {
 	var extra []string
 
@@ -342,18 +341,13 @@ func (c *MasterConfig) installHandlers(apiContainer *genericmux.APIContainer) []
 	if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, v1.SchemeGroupVersion) {
 		extra = append(extra, fmt.Sprintf("Started Kubernetes API at %%s%s", genericapiserver.DefaultLegacyAPIPrefix))
 	}
-	// TODO: this is a bit much - it exist in some code somewhere
-	versions := []unversioned.GroupVersion{
-		extv1beta1.SchemeGroupVersion,
-		batchv1.SchemeGroupVersion,
-		batchv2alpha1.SchemeGroupVersion,
-		autoscalingv1.SchemeGroupVersion,
-		certificatesv1alpha1.SchemeGroupVersion,
-		appsv1beta1.SchemeGroupVersion,
-		policyv1alpha1.SchemeGroupVersion,
-		federationv1beta1.SchemeGroupVersion,
-	}
+	versions := registered.EnabledVersions()
+	sort.Sort(sortedGroupVersions(versions))
 	for _, ver := range versions {
+		if ver.String() == "v1" {
+			// skip legacy v1 as we handle that above
+			continue
+		}
 		if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, ver) {
 			extra = append(extra, fmt.Sprintf("Started Kubernetes API %s at %%s%s", ver.String(), genericapiserver.APIGroupPrefix))
 		}
