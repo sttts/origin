@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"path"
-	"strings"
 
 	"github.com/RangelReale/osin"
 	"github.com/RangelReale/osincli"
@@ -81,33 +80,11 @@ const (
 // WithOAuth decorates the given handler by serving the OAuth2 endpoints while
 // passing through all other requests to the given handler.
 func (c *AuthConfig) WithOAuth(handler http.Handler) (http.Handler, error) {
-	mux, err := c.handler()
-	if err != nil {
-		return nil, err
-	}
-
-	oauthPrefixes := []string{
-		OpenShiftOAuthAPIPrefix,
-		openShiftLoginPrefix,
-		OpenShiftApprovePrefix,
-		OpenShiftOAuthCallbackPrefix,
-	}
-
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		for _, prefix := range oauthPrefixes {
-			if strings.HasPrefix(req.URL.Path, prefix) {
-				mux.ServeHTTP(w, req)
-				return
-			}
-		}
-
-		handler.ServeHTTP(w, req)
-	}), nil
-}
-
-func (c *AuthConfig) handler() (http.Handler, error) {
 	baseMux := http.NewServeMux()
 	mux := c.possiblyWrapMux(baseMux)
+
+	// pass through all other requests
+	mux.Handle("/", handler)
 
 	clientStorage, err := clientetcd.NewREST(c.RESTOptionsGetter)
 	if err != nil {
