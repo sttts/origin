@@ -427,7 +427,7 @@ func (c *MasterConfig) InstallProtectedAPI(apiContainer *genericmux.APIContainer
 
 	// Set up OAuth metadata only if we are configured to use OAuth
 	if c.Options.OAuthConfig != nil {
-		initOAuthAuthorizationServerMetadataRoute(apiContainer.Container, oauthMetadataEndpoint, c.Options.OAuthConfig.MasterPublicURL)
+		initOAuthAuthorizationServerMetadataRoute(apiContainer, oauthMetadataEndpoint, c.Options.OAuthConfig.MasterPublicURL)
 	}
 
 	return messages, nil
@@ -466,7 +466,7 @@ func writeJSON(resp *restful.Response, json []byte) {
 // initOAuthAuthorizationServerMetadataRoute initializes an HTTP endpoint for OAuth 2.0 Authorization Server Metadata discovery
 // https://tools.ietf.org/id/draft-ietf-oauth-discovery-04.html#rfc.section.2
 // masterPublicURL should be internally and externally routable to allow all users to discover this information
-func initOAuthAuthorizationServerMetadataRoute(container *restful.Container, path, masterPublicURL string) {
+func initOAuthAuthorizationServerMetadataRoute(apiContainer *genericmux.APIContainer, path, masterPublicURL string) {
 	// Build OAuth metadata once
 	metadata, err := json.MarshalIndent(discovery.Get(masterPublicURL, OpenShiftOAuthAuthorizeURL(masterPublicURL), OpenShiftOAuthTokenURL(masterPublicURL)), "", "  ")
 	if err != nil {
@@ -474,19 +474,23 @@ func initOAuthAuthorizationServerMetadataRoute(container *restful.Container, pat
 		return
 	}
 
+	secretContainer := restful.Container{
+		ServeMux: apiContainer.SecretRoutes.(*http.ServeMux), // we know it's a *http.ServeMux. In kube 1.6, the type will actually be correct.
+	}
+
 	// Set up a service to return the OAuth metadata.
-	oauthWS := new(restful.WebService)
-	oauthWS.Path(path)
-	oauthWS.Doc("OAuth 2.0 Authorization Server Metadata")
-	oauthWS.Route(
-		oauthWS.GET("/").To(func(_ *restful.Request, resp *restful.Response) {
+	ws := new(restful.WebService)
+	ws.Path(path)
+	ws.Doc("OAuth 2.0 Authorization Server Metadata")
+	ws.Route(
+		ws.GET("/").To(func(_ *restful.Request, resp *restful.Response) {
 			writeJSON(resp, metadata)
 		}).
 			Doc("get the server's OAuth 2.0 Authorization Server Metadata").
 			Operation("getOAuthAuthorizationServerMetadata").
 			Produces(restful.MIME_JSON))
 
-	container.Add(oauthWS)
+	secretContainer.Add(ws)
 }
 
 func (c *MasterConfig) GetRestStorage() map[string]rest.Storage {
