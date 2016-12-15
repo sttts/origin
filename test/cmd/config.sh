@@ -24,7 +24,7 @@ os::cmd::expect_success_and_not_text 'oc get bc' 'does not exist'
   export HOME=/tmp
   unset KUBECONFIG
   unset KUBERNETES_MASTER
-  
+
   os::cmd::expect_failure_and_text 'oc get bc --user=""' 'Missing or incomplete configuration info'
   os::cmd::expect_failure_and_text 'oc get bc --context=""' 'Missing or incomplete configuration info'
   os::cmd::expect_failure_and_text 'oc get bc --cluster=""' 'Missing or incomplete configuration info'
@@ -36,7 +36,7 @@ os::cmd::expect_success_and_not_text 'oc get bc' 'does not exist'
   os::cmd::expect_failure_and_text 'oc get bc --config=missing' 'missing: no such file or directory'
 
   # make sure non-existing --cluster and --user can still be set
-  os::cmd::expect_success_and_text 'oc config set-context new-context-name --cluster=missing-cluster --user=missing-user --namespace=default --config=new-config.yaml' 'context "new-context-name" set'
+  os::cmd::expect_success_and_text 'oc config set-context new-context-name --cluster=missing-cluster --user=missing-user --namespace=default --config=new-config.yaml' 'Context "new-context-name" set'
   # os::cmd::expect_failure_and_text "env -u KUBECONFIG -u KUBERNETES_MASTER oc get bc --config=new-config.yaml" 'Missing or incomplete configuration info'
   os::cmd::expect_failure_and_text "oc get bc --config=new-config.yaml" 'Missing or incomplete configuration info'
 )
