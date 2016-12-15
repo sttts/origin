@@ -38,48 +38,15 @@ func (c *AssetConfig) WithAssets(handler http.Handler) (http.Handler, error) {
 		return handler, nil
 	}
 
-	publicURL, err := url.Parse(c.Options.PublicURL)
-	if err != nil {
-		return nil, err
-	}
-
-	mux := http.NewServeMux()
-	err = c.addHandlers(mux)
-	if err != nil {
-		return nil, err
-	}
-
-	if !strings.HasSuffix(publicURL.Path, "/") {
-		publicURL.Path = publicURL.Path + "/"
-	}
-
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if strings.HasPrefix(req.URL.Path + "/", publicURL.Path) {
-			mux.ServeHTTP(w, req)
-		} else {
-			handler.ServeHTTP(w, req)
-		}
-	}), nil
+	return c.addHandlers(handler)
 }
 
 // Run starts an http server for the static assets listening on the configured
 // bind address
 func (c *AssetConfig) Run() {
-	publicURL, err := url.Parse(c.Options.PublicURL)
+	mux, err := c.addHandlers(nil)
 	if err != nil {
 		glog.Fatal(err)
-	}
-
-	mux := http.NewServeMux()
-	err = c.addHandlers(mux)
-	if err != nil {
-		glog.Fatal(err)
-	}
-
-	if publicURL.Path != "/" {
-		mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
-			http.Redirect(w, req, publicURL.Path, http.StatusFound)
-		})
 	}
 
 	timeout := c.Options.ServingInfo.RequestTimeoutSeconds
@@ -168,20 +135,34 @@ func extensionPropertyArray(extensionProperties map[string]string) []assets.WebC
 	return extensionPropsArray
 }
 
-func (c *AssetConfig) addHandlers(mux *http.ServeMux) error {
-	assetHandler, err := c.buildAssetHandler()
-	if err != nil {
-		return err
-	}
-
+func (c *AssetConfig) addHandlers(handler http.Handler) (http.Handler, error) {
 	publicURL, err := url.Parse(c.Options.PublicURL)
 	if err != nil {
-		return err
+		return nil, err
+	}
+
+	mux := http.NewServeMux()
+	if handler != nil {
+		// colocated with other routes, so pass any unrecognized routes through to
+		// handler
+		mux.Handle("/", handler)
+	} else {
+		// standalone mode, so redirect any unrecognized routes to the console
+		if publicURL.Path != "/" {
+			mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+				http.Redirect(w, req, publicURL.Path, http.StatusFound)
+			})
+		}
+	}
+
+	assetHandler, err := c.buildAssetHandler()
+	if err != nil {
+		return nil, err
 	}
 
 	masterURL, err := url.Parse(c.Options.MasterPublicURL)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Web console assets
@@ -220,7 +201,7 @@ func (c *AssetConfig) addHandlers(mux *http.ServeMux) error {
 		}
 	}
 	if commonResources.Len() > 0 {
-		return fmt.Errorf("Resources for kubernetes and origin types intersect: %v", commonResources.List())
+		return nil, fmt.Errorf("Resources for kubernetes and origin types intersect: %v", commonResources.List())
 	}
 
 	// Generated web console config and server version
@@ -255,7 +236,7 @@ func (c *AssetConfig) addHandlers(mux *http.ServeMux) error {
 	configPath := path.Join(publicURL.Path, "config.js")
 	configHandler, err := assets.GeneratedConfigHandler(config, versionInfo, extensionProps)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	mux.Handle(configPath, assets.GzipHandler(configHandler))
 
@@ -263,7 +244,7 @@ func (c *AssetConfig) addHandlers(mux *http.ServeMux) error {
 	extScriptsPath := path.Join(publicURL.Path, "scripts/extensions.js")
 	extScriptsHandler, err := assets.ExtensionScriptsHandler(c.Options.ExtensionScripts, c.Options.ExtensionDevelopment)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	mux.Handle(extScriptsPath, assets.GzipHandler(extScriptsHandler))
 
@@ -271,7 +252,7 @@ func (c *AssetConfig) addHandlers(mux *http.ServeMux) error {
 	extStylesheetsPath := path.Join(publicURL.Path, "styles/extensions.css")
 	extStylesheetsHandler, err := assets.ExtensionStylesheetsHandler(c.Options.ExtensionStylesheets, c.Options.ExtensionDevelopment)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	mux.Handle(extStylesheetsPath, assets.GzipHandler(extStylesheetsHandler))
 
@@ -283,5 +264,5 @@ func (c *AssetConfig) addHandlers(mux *http.ServeMux) error {
 		mux.Handle(extPath, http.StripPrefix(extBasePath, extHandler))
 	}
 
-	return nil
+	return mux, nil
 }
