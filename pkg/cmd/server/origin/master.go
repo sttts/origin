@@ -21,7 +21,6 @@ import (
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/api/v1"
 	kubeapiv1 "k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/apimachinery/registered"
 	v1beta1extensions "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
@@ -103,6 +102,8 @@ import (
 	appliedclusterresourcequotaregistry "github.com/openshift/origin/pkg/quota/registry/appliedclusterresourcequota"
 	clusterresourcequotaregistry "github.com/openshift/origin/pkg/quota/registry/clusterresourcequota"
 
+	"github.com/openshift/origin/pkg/api"
+	"github.com/openshift/origin/pkg/api/v1"
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	clusterpolicyregistry "github.com/openshift/origin/pkg/authorization/registry/clusterpolicy"
 	clusterpolicystorage "github.com/openshift/origin/pkg/authorization/registry/clusterpolicy/etcd"
@@ -132,23 +133,14 @@ import (
 )
 
 const (
-	LegacyOpenShiftAPIPrefix = "/osapi" // TODO: make configurable
-	OpenShiftAPIPrefix       = "/oapi"  // TODO: make configurable
-	OpenShiftAPIV1           = "v1"
-	OpenShiftAPIPrefixV1     = OpenShiftAPIPrefix + "/" + OpenShiftAPIV1
-	swaggerAPIPrefix         = "/swaggerapi/"
-	openAPIServePath         = "/swagger.json"
+	openAPIServePath = "/swagger.json"
 	// Discovery endpoint for OAuth 2.0 Authorization Server Metadata
 	// See IETF Draft:
 	// https://tools.ietf.org/html/draft-ietf-oauth-discovery-04#section-2
 	oauthMetadataEndpoint = "/.well-known/oauth-authorization-server"
 )
 
-var (
-	excludedV1Types = sets.NewString()
-
-	legacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, OpenShiftAPIPrefix, LegacyOpenShiftAPIPrefix)
-)
+var excludedV1Types = sets.NewString()
 
 // Run launches the OpenShift master by creating a kubernetes master, installing
 // OpenShift APIs into it and then running it.
@@ -157,7 +149,6 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 		extra []string
 		err   error
 	)
-	kc.Master.GenericConfig.LegacyAPIGroupPrefixes = legacyAPIGroupPrefixes
 	kc.Master.GenericConfig.BuildHandlerChainsFunc, extra, err = c.buildHandlerChain(assetConfig)
 	if err != nil {
 		glog.Fatalf("Failed to launch master: %v", err)
@@ -202,7 +193,7 @@ func (c *MasterConfig) RunInProxyMode(proxy *kubernetes.ProxyConfig, assetConfig
 	swaggerConfig := genericapiserver.DefaultSwaggerConfig()
 	swaggerConfig.WebServicesUrl = c.Options.MasterPublicURL
 	genericroutes.Swagger{Config: swaggerConfig}.Install(container)
-	extra = append(extra, fmt.Sprintf("Started Swagger Schema API at %%s%s", swaggerAPIPrefix))
+	extra = append(extra, fmt.Sprintf("Started Swagger Schema API at %%s%s", swaggerConfig.ApiPath))
 
 	genericroutes.OpenAPI{Config: kubernetes.DefaultOpenAPIConfig()}.Install(container)
 	extra = append(extra, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
@@ -214,7 +205,7 @@ func (c *MasterConfig) RunInProxyMode(proxy *kubernetes.ProxyConfig, assetConfig
 	// until then: create ad-hoc config
 	genericConfig := genericapiserver.NewConfig()
 	genericConfig.RequestContextMapper = c.RequestContextMapper
-	genericConfig.LegacyAPIGroupPrefixes = legacyAPIGroupPrefixes
+	genericConfig.LegacyAPIGroupPrefixes = kubernetes.LegacyAPIGroupPrefixes
 	genericConfig.MaxRequestsInFlight = c.Options.ServingInfo.MaxRequestsInFlight
 
 	secureHandler, _ := handlerChain(container.ServeMux, genericConfig)
@@ -234,7 +225,7 @@ func (c *MasterConfig) kubernetesExtraMessages() []string {
 	var extra []string
 
 	// v1 has to be printed separately since it's served from different endpoint than groups
-	if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, v1.SchemeGroupVersion) {
+	if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, kubeapiv1.SchemeGroupVersion) {
 		extra = append(extra, fmt.Sprintf("Started Kubernetes API at %%s%s", genericapiserver.DefaultLegacyAPIPrefix))
 	}
 	versions := registered.EnabledVersions()
@@ -249,7 +240,7 @@ func (c *MasterConfig) kubernetesExtraMessages() []string {
 		}
 	}
 
-	extra = append(extra, fmt.Sprintf("Started Swagger Schema API at %%s%s", swaggerAPIPrefix))
+	extra = append(extra, fmt.Sprintf("Started Swagger Schema API at %%s%s", kc.Master.GenericConfig.SwaggerConfig.ApiPath))
 	extra = append(extra, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
 
 	return extra
@@ -413,12 +404,12 @@ func (c *MasterConfig) InstallProtectedAPI(container *restful.Container) ([]stri
 	legacyAPIVersions := []string{}
 	currentAPIVersions := []string{}
 
-	if configapi.HasOpenShiftAPILevel(c.Options, OpenShiftAPIV1) {
+	if configapi.HasOpenShiftAPILevel(c.Options, v1.SchemeGroupVersion.Version) {
 		if err := c.apiLegacyV1(storage).InstallREST(container); err != nil {
 			glog.Fatalf("Unable to initialize v1 API: %v", err)
 		}
-		messages = append(messages, fmt.Sprintf("Started Origin API at %%s%s", OpenShiftAPIPrefixV1))
-		currentAPIVersions = append(currentAPIVersions, OpenShiftAPIV1)
+		messages = append(messages, fmt.Sprintf("Started Origin API at %%s%s/%s", api.Prefix, v1.SchemeGroupVersion.Version))
+		currentAPIVersions = append(currentAPIVersions, v1.SchemeGroupVersion.Version)
 	}
 
 	var root *restful.WebService
@@ -426,7 +417,7 @@ func (c *MasterConfig) InstallProtectedAPI(container *restful.Container) ([]stri
 		switch service.RootPath() {
 		case "/":
 			root = service
-		case OpenShiftAPIPrefixV1:
+		case api.Prefix + "/" + v1.SchemeGroupVersion.Version:
 			service.Doc("OpenShift REST API, version v1").ApiVersion("v1")
 		}
 	}
@@ -440,8 +431,8 @@ func (c *MasterConfig) InstallProtectedAPI(container *restful.Container) ([]stri
 	// list) for backwards compatibility, even though we won't service any other
 	// requests through the route. Take care when considering whether to delete
 	// this route.
-	initAPIVersionRoute(root, LegacyOpenShiftAPIPrefix, legacyAPIVersions...)
-	initAPIVersionRoute(root, OpenShiftAPIPrefix, currentAPIVersions...)
+	initAPIVersionRoute(root, api.LegacyPrefix, legacyAPIVersions...)
+	initAPIVersionRoute(root, api.Prefix, currentAPIVersions...)
 
 	initControllerRoutes(root, "/controllers", c.Options.Controllers != configapi.ControllersDisabled, c.ControllerPlug)
 	initReadinessCheckRoute(root, "/healthz/ready", c.ProjectAuthorizationCache.ReadyForAccess)
@@ -870,7 +861,7 @@ func (c *MasterConfig) defaultAPIGroupVersion() *apiserver.APIGroupVersion {
 	restMapper = meta.MultiRESTMapper(append(restMapper, statusMapper))
 
 	return &apiserver.APIGroupVersion{
-		Root: OpenShiftAPIPrefix,
+		Root: api.Prefix,
 
 		Mapper: restMapper,
 

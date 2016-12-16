@@ -41,9 +41,11 @@ import (
 	kerrors "k8s.io/kubernetes/pkg/util/errors"
 	"k8s.io/kubernetes/pkg/util/intstr"
 	knet "k8s.io/kubernetes/pkg/util/net"
+	"k8s.io/kubernetes/pkg/util/sets"
 	"k8s.io/kubernetes/pkg/version"
 	scheduleroptions "k8s.io/kubernetes/plugin/cmd/kube-scheduler/app/options"
 
+	"github.com/openshift/origin/pkg/api"
 	"github.com/openshift/origin/pkg/cmd/flagtypes"
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
 	"github.com/openshift/origin/pkg/cmd/server/election"
@@ -51,6 +53,8 @@ import (
 	"github.com/openshift/origin/pkg/controller/shared"
 	openapigenerated "github.com/openshift/origin/pkg/openapi"
 )
+
+var LegacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, api.Prefix, api.LegacyPrefix)
 
 // MasterConfig defines the required values to start a Kubernetes master
 type MasterConfig struct {
@@ -282,6 +286,7 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 		return nil, err
 	}
 	genericConfig.LoopbackClientConfig = loopbackClientConfig
+	genericConfig.LegacyAPIGroupPrefixes = LegacyAPIGroupPrefixes
 	genericConfig.SecureServingInfo.BindNetwork = options.ServingInfo.BindNetwork
 	genericConfig.SecureServingInfo.ExtraClientCACerts, err = configapi.GetOAuthClientCertCAs(options)
 	if err != nil {
