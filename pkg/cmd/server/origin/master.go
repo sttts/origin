@@ -12,11 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MakeNowJust/heredoc"
 	restful "github.com/emicklei/go-restful"
-	"github.com/go-openapi/spec"
 	"github.com/golang/glog"
-	openapigenerated "github.com/openshift/origin/pkg/openapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"gopkg.in/natefinch/lumberjack.v2"
 
@@ -30,13 +27,11 @@ import (
 	v1beta1extensions "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
 	"k8s.io/kubernetes/pkg/apiserver"
 	kapiserverfilters "k8s.io/kubernetes/pkg/apiserver/filters"
-	apiserveropenapi "k8s.io/kubernetes/pkg/apiserver/openapi"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/genericapiserver"
 	kgenericfilters "k8s.io/kubernetes/pkg/genericapiserver/filters"
 	genericmux "k8s.io/kubernetes/pkg/genericapiserver/mux"
-	openapicommon "k8s.io/kubernetes/pkg/genericapiserver/openapi/common"
 	genericroutes "k8s.io/kubernetes/pkg/genericapiserver/routes"
 	"k8s.io/kubernetes/pkg/healthz"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
@@ -153,105 +148,6 @@ var (
 	excludedV1Types = sets.NewString()
 
 	legacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, OpenShiftAPIPrefix, LegacyOpenShiftAPIPrefix)
-
-	openAPIConfig = openapicommon.Config{
-		Definitions:    openapigenerated.OpenAPIDefinitions,
-		IgnorePrefixes: []string{"/swaggerapi", "/healthz", "/controllers", "/metrics", "/version/openshift"},
-		GetOperationIDAndTags: func(servePath string, r *restful.Route) (string, []string, error) {
-			op := r.Operation
-			path := r.Path
-			//TODO/REBASE this is gross
-			if strings.HasPrefix(path, "/oapi/v1/namespaces/{namespace}/processedtemplates") {
-				op = "createNamespacedProcessedTemplate"
-			} else if strings.HasPrefix(path, "/oapi/v1/processedtemplates") {
-				op = "createProcessedTemplateForAllNamespaces"
-			} else if strings.HasPrefix(path, "/oapi/v1/namespaces/{namespace}/generatedeploymentconfigs") {
-				op = "generateNamespacedDeploymentConfig"
-			}
-			if op != r.Operation {
-				return op, []string{}, nil
-			}
-			return apiserveropenapi.GetOperationIDAndTags(servePath, r)
-		},
-		Info: &spec.Info{
-			InfoProps: spec.InfoProps{
-				Title:   "OpenShift API (with Kubernetes)",
-				Version: version.Get().String(),
-				License: &spec.License{
-					Name: "Apache 2.0 (ASL2.0)",
-					URL:  "http://www.apache.org/licenses/LICENSE-2.0",
-				},
-				Description: heredoc.Doc(`
-					OpenShift provides builds, application lifecycle, image content management,
-					and administrative policy on top of Kubernetes. The API allows consistent
-					management of those objects.
-
-					All API operations are authenticated via an Authorization	bearer token that
-					is provided for service accounts as a generated secret (in JWT form) or via
-					the native OAuth endpoint located at /oauth/authorize. Core infrastructure
-					components may use client certificates that require no authentication.
-
-					All API operations return a 'resourceVersion' string that represents the
-					version of the object in the underlying storage. The standard LIST operation
-					performs a snapshot read of the underlying objects, returning a resourceVersion
-					representing a consistent version of the listed objects. The WATCH operation
-					allows all updates to a set of objects after the provided resourceVersion to
-					be observed by a client. By listing and beginning a watch from the returned
-					resourceVersion, clients may observe a consistent view of the state of one
-					or more objects. Note that WATCH always returns the update after the provided
-					resourceVersion. Watch may be extended a limited time in the past - using
-					etcd 2 the watch window is 1000 events (which on a large cluster may only
-					be a few tens of seconds) so clients must explicitly handle the "watch
-					to old error" by re-listing.
-
-					Objects are divided into two rough categories - those that have a lifecycle
-					and must reflect the state of the cluster, and those that have no state.
-					Objects with lifecycle typically have three main sections:
-
-					* 'metadata' common to all objects
-					* a 'spec' that represents the desired state
-					* a 'status' that represents how much of the desired state is reflected on
-					  the cluster at the current time
-
-					Objects that have no state have 'metadata' but may lack a 'spec' or 'status'
-					section.
-
-					Objects are divided into those that are namespace scoped (only exist inside
-					of a namespace) and those that are cluster scoped (exist outside of
-					a namespace). A namespace scoped resource will be deleted when the namespace
-					is deleted and cannot be created if the namespace has not yet been created
-					or is in the process of deletion. Cluster scoped resources are typically
-					only accessible to admins - resources like nodes, persistent volumes, and
-					cluster policy.
-
-					All objects have a schema that is a combination of the 'kind' and
-					'apiVersion' fields. This schema is additive only for any given version -
-					no backwards incompatible changes are allowed without incrementing the
-					apiVersion. The server will return and accept a number of standard
-					responses that share a common schema - for instance, the common
-					error type is 'unversioned.Status' (described below) and will be returned
-					on any error from the API server.
-
-					The API is available in multiple serialization formats - the default is
-					JSON (Accept: application/json and Content-Type: application/json) but
-					clients may also use YAML (application/yaml) or the native Protobuf
-					schema (application/vnd.kubernetes.protobuf). Note that the format
-					of the WATCH API call is slightly different - for JSON it returns newline
-					delimited objects while for Protobuf it returns length-delimited frames
-					(4 bytes in network-order) that contain a 'versioned.Watch' Protobuf
-					object.
-
-					See the OpenShift documentation at https://docs.openshift.org for more
-					information.
-				`),
-			},
-		},
-		DefaultResponse: &spec.Response{
-			ResponseProps: spec.ResponseProps{
-				Description: "Default Response.",
-			},
-		},
-	}
 )
 
 // Run launches the OpenShift master by creating a kubernetes master, installing
@@ -261,7 +157,6 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 		extra []string
 		err   error
 	)
-	kc.Master.GenericConfig.OpenAPIConfig = &openAPIConfig
 	kc.Master.GenericConfig.LegacyAPIGroupPrefixes = legacyAPIGroupPrefixes
 	kc.Master.GenericConfig.BuildHandlerChainsFunc, extra, err = c.buildHandlerChain(assetConfig)
 	if err != nil {
@@ -309,7 +204,7 @@ func (c *MasterConfig) RunInProxyMode(proxy *kubernetes.ProxyConfig, assetConfig
 	genericroutes.Swagger{Config: swaggerConfig}.Install(container)
 	extra = append(extra, fmt.Sprintf("Started Swagger Schema API at %%s%s", swaggerAPIPrefix))
 
-	genericroutes.OpenAPI{Config: &openAPIConfig}.Install(container)
+	genericroutes.OpenAPI{Config: kubernetes.DefaultOpenAPIConfig()}.Install(container)
 	extra = append(extra, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
 
 	// install origin handlers
