@@ -273,7 +273,8 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 		glog.Fatalf("Failed to launch master: %v", err)
 	}
 
-	extra = append(extra, c.installHandlers(kmaster.GenericAPIServer.HandlerContainer)...)
+	c.InstallProtectedAPI(kmaster.GenericAPIServer.HandlerContainer.Container)
+	extra = append(extra, c.kubernetesExtraMessages()...)
 
 	for _, s := range extra {
 		glog.Infof(s, c.Options.ServingInfo.BindAddress)
@@ -302,12 +303,14 @@ func (c *MasterConfig) RunInProxyMode(proxy *kubernetes.ProxyConfig, assetConfig
 
 	// install GenericAPIServer handlers manually, usually done by GenericAPIServer.PrepareRun()
 	healthz.InstallHandler(&container.NonSwaggerRoutes, healthz.PingHealthz)
-	url, err := url.Parse(c.Options.MasterPublicURL)
-	if err != nil {
-		glog.Fatalf("Failed to parse master public url %q: %v", c.Options.MasterPublicURL, err)
-	}
-	genericroutes.Swagger{ExternalAddress: url.Host}.Install(container)
+
+	swaggerConfig := genericapiserver.DefaultSwaggerConfig()
+	swaggerConfig.WebServicesUrl = c.Options.MasterPublicURL
+	genericroutes.Swagger{Config: swaggerConfig}.Install(container)
+	extra = append(extra, fmt.Sprintf("Started Swagger Schema API at %%s%s", swaggerAPIPrefix))
+
 	genericroutes.OpenAPI{Config: &openAPIConfig}.Install(container)
+	extra = append(extra, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
 
 	// install origin handlers
 	c.InstallProtectedAPI(container.Container)
@@ -332,10 +335,8 @@ func (s sortedGroupVersions) Len() int           { return len(s) }
 func (s sortedGroupVersions) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 func (s sortedGroupVersions) Less(i, j int) bool { return s[i].Group < s[j].Group }
 
-func (c *MasterConfig) installHandlers(apiContainer *genericmux.APIContainer) []string {
+func (c *MasterConfig) kubernetesExtraMessages() []string {
 	var extra []string
-
-	c.InstallProtectedAPI(apiContainer.Container)
 
 	// v1 has to be printed separately since it's served from different endpoint than groups
 	if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, v1.SchemeGroupVersion) {
@@ -353,29 +354,8 @@ func (c *MasterConfig) installHandlers(apiContainer *genericmux.APIContainer) []
 		}
 	}
 
-	// install swagger
-	// TODO(sttts): use upstream Swagger route
-	//webServices := kmaster.GenericAPIServer.HandlerContainer.RegisteredWebServices()
-	/*
-		swaggerConfig := swagger.Config{
-			WebServicesUrl:   c.Options.MasterPublicURL,
-			WebServices:      webServices,
-			ApiPath:          swaggerAPIPrefix,
-			PostBuildHandler: customizeSwaggerDefinition,
-		}
-		// log nothing from swagger
-		swagger.LogInfo = func(format string, v ...interface{}) {}
-		swagger.RegisterSwaggerService(swaggerConfig, kmaster.GenericAPIServer.HandlerContainer.Container)
-		extra = append(extra, fmt.Sprintf("Started Swagger Schema API at %%s%s", swaggerAPIPrefix))
-	*/
-
-	// TODO(sttts): use upstream OpenAPI route
-	/*
-		if err := openapi.RegisterOpenAPIService(openAPIServePath, webServices, &openAPIConfig, kmaster.GenericAPIServer.HandlerContainer); err != nil {
-			glog.Fatalf("Failed to generate open api spec: %v", err)
-		}
-		extra = append(extra, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
-	*/
+	extra = append(extra, fmt.Sprintf("Started Swagger Schema API at %%s%s", swaggerAPIPrefix))
+	extra = append(extra, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
 
 	return extra
 }

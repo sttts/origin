@@ -1,4 +1,4 @@
-package origin
+package kubernetes
 
 import (
 	"github.com/emicklei/go-restful/swagger"

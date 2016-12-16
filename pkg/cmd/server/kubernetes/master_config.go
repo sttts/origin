@@ -267,8 +267,8 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 	genericConfig.RequestContextMapper = requestContextMapper
 	genericConfig.APIResourceConfigSource = getAPIResourceConfig(options)
 	genericConfig.EnableIndex = false // TODO(sttts): get rid of our indexAPIPaths and use this
-	genericConfig.EnableOpenAPISupport = true
-	genericConfig.EnableSwaggerSupport = true
+	genericConfig.SwaggerConfig = genericapiserver.DefaultSwaggerConfig()
+	genericConfig.SwaggerConfig.PostBuildHandler = customizeSwaggerDefinition
 	_, loopbackClientConfig, err := configapi.GetKubeClient(options.MasterClients.OpenShiftLoopbackKubeConfig, options.MasterClients.OpenShiftLoopbackClientConnectionOverrides)
 	if err != nil {
 		return nil, err
