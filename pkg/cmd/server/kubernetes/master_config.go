@@ -275,6 +275,10 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 	}
 	genericConfig.LoopbackClientConfig = loopbackClientConfig
 	genericConfig.SecureServingInfo.BindNetwork = options.ServingInfo.BindNetwork
+	genericConfig.SecureServingInfo.ExtraClientCACerts, err = configapi.GetOAuthClientCertCAs(options)
+	if err != nil {
+		glog.Fatalf("Error setting up OAuth2 client certificates: %v", err)
+	}
 	url, err := url.Parse(options.MasterPublicURL)
 	if err != nil {
 		glog.Fatalf("Error parsing master public url %q: %v", options.MasterPublicURL, err)
