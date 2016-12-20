@@ -105,7 +105,7 @@ os::test::junit::declare_suite_start "cmd/basicresources/pods"
 os::cmd::expect_success 'oc get pods --match-server-version'
 os::cmd::expect_success_and_text 'oc create -f examples/hello-openshift/hello-pod.json' 'pod "hello-openshift" created'
 os::cmd::expect_success 'oc describe pod hello-openshift'
-os::cmd::expect_success 'oc delete pods hello-openshift --grace-period=0'
+os::cmd::expect_success 'oc delete pods hello-openshift --grace-period=0 --force'
 echo "pods: ok"
 os::test::junit::declare_suite_end
 
@@ -117,7 +117,7 @@ os::cmd::try_until_success 'oc annotate pod/hello-openshift foo=bar' # can race 
 os::cmd::expect_success_and_text 'oc get -o yaml pod/hello-openshift' 'foo: bar'
 os::cmd::expect_failure_and_not_text 'oc annotate pod hello-openshift description="test" --resource-version=123' 'may only be used with a single resource'
 os::cmd::expect_failure_and_text 'oc annotate pod hello-openshift hello-openshift description="test" --resource-version=123' 'may only be used with a single resource'
-os::cmd::expect_success 'oc delete pods -l acustom=label --grace-period=0'
+os::cmd::expect_success 'oc delete pods -l acustom=label --grace-period=0 --force'
 os::cmd::expect_failure 'oc get pod/hello-openshift'
 
 # show-labels should work for projects
