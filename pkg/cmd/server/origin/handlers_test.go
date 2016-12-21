@@ -13,15 +13,16 @@ import (
 	kapi "k8s.io/kubernetes/pkg/api"
 	kapiserverfilters "k8s.io/kubernetes/pkg/apiserver/filters"
 	"k8s.io/kubernetes/pkg/auth/user"
+	"k8s.io/kubernetes/pkg/genericapiserver"
 	"k8s.io/kubernetes/pkg/util/sets"
 	"k8s.io/kubernetes/pkg/watch"
 
 	authenticationapi "github.com/openshift/origin/pkg/auth/api"
 	"github.com/openshift/origin/pkg/authorization/authorizer"
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
+	"github.com/openshift/origin/pkg/cmd/server/kubernetes"
 	userapi "github.com/openshift/origin/pkg/user/api"
 	usercache "github.com/openshift/origin/pkg/user/cache"
-	"k8s.io/kubernetes/pkg/genericapiserver"
 )
 
 type impersonateAuthorizer struct{}
@@ -573,7 +574,7 @@ func TestVersionSkewFilterSkippedOnNonAPIRequest(t *testing.T) {
 
 func testHandlerChain(handler http.Handler, contextMapper kapi.RequestContextMapper) http.Handler {
 	kgenericconfig := genericapiserver.NewConfig()
-	kgenericconfig.LegacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, OpenShiftAPIPrefix, LegacyOpenShiftAPIPrefix)
+	kgenericconfig.LegacyAPIGroupPrefixes = kubernetes.LegacyAPIGroupPrefixes
 
 	handler = kapiserverfilters.WithRequestInfo(handler, genericapiserver.NewRequestInfoResolver(kgenericconfig), contextMapper)
 	handler = kapi.WithRequestContext(handler, contextMapper)

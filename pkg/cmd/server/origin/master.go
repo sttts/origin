@@ -12,11 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MakeNowJust/heredoc"
 	restful "github.com/emicklei/go-restful"
-	"github.com/go-openapi/spec"
 	"github.com/golang/glog"
-	openapigenerated "github.com/openshift/origin/pkg/openapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"gopkg.in/natefinch/lumberjack.v2"
 
@@ -24,19 +21,16 @@ import (
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/api/v1"
 	kubeapiv1 "k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/apimachinery/registered"
 	v1beta1extensions "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
 	"k8s.io/kubernetes/pkg/apiserver"
 	kapiserverfilters "k8s.io/kubernetes/pkg/apiserver/filters"
-	apiserveropenapi "k8s.io/kubernetes/pkg/apiserver/openapi"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/genericapiserver"
 	kgenericfilters "k8s.io/kubernetes/pkg/genericapiserver/filters"
 	genericmux "k8s.io/kubernetes/pkg/genericapiserver/mux"
-	openapicommon "k8s.io/kubernetes/pkg/genericapiserver/openapi/common"
 	genericroutes "k8s.io/kubernetes/pkg/genericapiserver/routes"
 	"k8s.io/kubernetes/pkg/healthz"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
@@ -108,6 +102,8 @@ import (
 	appliedclusterresourcequotaregistry "github.com/openshift/origin/pkg/quota/registry/appliedclusterresourcequota"
 	clusterresourcequotaregistry "github.com/openshift/origin/pkg/quota/registry/clusterresourcequota"
 
+	"github.com/openshift/origin/pkg/api"
+	"github.com/openshift/origin/pkg/api/v1"
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	clusterpolicyregistry "github.com/openshift/origin/pkg/authorization/registry/clusterpolicy"
 	clusterpolicystorage "github.com/openshift/origin/pkg/authorization/registry/clusterpolicy/etcd"
@@ -137,133 +133,23 @@ import (
 )
 
 const (
-	LegacyOpenShiftAPIPrefix = "/osapi" // TODO: make configurable
-	OpenShiftAPIPrefix       = "/oapi"  // TODO: make configurable
-	OpenShiftAPIV1           = "v1"
-	OpenShiftAPIPrefixV1     = OpenShiftAPIPrefix + "/" + OpenShiftAPIV1
-	swaggerAPIPrefix         = "/swaggerapi/"
-	openAPIServePath         = "/swagger.json"
+	openAPIServePath = "/swagger.json"
 	// Discovery endpoint for OAuth 2.0 Authorization Server Metadata
 	// See IETF Draft:
 	// https://tools.ietf.org/html/draft-ietf-oauth-discovery-04#section-2
 	oauthMetadataEndpoint = "/.well-known/oauth-authorization-server"
 )
 
-var (
-	excludedV1Types = sets.NewString()
-
-	legacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, OpenShiftAPIPrefix, LegacyOpenShiftAPIPrefix)
-
-	openAPIConfig = openapicommon.Config{
-		Definitions:    openapigenerated.OpenAPIDefinitions,
-		IgnorePrefixes: []string{"/swaggerapi", "/healthz", "/controllers", "/metrics", "/version/openshift"},
-		GetOperationIDAndTags: func(servePath string, r *restful.Route) (string, []string, error) {
-			op := r.Operation
-			path := r.Path
-			//TODO/REBASE this is gross
-			if strings.HasPrefix(path, "/oapi/v1/namespaces/{namespace}/processedtemplates") {
-				op = "createNamespacedProcessedTemplate"
-			} else if strings.HasPrefix(path, "/oapi/v1/processedtemplates") {
-				op = "createProcessedTemplateForAllNamespaces"
-			} else if strings.HasPrefix(path, "/oapi/v1/namespaces/{namespace}/generatedeploymentconfigs") {
-				op = "generateNamespacedDeploymentConfig"
-			}
-			if op != r.Operation {
-				return op, []string{}, nil
-			}
-			return apiserveropenapi.GetOperationIDAndTags(servePath, r)
-		},
-		Info: &spec.Info{
-			InfoProps: spec.InfoProps{
-				Title:   "OpenShift API (with Kubernetes)",
-				Version: version.Get().String(),
-				License: &spec.License{
-					Name: "Apache 2.0 (ASL2.0)",
-					URL:  "http://www.apache.org/licenses/LICENSE-2.0",
-				},
-				Description: heredoc.Doc(`
-					OpenShift provides builds, application lifecycle, image content management,
-					and administrative policy on top of Kubernetes. The API allows consistent
-					management of those objects.
-
-					All API operations are authenticated via an Authorization	bearer token that
-					is provided for service accounts as a generated secret (in JWT form) or via
-					the native OAuth endpoint located at /oauth/authorize. Core infrastructure
-					components may use client certificates that require no authentication.
-
-					All API operations return a 'resourceVersion' string that represents the
-					version of the object in the underlying storage. The standard LIST operation
-					performs a snapshot read of the underlying objects, returning a resourceVersion
-					representing a consistent version of the listed objects. The WATCH operation
-					allows all updates to a set of objects after the provided resourceVersion to
-					be observed by a client. By listing and beginning a watch from the returned
-					resourceVersion, clients may observe a consistent view of the state of one
-					or more objects. Note that WATCH always returns the update after the provided
-					resourceVersion. Watch may be extended a limited time in the past - using
-					etcd 2 the watch window is 1000 events (which on a large cluster may only
-					be a few tens of seconds) so clients must explicitly handle the "watch
-					to old error" by re-listing.
-
-					Objects are divided into two rough categories - those that have a lifecycle
-					and must reflect the state of the cluster, and those that have no state.
-					Objects with lifecycle typically have three main sections:
-
-					* 'metadata' common to all objects
-					* a 'spec' that represents the desired state
-					* a 'status' that represents how much of the desired state is reflected on
-					  the cluster at the current time
-
-					Objects that have no state have 'metadata' but may lack a 'spec' or 'status'
-					section.
-
-					Objects are divided into those that are namespace scoped (only exist inside
-					of a namespace) and those that are cluster scoped (exist outside of
-					a namespace). A namespace scoped resource will be deleted when the namespace
-					is deleted and cannot be created if the namespace has not yet been created
-					or is in the process of deletion. Cluster scoped resources are typically
-					only accessible to admins - resources like nodes, persistent volumes, and
-					cluster policy.
-
-					All objects have a schema that is a combination of the 'kind' and
-					'apiVersion' fields. This schema is additive only for any given version -
-					no backwards incompatible changes are allowed without incrementing the
-					apiVersion. The server will return and accept a number of standard
-					responses that share a common schema - for instance, the common
-					error type is 'unversioned.Status' (described below) and will be returned
-					on any error from the API server.
-
-					The API is available in multiple serialization formats - the default is
-					JSON (Accept: application/json and Content-Type: application/json) but
-					clients may also use YAML (application/yaml) or the native Protobuf
-					schema (application/vnd.kubernetes.protobuf). Note that the format
-					of the WATCH API call is slightly different - for JSON it returns newline
-					delimited objects while for Protobuf it returns length-delimited frames
-					(4 bytes in network-order) that contain a 'versioned.Watch' Protobuf
-					object.
-
-					See the OpenShift documentation at https://docs.openshift.org for more
-					information.
-				`),
-			},
-		},
-		DefaultResponse: &spec.Response{
-			ResponseProps: spec.ResponseProps{
-				Description: "Default Response.",
-			},
-		},
-	}
-)
+var excludedV1Types = sets.NewString()
 
 // Run launches the OpenShift master by creating a kubernetes master, installing
 // OpenShift APIs into it and then running it.
 func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig) {
 	var (
-		extra []string
+		messages []string
 		err   error
 	)
-	kc.Master.GenericConfig.OpenAPIConfig = &openAPIConfig
-	kc.Master.GenericConfig.LegacyAPIGroupPrefixes = legacyAPIGroupPrefixes
-	kc.Master.GenericConfig.BuildHandlerChainsFunc, extra, err = c.buildHandlerChain(assetConfig)
+	kc.Master.GenericConfig.BuildHandlerChainsFunc, messages, err = c.buildHandlerChain(assetConfig)
 	if err != nil {
 		glog.Fatalf("Failed to launch master: %v", err)
 	}
@@ -273,9 +159,10 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 		glog.Fatalf("Failed to launch master: %v", err)
 	}
 
-	extra = append(extra, c.installHandlers(kmaster.GenericAPIServer.HandlerContainer)...)
+	c.InstallProtectedAPI(kmaster.GenericAPIServer.HandlerContainer.Container)
+	messages = append(messages, c.kubernetesAPIMessages(kc)...)
 
-	for _, s := range extra {
+	for _, s := range messages {
 		glog.Infof(s, c.Options.ServingInfo.BindAddress)
 	}
 	go kmaster.GenericAPIServer.PrepareRun().Run(utilwait.NeverStop)
@@ -285,7 +172,7 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 }
 
 func (c *MasterConfig) RunInProxyMode(proxy *kubernetes.ProxyConfig, assetConfig *AssetConfig) {
-	handlerChain, extra, err := c.buildHandlerChain(assetConfig)
+	handlerChain, messages, err := c.buildHandlerChain(assetConfig)
 	if err != nil {
 		glog.Fatalf("Failed to launch master: %v", err)
 	}
@@ -294,20 +181,22 @@ func (c *MasterConfig) RunInProxyMode(proxy *kubernetes.ProxyConfig, assetConfig
 	container := genericmux.NewAPIContainer(http.NewServeMux(), kapi.Codecs)
 
 	// install /api proxy forwarder
-	proxyExtra, err := proxy.InstallAPI(container.Container)
+	proxyMessages, err := proxy.InstallAPI(container.Container)
 	if err != nil {
 		glog.Fatalf("Failed to launch master: %v", err)
 	}
-	extra = append(extra, proxyExtra...)
+	messages = append(messages, proxyMessages...)
 
 	// install GenericAPIServer handlers manually, usually done by GenericAPIServer.PrepareRun()
 	healthz.InstallHandler(&container.NonSwaggerRoutes, healthz.PingHealthz)
-	url, err := url.Parse(c.Options.MasterPublicURL)
-	if err != nil {
-		glog.Fatalf("Failed to parse master public url %q: %v", c.Options.MasterPublicURL, err)
-	}
-	genericroutes.Swagger{ExternalAddress: url.Host}.Install(container)
-	genericroutes.OpenAPI{Config: &openAPIConfig}.Install(container)
+
+	swaggerConfig := genericapiserver.DefaultSwaggerConfig()
+	swaggerConfig.WebServicesUrl = c.Options.MasterPublicURL
+	genericroutes.Swagger{Config: swaggerConfig}.Install(container)
+	messages = append(messages, fmt.Sprintf("Started Swagger Schema API at %%s%s", swaggerConfig.ApiPath))
+
+	genericroutes.OpenAPI{Config: kubernetes.DefaultOpenAPIConfig()}.Install(container)
+	messages = append(messages, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
 
 	// install origin handlers
 	c.InstallProtectedAPI(container.Container)
@@ -316,11 +205,11 @@ func (c *MasterConfig) RunInProxyMode(proxy *kubernetes.ProxyConfig, assetConfig
 	// until then: create ad-hoc config
 	genericConfig := genericapiserver.NewConfig()
 	genericConfig.RequestContextMapper = c.RequestContextMapper
-	genericConfig.LegacyAPIGroupPrefixes = legacyAPIGroupPrefixes
+	genericConfig.LegacyAPIGroupPrefixes = kubernetes.LegacyAPIGroupPrefixes
 	genericConfig.MaxRequestsInFlight = c.Options.ServingInfo.MaxRequestsInFlight
 
 	secureHandler, _ := handlerChain(container.ServeMux, genericConfig)
-	c.serve(secureHandler, extra)
+	c.serve(secureHandler, messages)
 
 	// Attempt to verify the server came up for 20 seconds (100 tries * 100ms, 100ms timeout per try)
 	cmdutil.WaitForSuccessfulDial(c.TLS, c.Options.ServingInfo.BindNetwork, c.Options.ServingInfo.BindAddress, 100*time.Millisecond, 100*time.Millisecond, 100)
@@ -332,14 +221,12 @@ func (s sortedGroupVersions) Len() int           { return len(s) }
 func (s sortedGroupVersions) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 func (s sortedGroupVersions) Less(i, j int) bool { return s[i].Group < s[j].Group }
 
-func (c *MasterConfig) installHandlers(apiContainer *genericmux.APIContainer) []string {
-	var extra []string
-
-	c.InstallProtectedAPI(apiContainer.Container)
+func (c *MasterConfig) kubernetesAPIMessages(kc *kubernetes.MasterConfig) []string {
+	var messages []string
 
 	// v1 has to be printed separately since it's served from different endpoint than groups
-	if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, v1.SchemeGroupVersion) {
-		extra = append(extra, fmt.Sprintf("Started Kubernetes API at %%s%s", genericapiserver.DefaultLegacyAPIPrefix))
+	if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, kubeapiv1.SchemeGroupVersion) {
+		messages = append(messages, fmt.Sprintf("Started Kubernetes API at %%s%s", genericapiserver.DefaultLegacyAPIPrefix))
 	}
 	versions := registered.EnabledVersions()
 	sort.Sort(sortedGroupVersions(versions))
@@ -349,41 +236,20 @@ func (c *MasterConfig) installHandlers(apiContainer *genericmux.APIContainer) []
 			continue
 		}
 		if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, ver) {
-			extra = append(extra, fmt.Sprintf("Started Kubernetes API %s at %%s%s", ver.String(), genericapiserver.APIGroupPrefix))
+			messages = append(messages, fmt.Sprintf("Started Kubernetes API %s at %%s%s", ver.String(), genericapiserver.APIGroupPrefix))
 		}
 	}
 
-	// install swagger
-	// TODO(sttts): use upstream Swagger route
-	//webServices := kmaster.GenericAPIServer.HandlerContainer.RegisteredWebServices()
-	/*
-		swaggerConfig := swagger.Config{
-			WebServicesUrl:   c.Options.MasterPublicURL,
-			WebServices:      webServices,
-			ApiPath:          swaggerAPIPrefix,
-			PostBuildHandler: customizeSwaggerDefinition,
-		}
-		// log nothing from swagger
-		swagger.LogInfo = func(format string, v ...interface{}) {}
-		swagger.RegisterSwaggerService(swaggerConfig, kmaster.GenericAPIServer.HandlerContainer.Container)
-		extra = append(extra, fmt.Sprintf("Started Swagger Schema API at %%s%s", swaggerAPIPrefix))
-	*/
+	messages = append(messages, fmt.Sprintf("Started Swagger Schema API at %%s%s", kc.Master.GenericConfig.SwaggerConfig.ApiPath))
+	messages = append(messages, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
 
-	// TODO(sttts): use upstream OpenAPI route
-	/*
-		if err := openapi.RegisterOpenAPIService(openAPIServePath, webServices, &openAPIConfig, kmaster.GenericAPIServer.HandlerContainer); err != nil {
-			glog.Fatalf("Failed to generate open api spec: %v", err)
-		}
-		extra = append(extra, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
-	*/
-
-	return extra
+	return messages
 }
 
 func (c *MasterConfig) buildHandlerChain(assetConfig *AssetConfig) (func(http.Handler, *genericapiserver.Config) (secure, insecure http.Handler), []string, error) {
-	var extra []string
+	var messages []string
 	if c.Options.OAuthConfig != nil {
-		extra = append(extra, fmt.Sprintf("Started OAuth2 API at %%s%s", OpenShiftOAuthAPIPrefix))
+		messages = append(messages, fmt.Sprintf("Started OAuth2 API at %%s%s", OpenShiftOAuthAPIPrefix))
 	}
 
 	if assetConfig != nil {
@@ -391,7 +257,7 @@ func (c *MasterConfig) buildHandlerChain(assetConfig *AssetConfig) (func(http.Ha
 		if err != nil {
 			return nil, nil, err
 		}
-		extra = append(extra, fmt.Sprintf("Started Web Console %%s%s", publicURL.Path))
+		messages = append(messages, fmt.Sprintf("Started Web Console %%s%s", publicURL.Path))
 	}
 
 	// TODO(sttts): resync with upstream handler chain and re-use upstream filters as much as possible
@@ -460,7 +326,7 @@ func (c *MasterConfig) buildHandlerChain(assetConfig *AssetConfig) (func(http.Ha
 		handler = kapi.WithRequestContext(handler, kc.RequestContextMapper)
 
 		return handler, nil
-	}, extra, nil
+	}, messages, nil
 }
 
 func (c *MasterConfig) RunHealth() {
@@ -477,7 +343,7 @@ func (c *MasterConfig) RunHealth() {
 }
 
 // serve starts serving the provided http.Handler using security settings derived from the MasterConfig
-func (c *MasterConfig) serve(handler http.Handler, extra []string) {
+func (c *MasterConfig) serve(handler http.Handler, messages []string) {
 	timeout := c.Options.ServingInfo.RequestTimeoutSeconds
 	if timeout == -1 {
 		timeout = 0
@@ -492,7 +358,7 @@ func (c *MasterConfig) serve(handler http.Handler, extra []string) {
 	}
 
 	go utilwait.Forever(func() {
-		for _, s := range extra {
+		for _, s := range messages {
 			glog.Infof(s, c.Options.ServingInfo.BindAddress)
 		}
 		if c.TLS {
@@ -538,12 +404,12 @@ func (c *MasterConfig) InstallProtectedAPI(container *restful.Container) ([]stri
 	legacyAPIVersions := []string{}
 	currentAPIVersions := []string{}
 
-	if configapi.HasOpenShiftAPILevel(c.Options, OpenShiftAPIV1) {
+	if configapi.HasOpenShiftAPILevel(c.Options, v1.SchemeGroupVersion.Version) {
 		if err := c.apiLegacyV1(storage).InstallREST(container); err != nil {
 			glog.Fatalf("Unable to initialize v1 API: %v", err)
 		}
-		messages = append(messages, fmt.Sprintf("Started Origin API at %%s%s", OpenShiftAPIPrefixV1))
-		currentAPIVersions = append(currentAPIVersions, OpenShiftAPIV1)
+		messages = append(messages, fmt.Sprintf("Started Origin API at %%s%s/%s", api.Prefix, v1.SchemeGroupVersion.Version))
+		currentAPIVersions = append(currentAPIVersions, v1.SchemeGroupVersion.Version)
 	}
 
 	var root *restful.WebService
@@ -551,7 +417,7 @@ func (c *MasterConfig) InstallProtectedAPI(container *restful.Container) ([]stri
 		switch service.RootPath() {
 		case "/":
 			root = service
-		case OpenShiftAPIPrefixV1:
+		case api.Prefix + "/" + v1.SchemeGroupVersion.Version:
 			service.Doc("OpenShift REST API, version v1").ApiVersion("v1")
 		}
 	}
@@ -565,8 +431,8 @@ func (c *MasterConfig) InstallProtectedAPI(container *restful.Container) ([]stri
 	// list) for backwards compatibility, even though we won't service any other
 	// requests through the route. Take care when considering whether to delete
 	// this route.
-	initAPIVersionRoute(root, LegacyOpenShiftAPIPrefix, legacyAPIVersions...)
-	initAPIVersionRoute(root, OpenShiftAPIPrefix, currentAPIVersions...)
+	initAPIVersionRoute(root, api.LegacyPrefix, legacyAPIVersions...)
+	initAPIVersionRoute(root, api.Prefix, currentAPIVersions...)
 
 	initControllerRoutes(root, "/controllers", c.Options.Controllers != configapi.ControllersDisabled, c.ControllerPlug)
 	initReadinessCheckRoute(root, "/healthz/ready", c.ProjectAuthorizationCache.ReadyForAccess)
@@ -995,7 +861,7 @@ func (c *MasterConfig) defaultAPIGroupVersion() *apiserver.APIGroupVersion {
 	restMapper = meta.MultiRESTMapper(append(restMapper, statusMapper))
 
 	return &apiserver.APIGroupVersion{
-		Root: OpenShiftAPIPrefix,
+		Root: api.Prefix,
 
 		Mapper: restMapper,
 

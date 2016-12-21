@@ -209,7 +209,7 @@ func (c *AssetConfig) addHandlers(handler http.Handler) (http.Handler, error) {
 		APIGroupAddr:          masterURL.Host,
 		APIGroupPrefix:        genericapiserver.APIGroupPrefix,
 		MasterAddr:            masterURL.Host,
-		MasterPrefix:          OpenShiftAPIPrefix,
+		MasterPrefix:          api.Prefix,
 		MasterResources:       originResources.List(),
 		KubernetesAddr:        masterURL.Host,
 		KubernetesPrefix:      genericapiserver.DefaultLegacyAPIPrefix,

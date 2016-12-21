@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/emicklei/go-restful/swagger"
 	"github.com/go-openapi/spec"
 	"github.com/golang/glog"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -48,7 +49,7 @@ import (
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	genericfilters "k8s.io/kubernetes/pkg/genericapiserver/filters"
 	"k8s.io/kubernetes/pkg/genericapiserver/mux"
-	"k8s.io/kubernetes/pkg/genericapiserver/openapi/common"
+	openapicommon "k8s.io/kubernetes/pkg/genericapiserver/openapi/common"
 	"k8s.io/kubernetes/pkg/genericapiserver/options"
 	"k8s.io/kubernetes/pkg/genericapiserver/routes"
 	genericvalidation "k8s.io/kubernetes/pkg/genericapiserver/validation"
@@ -72,9 +73,6 @@ const (
 type Config struct {
 	// Destination for audit logs
 	AuditWriter io.Writer
-	// Allow downstream consumers to disable swagger.
-	// This includes returning the generated swagger spec at /swaggerapi and swagger ui at /swagger-ui.
-	EnableSwaggerSupport bool
 	// Allow downstream consumers to disable swagger ui.
 	// Note that this is ignored if EnableSwaggerSupport is false
 	EnableSwaggerUI bool
@@ -133,11 +131,10 @@ type Config struct {
 	// If nil or 0.0.0.0, the host's default interface will be used.
 	PublicAddress net.IP
 
-	// EnableOpenAPISupport enables OpenAPI support. Allow downstream customers to disable OpenAPI spec.
-	EnableOpenAPISupport bool
-
-	// OpenAPIConfig will be used in generating OpenAPI spec.
-	OpenAPIConfig *common.Config
+	// OpenAPIConfig will be used in generating OpenAPI spec. This is nil by default. Use DefaultOpenAPIConfig for "working" defaults.
+	OpenAPIConfig *openapicommon.Config
+	// SwaggerConfig will be used in generating Swagger spec. This is nil by default. Use DefaultSwaggerConfig for "working" defaults.
+	SwaggerConfig *swagger.Config
 
 	// MaxRequestsInFlight is the maximum number of parallel non-long-running requests. Every further
 	// request has to wait.
@@ -209,24 +206,7 @@ func NewConfig() *Config {
 		LegacyAPIGroupPrefixes: sets.NewString(DefaultLegacyAPIPrefix),
 		HealthzChecks:          []healthz.HealthzChecker{healthz.PingHealthz},
 
-		EnableIndex:          true,
-		EnableSwaggerSupport: true,
-		OpenAPIConfig: &common.Config{
-			ProtocolList:   []string{"https"},
-			IgnorePrefixes: []string{"/swaggerapi"},
-			Info: &spec.Info{
-				InfoProps: spec.InfoProps{
-					Title:   "Generic API Server",
-					Version: "unversioned",
-				},
-			},
-			DefaultResponse: &spec.Response{
-				ResponseProps: spec.ResponseProps{
-					Description: "Default Response.",
-				},
-			},
-			GetOperationIDAndTags: apiserveropenapi.GetOperationIDAndTags,
-		},
+		EnableIndex:     true,
 		LongRunningFunc: genericfilters.BasicLongRunningRequestCheck(longRunningRE, map[string]string{"watch": "true"}),
 	}
 
@@ -322,8 +302,8 @@ func (c *Config) Complete() completedConfig {
 		}
 		c.ExternalAddress = hostAndPort
 	}
-	// All APIs will have the same authentication for now.
 	if c.OpenAPIConfig != nil && c.OpenAPIConfig.SecurityDefinitions != nil {
+		// Setup OpenAPI security: all APIs will have the same authentication for now.
 		c.OpenAPIConfig.DefaultSecurity = []map[string][]string{}
 		keys := []string{}
 		for k := range *c.OpenAPIConfig.SecurityDefinitions {
@@ -342,6 +322,13 @@ func (c *Config) Complete() completedConfig {
 					Description: "Unauthorized",
 				},
 			}
+		}
+	}
+	if c.SwaggerConfig != nil && len(c.SwaggerConfig.WebServicesUrl) == 0 {
+		if c.SecureServingInfo != nil {
+			c.SwaggerConfig.WebServicesUrl = "https://" + c.ExternalAddress
+		} else {
+			c.SwaggerConfig.WebServicesUrl = "http://" + c.ExternalAddress
 		}
 	}
 	if c.DiscoveryAddresses == nil {
@@ -391,8 +378,7 @@ func (c completedConfig) New() (*GenericAPIServer, error) {
 		requestContextMapper:   c.RequestContextMapper,
 		Serializer:             c.Serializer,
 
-		minRequestTimeout:    time.Duration(c.MinRequestTimeout) * time.Second,
-		enableSwaggerSupport: c.EnableSwaggerSupport,
+		minRequestTimeout: time.Duration(c.MinRequestTimeout) * time.Second,
 
 		SecureServingInfo:   c.SecureServingInfo,
 		InsecureServingInfo: c.InsecureServingInfo,
@@ -400,8 +386,8 @@ func (c completedConfig) New() (*GenericAPIServer, error) {
 
 		apiGroupsForDiscovery: map[string]unversioned.APIGroup{},
 
-		enableOpenAPISupport: c.EnableOpenAPISupport,
-		openAPIConfig:        c.OpenAPIConfig,
+		swaggerConfig: c.SwaggerConfig,
+		openAPIConfig: c.OpenAPIConfig,
 
 		postStartHooks: map[string]postStartHookEntry{},
 		healthzChecks:  c.HealthzChecks,
@@ -467,11 +453,48 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *Config) (secure, insec
 	return generic(protect(apiHandler)), generic(audit(apiHandler))
 }
 
+func DefaultOpenAPIConfig(definitions *openapicommon.OpenAPIDefinitions) *openapicommon.Config {
+	return &openapicommon.Config{
+		ProtocolList:   []string{"https"},
+		IgnorePrefixes: []string{"/swaggerapi"},
+		Info: &spec.Info{
+			InfoProps: spec.InfoProps{
+				Title:   "Generic API Server",
+				Version: "unversioned",
+			},
+		},
+		DefaultResponse: &spec.Response{
+			ResponseProps: spec.ResponseProps{
+				Description: "Default Response.",
+			},
+		},
+		GetOperationIDAndTags: apiserveropenapi.GetOperationIDAndTags,
+		Definitions:           definitions,
+	}
+}
+
+// DefaultSwaggerConfig returns a default configuration without WebServiceURL and
+// WebServices set.
+func DefaultSwaggerConfig() *swagger.Config {
+	return &swagger.Config{
+		ApiPath:         "/swaggerapi/",
+		SwaggerPath:     "/swaggerui/",
+		SwaggerFilePath: "/swagger-ui/",
+		SchemaFormatHandler: func(typeName string) string {
+			switch typeName {
+			case "metav1.Time", "*metav1.Time":
+				return "date-time"
+			}
+			return ""
+		},
+	}
+}
+
 func (s *GenericAPIServer) installAPI(c *Config) {
 	if c.EnableIndex {
 		routes.Index{}.Install(s.HandlerContainer)
 	}
-	if c.EnableSwaggerSupport && c.EnableSwaggerUI {
+	if c.SwaggerConfig != nil && c.EnableSwaggerUI {
 		routes.SwaggerUI{}.Install(s.HandlerContainer)
 	}
 	if c.EnableProfiling {
