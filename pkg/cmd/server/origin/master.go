@@ -146,10 +146,10 @@ var excludedV1Types = sets.NewString()
 // OpenShift APIs into it and then running it.
 func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig) {
 	var (
-		extra []string
+		messages []string
 		err   error
 	)
-	kc.Master.GenericConfig.BuildHandlerChainsFunc, extra, err = c.buildHandlerChain(assetConfig)
+	kc.Master.GenericConfig.BuildHandlerChainsFunc, messages, err = c.buildHandlerChain(assetConfig)
 	if err != nil {
 		glog.Fatalf("Failed to launch master: %v", err)
 	}
@@ -160,9 +160,9 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 	}
 
 	c.InstallProtectedAPI(kmaster.GenericAPIServer.HandlerContainer.Container)
-	extra = append(extra, c.kubernetesExtraMessages()...)
+	messages = append(messages, c.kubernetesAPIMessages(kc)...)
 
-	for _, s := range extra {
+	for _, s := range messages {
 		glog.Infof(s, c.Options.ServingInfo.BindAddress)
 	}
 	go kmaster.GenericAPIServer.PrepareRun().Run(utilwait.NeverStop)
@@ -172,7 +172,7 @@ func (c *MasterConfig) Run(kc *kubernetes.MasterConfig, assetConfig *AssetConfig
 }
 
 func (c *MasterConfig) RunInProxyMode(proxy *kubernetes.ProxyConfig, assetConfig *AssetConfig) {
-	handlerChain, extra, err := c.buildHandlerChain(assetConfig)
+	handlerChain, messages, err := c.buildHandlerChain(assetConfig)
 	if err != nil {
 		glog.Fatalf("Failed to launch master: %v", err)
 	}
@@ -181,11 +181,11 @@ func (c *MasterConfig) RunInProxyMode(proxy *kubernetes.ProxyConfig, assetConfig
 	container := genericmux.NewAPIContainer(http.NewServeMux(), kapi.Codecs)
 
 	// install /api proxy forwarder
-	proxyExtra, err := proxy.InstallAPI(container.Container)
+	proxyMessages, err := proxy.InstallAPI(container.Container)
 	if err != nil {
 		glog.Fatalf("Failed to launch master: %v", err)
 	}
-	extra = append(extra, proxyExtra...)
+	messages = append(messages, proxyMessages...)
 
 	// install GenericAPIServer handlers manually, usually done by GenericAPIServer.PrepareRun()
 	healthz.InstallHandler(&container.NonSwaggerRoutes, healthz.PingHealthz)
@@ -193,10 +193,10 @@ func (c *MasterConfig) RunInProxyMode(proxy *kubernetes.ProxyConfig, assetConfig
 	swaggerConfig := genericapiserver.DefaultSwaggerConfig()
 	swaggerConfig.WebServicesUrl = c.Options.MasterPublicURL
 	genericroutes.Swagger{Config: swaggerConfig}.Install(container)
-	extra = append(extra, fmt.Sprintf("Started Swagger Schema API at %%s%s", swaggerConfig.ApiPath))
+	messages = append(messages, fmt.Sprintf("Started Swagger Schema API at %%s%s", swaggerConfig.ApiPath))
 
 	genericroutes.OpenAPI{Config: kubernetes.DefaultOpenAPIConfig()}.Install(container)
-	extra = append(extra, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
+	messages = append(messages, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
 
 	// install origin handlers
 	c.InstallProtectedAPI(container.Container)
@@ -209,7 +209,7 @@ func (c *MasterConfig) RunInProxyMode(proxy *kubernetes.ProxyConfig, assetConfig
 	genericConfig.MaxRequestsInFlight = c.Options.ServingInfo.MaxRequestsInFlight
 
 	secureHandler, _ := handlerChain(container.ServeMux, genericConfig)
-	c.serve(secureHandler, extra)
+	c.serve(secureHandler, messages)
 
 	// Attempt to verify the server came up for 20 seconds (100 tries * 100ms, 100ms timeout per try)
 	cmdutil.WaitForSuccessfulDial(c.TLS, c.Options.ServingInfo.BindNetwork, c.Options.ServingInfo.BindAddress, 100*time.Millisecond, 100*time.Millisecond, 100)
@@ -221,12 +221,12 @@ func (s sortedGroupVersions) Len() int           { return len(s) }
 func (s sortedGroupVersions) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 func (s sortedGroupVersions) Less(i, j int) bool { return s[i].Group < s[j].Group }
 
-func (c *MasterConfig) kubernetesExtraMessages() []string {
-	var extra []string
+func (c *MasterConfig) kubernetesAPIMessages(kc *kubernetes.MasterConfig) []string {
+	var messages []string
 
 	// v1 has to be printed separately since it's served from different endpoint than groups
 	if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, kubeapiv1.SchemeGroupVersion) {
-		extra = append(extra, fmt.Sprintf("Started Kubernetes API at %%s%s", genericapiserver.DefaultLegacyAPIPrefix))
+		messages = append(messages, fmt.Sprintf("Started Kubernetes API at %%s%s", genericapiserver.DefaultLegacyAPIPrefix))
 	}
 	versions := registered.EnabledVersions()
 	sort.Sort(sortedGroupVersions(versions))
@@ -236,20 +236,20 @@ func (c *MasterConfig) kubernetesExtraMessages() []string {
 			continue
 		}
 		if configapi.HasKubernetesAPIVersion(*c.Options.KubernetesMasterConfig, ver) {
-			extra = append(extra, fmt.Sprintf("Started Kubernetes API %s at %%s%s", ver.String(), genericapiserver.APIGroupPrefix))
+			messages = append(messages, fmt.Sprintf("Started Kubernetes API %s at %%s%s", ver.String(), genericapiserver.APIGroupPrefix))
 		}
 	}
 
-	extra = append(extra, fmt.Sprintf("Started Swagger Schema API at %%s%s", kc.Master.GenericConfig.SwaggerConfig.ApiPath))
-	extra = append(extra, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
+	messages = append(messages, fmt.Sprintf("Started Swagger Schema API at %%s%s", kc.Master.GenericConfig.SwaggerConfig.ApiPath))
+	messages = append(messages, fmt.Sprintf("Started OpenAPI Schema at %%s%s", openAPIServePath))
 
-	return extra
+	return messages
 }
 
 func (c *MasterConfig) buildHandlerChain(assetConfig *AssetConfig) (func(http.Handler, *genericapiserver.Config) (secure, insecure http.Handler), []string, error) {
-	var extra []string
+	var messages []string
 	if c.Options.OAuthConfig != nil {
-		extra = append(extra, fmt.Sprintf("Started OAuth2 API at %%s%s", OpenShiftOAuthAPIPrefix))
+		messages = append(messages, fmt.Sprintf("Started OAuth2 API at %%s%s", OpenShiftOAuthAPIPrefix))
 	}
 
 	if assetConfig != nil {
@@ -257,7 +257,7 @@ func (c *MasterConfig) buildHandlerChain(assetConfig *AssetConfig) (func(http.Ha
 		if err != nil {
 			return nil, nil, err
 		}
-		extra = append(extra, fmt.Sprintf("Started Web Console %%s%s", publicURL.Path))
+		messages = append(messages, fmt.Sprintf("Started Web Console %%s%s", publicURL.Path))
 	}
 
 	// TODO(sttts): resync with upstream handler chain and re-use upstream filters as much as possible
@@ -326,7 +326,7 @@ func (c *MasterConfig) buildHandlerChain(assetConfig *AssetConfig) (func(http.Ha
 		handler = kapi.WithRequestContext(handler, kc.RequestContextMapper)
 
 		return handler, nil
-	}, extra, nil
+	}, messages, nil
 }
 
 func (c *MasterConfig) RunHealth() {
@@ -343,7 +343,7 @@ func (c *MasterConfig) RunHealth() {
 }
 
 // serve starts serving the provided http.Handler using security settings derived from the MasterConfig
-func (c *MasterConfig) serve(handler http.Handler, extra []string) {
+func (c *MasterConfig) serve(handler http.Handler, messages []string) {
 	timeout := c.Options.ServingInfo.RequestTimeoutSeconds
 	if timeout == -1 {
 		timeout = 0
@@ -358,7 +358,7 @@ func (c *MasterConfig) serve(handler http.Handler, extra []string) {
 	}
 
 	go utilwait.Forever(func() {
-		for _, s := range extra {
+		for _, s := range messages {
 			glog.Infof(s, c.Options.ServingInfo.BindAddress)
 		}
 		if c.TLS {
