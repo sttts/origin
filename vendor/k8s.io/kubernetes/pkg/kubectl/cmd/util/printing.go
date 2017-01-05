@@ -48,6 +48,7 @@ func AddOutputFlagsForMutation(cmd *cobra.Command) {
 // AddOutputFlags adds output related flags to a command.
 func AddOutputFlags(cmd *cobra.Command) {
 	cmd.Flags().StringP("output", "o", "", "Output format. One of: json|yaml|wide|name|custom-columns=...|custom-columns-file=...|go-template=...|go-template-file=...|jsonpath=...|jsonpath-file=... See custom columns [http://kubernetes.io/docs/user-guide/kubectl-overview/#custom-columns], golang template [http://golang.org/pkg/text/template/#pkg-overview] and jsonpath template [http://kubernetes.io/docs/user-guide/jsonpath].")
+	cmd.Flags().Bool("strict-templates", false, "If true, return an error on any field or map key that is missing in a template.")
 }
 
 // AddNoHeadersFlags adds no-headers flags to a command.
@@ -125,7 +126,13 @@ func PrinterForCommand(cmd *cobra.Command) (kubectl.ResourcePrinter, bool, error
 		}
 	}
 
-	printer, generic, err := kubectl.GetPrinter(outputFormat, templateFile, GetFlagBool(cmd, "no-headers"))
+	// this function may be invoked by a command that did not call AddPrinterFlags first, so we need
+	// to be safe about how we access the strict-templates flag
+	strictTemplates := false
+	if cmd.Flags().Lookup("strict-templates") != nil {
+		strictTemplates = GetFlagBool(cmd, "strict-templates")
+	}
+	printer, generic, err := kubectl.GetPrinter(outputFormat, templateFile, GetFlagBool(cmd, "no-headers"), strictTemplates)
 	if err != nil {
 		return nil, generic, err
 	}
