@@ -23,7 +23,7 @@ Update existing container image(s) of resources.
 
 .PP
 \fB\-f\fP, \fB\-\-filename\fP=[]
-    Filename, directory, or URL to a file identifying the resource to get from a server.
+    Filename, directory, or URL to files identifying the resource to get from a server.
 
 .PP
 \fB\-\-local\fP=false
@@ -71,6 +71,10 @@ Update existing container image(s) of resources.
 .PP
 \fB\-\-source\fP="istag"
     The image source type; valid types are valid values are 'imagestreamtag', 'istag', 'imagestreamimage', 'isimage', and 'docker'
+
+.PP
+\fB\-\-strict\-templates\fP=false
+    If true, return an error on any field or map key that is missing in a template.
 
 .PP
 \fB\-\-template\fP=""

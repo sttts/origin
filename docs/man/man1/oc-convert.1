@@ -25,7 +25,7 @@ The default output will be printed to stdout in YAML format. One can use \-o opt
 .SH OPTIONS
 .PP
 \fB\-f\fP, \fB\-\-filename\fP=[]
-    Filename, directory, or URL to file to need to get converted.
+    Filename, directory, or URL to files to need to get converted.
 
 .PP
 \fB\-\-include\-extended\-apis\fP=true
@@ -69,6 +69,10 @@ The default output will be printed to stdout in YAML format. One can use \-o opt
 .PP
 \fB\-\-sort\-by\fP=""
     If non\-empty, sort list types using this field specification.  The field specification is expressed as a JSONPath expression (e.g. '{.metadata.name}'). The field in the API resource specified by this JSONPath expression must be an integer or a string.
+
+.PP
+\fB\-\-strict\-templates\fP=false
+    If true, return an error on any field or map key that is missing in a template.
 
 .PP
 \fB\-\-template\fP=""

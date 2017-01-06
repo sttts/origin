@@ -30,7 +30,7 @@ Possible resources include builds, buildConfigs, services, pods, etc. To see a l
 
 .PP
 \fB\-f\fP, \fB\-\-filename\fP=[]
-    Filename, directory, or URL to a file identifying the resource to get from a server.
+    Filename, directory, or URL to files identifying the resource to get from a server.
 
 .PP
 \fB\-\-include\-extended\-apis\fP=true
@@ -82,6 +82,10 @@ Possible resources include builds, buildConfigs, services, pods, etc. To see a l
 .PP
 \fB\-\-sort\-by\fP=""
     If non\-empty, sort list types using this field specification.  The field specification is expressed as a JSONPath expression (e.g. '{.metadata.name}'). The field in the API resource specified by this JSONPath expression must be an integer or a string.
+
+.PP
+\fB\-\-strict\-templates\fP=false
+    If true, return an error on any field or map key that is missing in a template.
 
 .PP
 \fB\-\-template\fP=""

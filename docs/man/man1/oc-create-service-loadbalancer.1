@@ -61,6 +61,10 @@ Create a LoadBalancer service with the specified name.
     If non\-empty, sort list types using this field specification.  The field specification is expressed as a JSONPath expression (e.g. '{.metadata.name}'). The field in the API resource specified by this JSONPath expression must be an integer or a string.
 
 .PP
+\fB\-\-strict\-templates\fP=false
+    If true, return an error on any field or map key that is missing in a template.
+
+.PP
 \fB\-\-tcp\fP=[]
     Port pairs can be specified as '<port>:<targetPort>'.
 
@@ -149,7 +153,7 @@ Create a LoadBalancer service with the specified name.
 .RS
 
 .nf
-  # Create a new nodeport service named my\-lbs
+  # Create a new LoadBalancer service named my\-lbs
   oc create service loadbalancer my\-lbs \-\-tcp=5678:8080
 
 .fi

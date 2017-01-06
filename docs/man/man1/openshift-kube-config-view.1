@@ -64,6 +64,10 @@ You can use \-\-output jsonpath={...} to extract specific values using a jsonpat
     If non\-empty, sort list types using this field specification.  The field specification is expressed as a JSONPath expression (e.g. '{.metadata.name}'). The field in the API resource specified by this JSONPath expression must be an integer or a string.
 
 .PP
+\fB\-\-strict\-templates\fP=false
+    If true, return an error on any field or map key that is missing in a template.
+
+.PP
 \fB\-\-template\fP=""
     Template string or path to template file to use when \-o=go\-template, \-o=go\-template\-file. The template format is golang templates [
 \[la]http://golang.org/pkg/text/template/#pkg-overview\[ra]].
@@ -176,7 +180,7 @@ You can use \-\-output jsonpath={...} to extract specific values using a jsonpat
 
 .PP
 \fB\-\-ir\-dbname\fP="k8s"
-    InfluxDB database name which contains metrics requred by InitialResources
+    InfluxDB database name which contains metrics required by InitialResources
 
 .PP
 \fB\-\-ir\-hawkular\fP=""
@@ -184,7 +188,7 @@ You can use \-\-output jsonpath={...} to extract specific values using a jsonpat
 
 .PP
 \fB\-\-ir\-influxdb\-host\fP="localhost:8080/api/v1/proxy/namespaces/kube\-system/services/monitoring\-influxdb:api"
-    Address of InfluxDB which contains metrics requred by InitialResources
+    Address of InfluxDB which contains metrics required by InitialResources
 
 .PP
 \fB\-\-ir\-namespace\-only\fP=false
@@ -300,12 +304,11 @@ You can use \-\-output jsonpath={...} to extract specific values using a jsonpat
 .RS
 
 .nf
-
-# Show Merged kubeconfig settings.
-kubectl config view
-
-# Get the password for the e2e user
-kubectl config view \-o jsonpath='{.users[?(@.name == "e2e")].user.password}'
+  # Show Merged kubeconfig settings.
+  kubectl config view
+  
+  # Get the password for the e2e user
+  kubectl config view \-o jsonpath='{.users[?(@.name == "e2e")].user.password}'
 
 .fi
 .RE
