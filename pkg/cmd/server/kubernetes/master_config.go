@@ -42,7 +42,7 @@ import (
 	"k8s.io/kubernetes/pkg/util/intstr"
 	knet "k8s.io/kubernetes/pkg/util/net"
 	"k8s.io/kubernetes/pkg/util/sets"
-	"k8s.io/kubernetes/pkg/version"
+	kversion "k8s.io/kubernetes/pkg/version"
 	scheduleroptions "k8s.io/kubernetes/plugin/cmd/kube-scheduler/app/options"
 
 	"github.com/openshift/origin/pkg/api"
@@ -52,6 +52,7 @@ import (
 	cmdflags "github.com/openshift/origin/pkg/cmd/util/flags"
 	"github.com/openshift/origin/pkg/controller/shared"
 	openapigenerated "github.com/openshift/origin/pkg/openapi"
+	"github.com/openshift/origin/pkg/version"
 )
 
 var LegacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, api.Prefix, api.LegacyPrefix)
@@ -265,7 +266,7 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 
 	genericConfig := genericapiserver.NewConfig().ApplyOptions(server.GenericServerRunOptions)
 
-	kubeVersion := version.Get()
+	kubeVersion := kversion.Get()
 	genericConfig.Version = &kubeVersion
 
 	// MUST be in synced with the value in CMServer
