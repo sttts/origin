@@ -77,7 +77,7 @@ func addVersionsToScheme(externalVersions ...unversioned.GroupVersion) {
 			continue
 		}
 		switch v {
-		case v1.SchemeGroupVersion:
+		case v1.LegacySchemeGroupVersion:
 			v1.AddToScheme(kapi.Scheme)
 
 		default:
