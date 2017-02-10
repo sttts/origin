@@ -56,6 +56,7 @@ import (
 	"github.com/openshift/origin/pkg/cmd/server/crypto"
 	serverhandlers "github.com/openshift/origin/pkg/cmd/server/handlers"
 	cmdutil "github.com/openshift/origin/pkg/cmd/util"
+	deployapiv1 "github.com/openshift/origin/pkg/deploy/api/v1"
 	deployconfigregistry "github.com/openshift/origin/pkg/deploy/registry/deployconfig"
 	deployconfigetcd "github.com/openshift/origin/pkg/deploy/registry/deployconfig/etcd"
 	deploylogregistry "github.com/openshift/origin/pkg/deploy/registry/deploylog"
@@ -438,6 +439,7 @@ func (c *MasterConfig) InstallProtectedAPI(apiserver *genericapiserver.GenericAP
 
 		apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(gv.Group)
 		apiGroupInfo.VersionedResourcesStorageMap[buildapiv1.SchemeGroupVersion.Version] = gvStorage
+		apiGroupInfo.VersionedResourcesStorageMap[deployapiv1.SchemeGroupVersion.Version] = gvStorage
 		apiGroupInfo.GroupMeta.GroupVersion = gv
 		if err := apiserver.InstallAPIGroup(&apiGroupInfo); err != nil {
 			glog.Fatalf("Unable to initialize %s API group: %v", gv, err)
@@ -754,13 +756,6 @@ func (c *MasterConfig) GetRestStorage() map[unversioned.GroupVersion]map[string]
 			"imageStreamMappings":  imageStreamMappingStorage,
 			"imageStreamTags":      imageStreamTagStorage,
 
-			"deploymentConfigs":             deployConfigStorage,
-			"deploymentConfigs/scale":       deployConfigScaleStorage,
-			"deploymentConfigs/status":      deployConfigStatusStorage,
-			"deploymentConfigs/rollback":    deployConfigRollbackStorage,
-			"deploymentConfigs/log":         deploylogregistry.NewREST(configClient, kclient, c.DeploymentLogClient(), nodeConnectionInfoGetter),
-			"deploymentConfigs/instantiate": dcInstantiateStorage,
-
 			// TODO: Deprecate these
 			"generateDeploymentConfigs": deployconfiggenerator.NewREST(deployConfigGenerator, c.ExternalVersionCodec),
 			"deploymentConfigRollbacks": deployrollback.NewDeprecatedREST(deployRollbackClient, c.ExternalVersionCodec),
@@ -817,6 +812,15 @@ func (c *MasterConfig) GetRestStorage() map[unversioned.GroupVersion]map[string]
 
 			"roleBindingRestrictions": restInPeace(rolebindingrestrictionregistry.NewStorage(c.RESTOptionsGetter)),
 		},
+	}
+
+	storage[deployapiv1.SchemeGroupVersion] = map[string]rest.Storage{
+		"deploymentConfigs":             deployConfigStorage,
+		"deploymentConfigs/scale":       deployConfigScaleStorage,
+		"deploymentConfigs/status":      deployConfigStatusStorage,
+		"deploymentConfigs/rollback":    deployConfigRollbackStorage,
+		"deploymentConfigs/log":         deploylogregistry.NewREST(configClient, kclient, c.DeploymentLogClient(), nodeConnectionInfoGetter),
+		"deploymentConfigs/instantiate": dcInstantiateStorage,
 	}
 
 	if configapi.IsBuildEnabled(&c.Options) {

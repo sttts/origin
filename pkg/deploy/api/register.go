@@ -1,15 +1,23 @@
 package api
 
 import (
+	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/unversioned"
+	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/watch/versioned"
 )
 
-const GroupName = ""
-const FutureGroupName = "deploy.openshift.io"
+const (
+	LegacyGroupName = ""
+	GroupName       = "deploy.openshift.io"
+)
 
 // SchemeGroupVersion is group version used to register these objects
-var SchemeGroupVersion = unversioned.GroupVersion{Group: GroupName, Version: runtime.APIVersionInternal}
+var (
+	SchemeGroupVersion       = unversioned.GroupVersion{Group: GroupName, Version: runtime.APIVersionInternal}
+	LegacySchemeGroupVersion = unversioned.GroupVersion{Group: LegacyGroupName, Version: runtime.APIVersionInternal}
+)
 
 // Kind takes an unqualified kind and returns back a Group qualified GroupKind
 func Kind(kind string) unversioned.GroupKind {
@@ -28,20 +36,25 @@ var (
 
 // Adds the list of known types to api.Scheme.
 func addKnownTypes(scheme *runtime.Scheme) error {
-	scheme.AddKnownTypes(SchemeGroupVersion,
+	types := []runtime.Object{
 		&DeploymentConfig{},
 		&DeploymentConfigList{},
 		&DeploymentConfigRollback{},
 		&DeploymentRequest{},
 		&DeploymentLog{},
 		&DeploymentLogOptions{},
+	}
+	scheme.AddKnownTypes(SchemeGroupVersion,
+		append(types,
+			&unversioned.Status{}, // TODO: revisit in 1.6 when Status is actually registered as unversioned
+			&kapi.ListOptions{},
+			&kapi.DeleteOptions{},
+			&kapi.ExportOptions{},
+			&extensions.Scale{},
+			//&json.WatchEvent{},
+		)...,
 	)
+	versioned.AddToGroupVersion(scheme, SchemeGroupVersion)
+	scheme.AddKnownTypes(LegacySchemeGroupVersion, types...)
 	return nil
 }
-
-func (obj *DeploymentConfig) GetObjectKind() unversioned.ObjectKind         { return &obj.TypeMeta }
-func (obj *DeploymentConfigList) GetObjectKind() unversioned.ObjectKind     { return &obj.TypeMeta }
-func (obj *DeploymentConfigRollback) GetObjectKind() unversioned.ObjectKind { return &obj.TypeMeta }
-func (obj *DeploymentRequest) GetObjectKind() unversioned.ObjectKind        { return &obj.TypeMeta }
-func (obj *DeploymentLog) GetObjectKind() unversioned.ObjectKind            { return &obj.TypeMeta }
-func (obj *DeploymentLogOptions) GetObjectKind() unversioned.ObjectKind     { return &obj.TypeMeta }
