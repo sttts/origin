@@ -49,5 +49,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 	)
 	versioned.AddToGroupVersion(scheme, SchemeGroupVersion)
 	scheme.AddKnownTypes(LegacySchemeGroupVersion, types...)
+
+	scheme.AddKnownTypeWithName(LegacySchemeGroupVersion.WithKind("TemplateConfig"), &Template{})
+	scheme.AddKnownTypeWithName(LegacySchemeGroupVersion.WithKind("ProcessedTemplate"), &Template{})
 	return nil
 }
