@@ -39,6 +39,7 @@ import (
 	"k8s.io/kubernetes/pkg/util/sets"
 	utilwait "k8s.io/kubernetes/pkg/util/wait"
 
+	authzapiv1 "github.com/openshift/origin/pkg/authorization/api/v1"
 	authzcache "github.com/openshift/origin/pkg/authorization/authorizer/cache"
 	authzremote "github.com/openshift/origin/pkg/authorization/authorizer/remote"
 	buildapiv1 "github.com/openshift/origin/pkg/build/api/v1"
@@ -442,6 +443,7 @@ func (c *MasterConfig) InstallProtectedAPI(apiserver *genericapiserver.GenericAP
 		versions := []string{
 			buildapiv1.SchemeGroupVersion.Version,
 			deployapiv1.SchemeGroupVersion.Version,
+			authzapiv1.SchemeGroupVersion.Version,
 			templateapiv1.SchemeGroupVersion.Version,
 		}
 
@@ -790,34 +792,36 @@ func (c *MasterConfig) GetRestStorage() map[unversioned.GroupVersion]map[string]
 			"oAuthClients":              clientStorage,
 			"oAuthClientAuthorizations": clientAuthorizationStorage,
 
-			"resourceAccessReviews":      resourceAccessReviewStorage,
-			"subjectAccessReviews":       subjectAccessReviewStorage,
-			"localSubjectAccessReviews":  localSubjectAccessReviewStorage,
-			"localResourceAccessReviews": localResourceAccessReviewStorage,
-			"selfSubjectRulesReviews":    selfSubjectRulesReviewStorage,
-			"subjectRulesReviews":        subjectRulesReviewStorage,
-
 			"podSecurityPolicyReviews":            podSecurityPolicyReviewStorage,
 			"podSecurityPolicySubjectReviews":     podSecurityPolicySubjectStorage,
 			"podSecurityPolicySelfSubjectReviews": podSecurityPolicySelfSubjectReviewStorage,
-
-			"policies":       policyStorage,
-			"policyBindings": policyBindingStorage,
-			"roles":          roleStorage,
-			"roleBindings":   roleBindingStorage,
-
-			"clusterPolicies":       clusterPolicyStorage,
-			"clusterPolicyBindings": clusterPolicyBindingStorage,
-			"clusterRoleBindings":   clusterRoleBindingStorage,
-			"clusterRoles":          clusterRoleStorage,
 
 			"clusterResourceQuotas":        restInPeace(clusterresourcequotaregistry.NewStorage(c.RESTOptionsGetter)),
 			"clusterResourceQuotas/status": updateInPeace(clusterresourcequotaregistry.NewStatusStorage(c.RESTOptionsGetter)),
 			"appliedClusterResourceQuotas": appliedclusterresourcequotaregistry.NewREST(
 				c.ClusterQuotaMappingController.GetClusterQuotaMapper(), c.Informers.ClusterResourceQuotas().Lister(), c.Informers.KubernetesInformers().Namespaces().Lister()),
-
-			"roleBindingRestrictions": restInPeace(rolebindingrestrictionregistry.NewStorage(c.RESTOptionsGetter)),
 		},
+	}
+
+	storage[authzapiv1.SchemeGroupVersion] = map[string]rest.Storage{
+		"resourceAccessReviews":      resourceAccessReviewStorage,
+		"subjectAccessReviews":       subjectAccessReviewStorage,
+		"localSubjectAccessReviews":  localSubjectAccessReviewStorage,
+		"localResourceAccessReviews": localResourceAccessReviewStorage,
+		"selfSubjectRulesReviews":    selfSubjectRulesReviewStorage,
+		"subjectRulesReviews":        subjectRulesReviewStorage,
+
+		"policies":       policyStorage,
+		"policyBindings": policyBindingStorage,
+		"roles":          roleStorage,
+		"roleBindings":   roleBindingStorage,
+
+		"clusterPolicies":       clusterPolicyStorage,
+		"clusterPolicyBindings": clusterPolicyBindingStorage,
+		"clusterRoleBindings":   clusterRoleBindingStorage,
+		"clusterRoles":          clusterRoleStorage,
+
+		"roleBindingRestrictions": restInPeace(rolebindingrestrictionregistry.NewStorage(c.RESTOptionsGetter)),
 	}
 
 	storage[deployapiv1.SchemeGroupVersion] = map[string]rest.Storage{
