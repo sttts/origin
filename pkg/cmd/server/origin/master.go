@@ -92,6 +92,7 @@ import (
 	hostsubnetetcd "github.com/openshift/origin/pkg/sdn/registry/hostsubnet/etcd"
 	netnamespaceetcd "github.com/openshift/origin/pkg/sdn/registry/netnamespace/etcd"
 	saoauth "github.com/openshift/origin/pkg/serviceaccounts/oauthclient"
+	templateapiv1 "github.com/openshift/origin/pkg/template/api/v1"
 	templateregistry "github.com/openshift/origin/pkg/template/registry"
 	templateetcd "github.com/openshift/origin/pkg/template/registry/etcd"
 	groupetcd "github.com/openshift/origin/pkg/user/registry/group/etcd"
@@ -438,8 +439,16 @@ func (c *MasterConfig) InstallProtectedAPI(apiserver *genericapiserver.GenericAP
 		}
 
 		apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(gv.Group)
-		apiGroupInfo.VersionedResourcesStorageMap[buildapiv1.SchemeGroupVersion.Version] = gvStorage
-		apiGroupInfo.VersionedResourcesStorageMap[deployapiv1.SchemeGroupVersion.Version] = gvStorage
+		versions := []string{
+			buildapiv1.SchemeGroupVersion.Version,
+			deployapiv1.SchemeGroupVersion.Version,
+			templateapiv1.SchemeGroupVersion.Version,
+		}
+
+		for _, version := range versions {
+			apiGroupInfo.VersionedResourcesStorageMap[version] = gvStorage
+		}
+
 		apiGroupInfo.GroupMeta.GroupVersion = gv
 		if err := apiserver.InstallAPIGroup(&apiGroupInfo); err != nil {
 			glog.Fatalf("Unable to initialize %s API group: %v", gv, err)
@@ -760,9 +769,6 @@ func (c *MasterConfig) GetRestStorage() map[unversioned.GroupVersion]map[string]
 			"generateDeploymentConfigs": deployconfiggenerator.NewREST(deployConfigGenerator, c.ExternalVersionCodec),
 			"deploymentConfigRollbacks": deployrollback.NewDeprecatedREST(deployRollbackClient, c.ExternalVersionCodec),
 
-			"processedTemplates": templateregistry.NewREST(),
-			"templates":          templateStorage,
-
 			"routes":        routeStorage,
 			"routes/status": routeStatusStorage,
 
@@ -821,6 +827,11 @@ func (c *MasterConfig) GetRestStorage() map[unversioned.GroupVersion]map[string]
 		"deploymentConfigs/rollback":    deployConfigRollbackStorage,
 		"deploymentConfigs/log":         deploylogregistry.NewREST(configClient, kclient, c.DeploymentLogClient(), nodeConnectionInfoGetter),
 		"deploymentConfigs/instantiate": dcInstantiateStorage,
+	}
+
+	storage[templateapiv1.SchemeGroupVersion] = map[string]rest.Storage{
+		"processedTemplates": templateregistry.NewREST(),
+		"templates":          templateStorage,
 	}
 
 	if configapi.IsBuildEnabled(&c.Options) {

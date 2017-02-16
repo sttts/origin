@@ -40,28 +40,29 @@ var (
 	readWrite = []string{"get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"}
 	read      = []string{"get", "list", "watch"}
 
-	kapiGroup         = kapi.GroupName
-	appsGroup         = apps.GroupName
-	autoscalingGroup  = autoscaling.GroupName
-	batchGroup        = batch.GroupName
-	certificatesGroup = certificates.GroupName
-	extensionsGroup   = extensions.GroupName
-	policyGroup       = policy.GroupName
-	securityGroup     = securityapi.GroupName
-	storageGroup      = storage.GroupName
-	authzGroup        = authorizationapi.GroupName
-	buildGroup        = buildapi.GroupName
-	legacyBuildGroup  = buildapi.LegacyGroupName
-	deployGroup       = deployapi.GroupName
-	legacyDeployGroup = deployapi.LegacyGroupName
-	imageGroup        = imageapi.GroupName
-	projectGroup      = projectapi.GroupName
-	quotaGroup        = quotaapi.GroupName
-	routeGroup        = routeapi.GroupName
-	templateGroup     = templateapi.GroupName
-	userGroup         = userapi.GroupName
-	oauthGroup        = oauthapi.GroupName
-	sdnGroup          = sdnapi.GroupName
+	kapiGroup           = kapi.GroupName
+	appsGroup           = apps.GroupName
+	autoscalingGroup    = autoscaling.GroupName
+	batchGroup          = batch.GroupName
+	certificatesGroup   = certificates.GroupName
+	extensionsGroup     = extensions.GroupName
+	policyGroup         = policy.GroupName
+	securityGroup       = securityapi.GroupName
+	storageGroup        = storage.GroupName
+	authzGroup          = authorizationapi.GroupName
+	buildGroup          = buildapi.GroupName
+	legacyBuildGroup    = buildapi.LegacyGroupName
+	deployGroup         = deployapi.GroupName
+	legacyDeployGroup   = deployapi.LegacyGroupName
+	imageGroup          = imageapi.GroupName
+	projectGroup        = projectapi.GroupName
+	quotaGroup          = quotaapi.GroupName
+	routeGroup          = routeapi.GroupName
+	templateGroup       = templateapi.GroupName
+	legacyTemplateGroup = templateapi.LegacyGroupName
+	userGroup           = userapi.GroupName
+	oauthGroup          = oauthapi.GroupName
+	sdnGroup            = sdnapi.GroupName
 )
 
 func GetBootstrapOpenshiftRoles(openshiftNamespace string) []authorizationapi.Role {
@@ -72,7 +73,7 @@ func GetBootstrapOpenshiftRoles(openshiftNamespace string) []authorizationapi.Ro
 				Namespace: openshiftNamespace,
 			},
 			Rules: []authorizationapi.PolicyRule{
-				authorizationapi.NewRule(read...).Groups(templateGroup).Resources("templates").RuleOrDie(),
+				authorizationapi.NewRule(read...).Groups(templateGroup, legacyTemplateGroup).Resources("templates").RuleOrDie(),
 				authorizationapi.NewRule(read...).Groups(imageGroup).Resources("imagestreams", "imagestreamtags", "imagestreamimages").RuleOrDie(),
 				// so anyone can pull from openshift/* image streams
 				authorizationapi.NewRule("get").Groups(imageGroup).Resources("imagestreams/layers").RuleOrDie(),
@@ -180,7 +181,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 
 				authorizationapi.NewRule(read...).Groups(sdnGroup).Resources("clusternetworks", "egressnetworkpolicies", "hostsubnets", "netnamespaces").RuleOrDie(),
 
-				authorizationapi.NewRule(read...).Groups(templateGroup).Resources("templates", "templateconfigs", "processedtemplates").RuleOrDie(),
+				authorizationapi.NewRule(read...).Groups(templateGroup, legacyTemplateGroup).Resources("templates", "templateconfigs", "processedtemplates").RuleOrDie(),
 
 				authorizationapi.NewRule(read...).Groups(userGroup).Resources("groups", "identities", "useridentitymappings", "users").RuleOrDie(),
 
@@ -330,7 +331,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 				// an admin can run routers that write back conditions to the route
 				authorizationapi.NewRule("update").Groups(routeGroup).Resources("routes/status").RuleOrDie(),
 
-				authorizationapi.NewRule(readWrite...).Groups(templateGroup).Resources("templates", "templateconfigs", "processedtemplates").RuleOrDie(),
+				authorizationapi.NewRule(readWrite...).Groups(templateGroup, legacyTemplateGroup).Resources("templates", "templateconfigs", "processedtemplates").RuleOrDie(),
 
 				// backwards compatibility
 				authorizationapi.NewRule(readWrite...).Groups(buildGroup, legacyBuildGroup).Resources("buildlogs").RuleOrDie(),
@@ -386,7 +387,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 				authorizationapi.NewRule(readWrite...).Groups(routeGroup).Resources("routes").RuleOrDie(),
 				authorizationapi.NewRule(read...).Groups(routeGroup).Resources("routes/status").RuleOrDie(),
 
-				authorizationapi.NewRule(readWrite...).Groups(templateGroup).Resources("templates", "templateconfigs", "processedtemplates").RuleOrDie(),
+				authorizationapi.NewRule(readWrite...).Groups(templateGroup, legacyTemplateGroup).Resources("templates", "templateconfigs", "processedtemplates").RuleOrDie(),
 
 				// backwards compatibility
 				authorizationapi.NewRule(readWrite...).Groups(buildGroup, legacyBuildGroup).Resources("buildlogs").RuleOrDie(),
@@ -438,7 +439,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 				authorizationapi.NewRule(read...).Groups(routeGroup).Resources("routes").RuleOrDie(),
 				authorizationapi.NewRule(read...).Groups(routeGroup).Resources("routes/status").RuleOrDie(),
 
-				authorizationapi.NewRule(read...).Groups(templateGroup).Resources("templates", "templateconfigs", "processedtemplates").RuleOrDie(),
+				authorizationapi.NewRule(read...).Groups(templateGroup, legacyTemplateGroup).Resources("templates", "templateconfigs", "processedtemplates").RuleOrDie(),
 
 				// backwards compatibility
 				authorizationapi.NewRule(read...).Groups(buildGroup, legacyBuildGroup).Resources("buildlogs").RuleOrDie(),
