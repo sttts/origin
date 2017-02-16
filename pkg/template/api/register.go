@@ -45,6 +45,7 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 			&kapi.ListOptions{},
 			&kapi.DeleteOptions{},
 			&kapi.ExportOptions{},
+			&kapi.List{},
 		)...,
 	)
 	versioned.AddToGroupVersion(scheme, SchemeGroupVersion)

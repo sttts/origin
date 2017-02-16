@@ -273,7 +273,9 @@ func RunProcess(f *clientcmd.Factory, in io.Reader, out, errout io.Writer, cmd *
 	if err != nil {
 		return err
 	}
+	// FIXME: This code should get the group version from the api.List{}
 	gv := mapping.GroupVersionKind.GroupVersion()
+	gv.Group = ""
 	version, err := kcmdutil.OutputVersion(cmd, &gv)
 	if err != nil {
 		return err
