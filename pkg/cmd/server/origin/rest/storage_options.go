@@ -27,14 +27,30 @@ func StorageOptions(options configapi.MasterConfig) restoptions.Getter {
 
 			{Resource: "identities"}: "useridentities",
 
+			// REBASE: add legacy variant for network resources
 			{Resource: "clusternetworks"}:       "registry/sdnnetworks",
 			{Resource: "egressnetworkpolicies"}: "registry/egressnetworkpolicy",
 			{Resource: "hostsubnets"}:           "registry/sdnsubnets",
 			{Resource: "netnamespaces"}:         "registry/sdnnetnamespaces",
+
+			{Group: authorizationapi.GroupName, Resource: "clusterpolicies"}:       "authorization/cluster/policies",
+			{Group: authorizationapi.GroupName, Resource: "clusterpolicybindings"}: "authorization/cluster/policybindings",
+			{Group: authorizationapi.GroupName, Resource: "policies"}:              "authorization/local/policies",
+			{Group: authorizationapi.GroupName, Resource: "policybindings"}:        "authorization/local/policybindings",
+
+			{Group: authorizationapi.GroupName, Resource: "oauthaccesstokens"}:         "oauth/accesstokens",
+			{Group: authorizationapi.GroupName, Resource: "oauthauthorizetokens"}:      "oauth/authorizetokens",
+			{Group: authorizationapi.GroupName, Resource: "oauthclients"}:              "oauth/clients",
+			{Group: authorizationapi.GroupName, Resource: "oauthclientauthorizations"}: "oauth/clientauthorizations",
+
+			{Group: authorizationapi.GroupName, Resource: "identities"}: "useridentities",
 		},
 		map[unversioned.GroupResource]struct{}{
 			{Resource: "oauthauthorizetokens"}: {},
 			{Resource: "oauthaccesstokens"}:    {},
+
+			{Group: authorizationapi.GroupName, Resource: "oauthauthorizetokens"}: {},
+			{Group: authorizationapi.GroupName, Resource: "oauthaccesstokens"}:    {},
 		},
 	)
 }
