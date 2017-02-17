@@ -27,6 +27,9 @@ func Kind(kind string) unversioned.GroupKind {
 func Resource(resource string) unversioned.GroupResource {
 	return SchemeGroupVersion.WithResource(resource).GroupResource()
 }
+func LegacyResource(resource string) unversioned.GroupResource {
+	return LegacySchemeGroupVersion.WithResource(resource).GroupResource()
+}
 
 var (
 	SchemeBuilder = runtime.NewSchemeBuilder(addKnownTypes)
