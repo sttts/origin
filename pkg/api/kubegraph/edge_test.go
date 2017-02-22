@@ -179,8 +179,9 @@ func TestHPADCEdges(t *testing.T) {
 	hpa.Name = "test-hpa"
 	hpa.Spec = autoscaling.HorizontalPodAutoscalerSpec{
 		ScaleTargetRef: autoscaling.CrossVersionObjectReference{
-			Name: "test-dc",
-			Kind: "DeploymentConfig",
+			Name:       "test-dc",
+			Kind:       "DeploymentConfig",
+			APIVersion: "deploy.openshift.io/v1",
 		},
 	}
 
