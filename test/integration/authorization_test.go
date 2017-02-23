@@ -121,16 +121,20 @@ func TestClusterReaderCoverage(t *testing.T) {
 	}
 
 	escalatingResources := map[unversioned.GroupResource]bool{
-		oauthapi.Resource("oauthauthorizetokens"): true,
-		oauthapi.Resource("oauthaccesstokens"):    true,
-		oauthapi.Resource("oauthclients"):         true,
-		imageapi.Resource("imagestreams/secrets"): true,
-		kapi.Resource("secrets"):                  true,
-		kapi.Resource("pods/exec"):                true,
-		kapi.Resource("pods/proxy"):               true,
-		kapi.Resource("pods/portforward"):         true,
-		kapi.Resource("nodes/proxy"):              true,
-		kapi.Resource("services/proxy"):           true,
+		oauthapi.Resource("oauthauthorizetokens"):       true,
+		oauthapi.LegacyResource("oauthauthorizetokens"): true,
+		oauthapi.Resource("oauthaccesstokens"):          true,
+		oauthapi.LegacyResource("oauthaccesstokens"):    true,
+		oauthapi.Resource("oauthclients"):               true,
+		oauthapi.LegacyResource("oauthclients"):         true,
+		imageapi.Resource("imagestreams/secrets"):       true,
+		imageapi.LegacyResource("imagestreams/secrets"): true,
+		kapi.Resource("secrets"):                        true,
+		kapi.Resource("pods/exec"):                      true,
+		kapi.Resource("pods/proxy"):                     true,
+		kapi.Resource("pods/portforward"):               true,
+		kapi.Resource("nodes/proxy"):                    true,
+		kapi.Resource("services/proxy"):                 true,
 	}
 
 	readerRole, err := clusterAdminClient.ClusterRoles().Get(bootstrappolicy.ClusterReaderRoleName)
@@ -156,12 +160,27 @@ func TestClusterReaderCoverage(t *testing.T) {
 
 	// remove resources without read APIs
 	nonreadingResources := []unversioned.GroupResource{
-		buildapi.Resource("buildconfigs/instantiatebinary"), buildapi.Resource("buildconfigs/instantiate"), buildapi.Resource("builds/clone"),
-		deployapi.Resource("deploymentconfigrollbacks"), deployapi.Resource("generatedeploymentconfigs"),
-		deployapi.Resource("deploymentconfigs/rollback"), deployapi.Resource("deploymentconfigs/instantiate"),
-		imageapi.Resource("imagestreamimports"), imageapi.Resource("imagestreammappings"),
+		buildapi.Resource("buildconfigs/instantiatebinary"),
+		buildapi.LegacyResource("buildconfigs/instantiatebinary"),
+		buildapi.Resource("buildconfigs/instantiate"),
+		buildapi.LegacyResource("buildconfigs/instantiate"),
+		buildapi.Resource("builds/clone"),
+		buildapi.LegacyResource("builds/clone"),
+		deployapi.Resource("deploymentconfigrollbacks"),
+		deployapi.LegacyResource("deploymentconfigrollbacks"),
+		deployapi.Resource("generatedeploymentconfigs"),
+		deployapi.LegacyResource("generatedeploymentconfigs"),
+		deployapi.Resource("deploymentconfigs/rollback"),
+		deployapi.LegacyResource("deploymentconfigs/rollback"),
+		deployapi.Resource("deploymentconfigs/instantiate"),
+		deployapi.LegacyResource("deploymentconfigs/instantiate"),
+		imageapi.Resource("imagestreamimports"),
+		imageapi.LegacyResource("imagestreamimports"),
+		imageapi.Resource("imagestreammappings"),
+		imageapi.LegacyResource("imagestreammappings"),
 		extensionsapi.Resource("deployments/rollback"),
-		kapi.Resource("pods/attach"), kapi.Resource("namespaces/finalize"),
+		kapi.Resource("pods/attach"),
+		kapi.Resource("namespaces/finalize"),
 	}
 	for _, resource := range nonreadingResources {
 		delete(allResources, resource)
