@@ -3,6 +3,7 @@ package integration
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -442,10 +443,30 @@ func (test localResourceAccessReviewTest) run(t *testing.T) {
 			}
 		}
 
-		if actualResponse.Namespace != test.response.Namespace ||
-			!reflect.DeepEqual(actualResponse.Users.List(), test.response.Users.List()) ||
-			!reflect.DeepEqual(actualResponse.Groups.List(), test.response.Groups.List()) ||
-			actualResponse.EvaluationError != test.response.EvaluationError {
+		if actualResponse.Namespace != test.response.Namespace {
+			failMessage = fmt.Sprintf("%s\n: namespaces does not match (%s!=%s)", test.description, actualResponse.Namespace, test.response.Namespace)
+			return false, nil
+		}
+		if actualResponse.EvaluationError != test.response.EvaluationError {
+			failMessage = fmt.Sprintf("%s\n: evaluation errors does not match (%s!=%s)", test.description, actualResponse.EvaluationError, test.response.EvaluationError)
+			return false, nil
+		}
+
+		// FIXME: This should be already sorted by the server.
+		sortedResponseUserList := sort.StringSlice(actualResponse.Users.List())
+		sort.Sort(sortedResponseUserList)
+		sortedTestUserList := sort.StringSlice(test.response.Users.List())
+		sort.Sort(sortedTestUserList)
+		if !reflect.DeepEqual(sortedResponseUserList, sortedTestUserList) {
+			failMessage = fmt.Sprintf("%s:\n  %s:\n  expected %s\n  got %s", test.description, prettyPrintAction(&test.review.Action, "(in the current namespace)"), prettyPrintReviewResponse(&test.response), prettyPrintReviewResponse(actualResponse))
+			return false, nil
+		}
+
+		sortedResponseGroupList := sort.StringSlice(actualResponse.Groups.List())
+		sort.Sort(sortedResponseGroupList)
+		sortedTestGroupList := sort.StringSlice(test.response.Groups.List())
+		sort.Sort(sortedTestGroupList)
+		if !reflect.DeepEqual(sortedResponseGroupList, sortedTestGroupList) {
 			failMessage = fmt.Sprintf("%s:\n  %s:\n  expected %s\n  got %s", test.description, prettyPrintAction(&test.review.Action, "(in the current namespace)"), prettyPrintReviewResponse(&test.response), prettyPrintReviewResponse(actualResponse))
 			return false, nil
 		}
@@ -592,7 +613,7 @@ func TestAuthorizationResourceAccessReview(t *testing.T) {
 				Users:           sets.NewString("edgar"),
 				Groups:          sets.NewString(),
 				Namespace:       "mallet-project",
-				EvaluationError: `role "admin" not found`,
+				EvaluationError: `role.authorization.openshift.io "admin" not found`,
 			},
 		}
 		test.response.Users.Insert(globalClusterReaderUsers.List()...)
