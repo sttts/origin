@@ -355,7 +355,7 @@ func (o MasterOptions) CreateCerts() error {
 
 func BuildKubernetesMasterConfig(openshiftConfig *origin.MasterConfig) (*kubernetes.MasterConfig, error) {
 	if openshiftConfig.Options.KubernetesMasterConfig == nil {
-		return nil, nil
+		return nil, fmt.Errorf("external Kubernetes mode is not supported anymore")
 	}
 	kubeConfig, err := kubernetes.BuildKubernetesMasterConfig(openshiftConfig.Options, openshiftConfig.RequestContextMapper, openshiftConfig.KubeClientset(), openshiftConfig.Informers, openshiftConfig.KubeAdmissionControl, openshiftConfig.Authenticator)
 	return kubeConfig, err
@@ -492,18 +492,7 @@ func StartAPI(oc *origin.MasterConfig, kc *kubernetes.MasterConfig) error {
 		}
 	}
 
-	if kc != nil {
-		oc.Run(kc, embeddedAssetConfig)
-	} else {
-		_, kubeClientConfig, err := configapi.GetKubeClient(oc.Options.MasterClients.ExternalKubernetesKubeConfig, oc.Options.MasterClients.ExternalKubernetesClientConnectionOverrides)
-		if err != nil {
-			return err
-		}
-		proxy := &kubernetes.ProxyConfig{
-			ClientConfig: kubeClientConfig,
-		}
-		oc.RunInProxyMode(proxy, embeddedAssetConfig)
-	}
+	oc.Run(kc, embeddedAssetConfig)
 
 	// start up the informers that we're trying to use in the API server
 	oc.Informers.KubernetesInformers().Start(utilwait.NeverStop)
