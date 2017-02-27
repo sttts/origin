@@ -31,6 +31,7 @@ var Versions = []unversioned.GroupVersion{
 	{Group: "user.openshift.io", Version: "v1"},
 	{Group: "oauth.openshift.io", Version: "v1"},
 	{Group: "network.openshift.io", Version: "v1"},
+	{Group: "route.openshift.io", Version: "v1"},
 	{Group: "quota.openshift.io", Version: "v1"},
 	{Group: "security.openshift.io", Version: "v1"},
 	{Group: "", Version: "v1"},
