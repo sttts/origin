@@ -107,6 +107,10 @@ func TestServiceAccountAuthorization(t *testing.T) {
 		t.Fatalf("error creating kubeconfig: %v", err)
 	}
 
+	// TODO(rebase): clarify whether we need anything of the following anymore if we drop proxy-only mode @liggitt
+	t.Logf("Skipping remaining external-kube based test")
+	return
+
 	// Set up cluster 2 to run against cluster 1 as external kubernetes
 	cluster2MasterConfig, err := testserver.DefaultMasterOptions()
 	if err != nil {
