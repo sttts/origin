@@ -702,7 +702,8 @@ func testEtcdStoragePath(t *testing.T, legacy bool) {
 		if !legacy && isLegacyResource {
 			continue
 		}
-		if _, hasLegacyCounterpart := legacyCoreGroupResource[gvResource]; legacy && hasLegacyCounterpart {
+		_, hasLegacyCounterpart := legacyCoreGroupResource[gvResource]
+		if legacy && hasLegacyCounterpart {
 			continue
 		}
 
@@ -785,6 +786,10 @@ func testEtcdStoragePath(t *testing.T, legacy bool) {
 			expectedGVK := gvk
 			if testData.expectedGVK != nil {
 				expectedGVK = *testData.expectedGVK
+			}
+			if hasLegacyCounterpart {
+				// we want to store in legacy format for now
+				expectedGVK.Group = ""
 			}
 
 			actualGVK := output.getGVK()
