@@ -586,6 +586,15 @@ var legacyCoreGroupResource = map[unversioned.GroupVersionResource]empty{
 	gvr("user.openshift.io", "v1", "useridentitymappings"):                    {},
 }
 
+// legacyToGroupResource maps legacy core group resources to their api group counterpart.
+var legacyToGroupResource = func() map[unversioned.GroupVersionResource]unversioned.GroupVersionResource {
+	m := make(map[unversioned.GroupVersionResource]unversioned.GroupVersionResource, len(legacyCoreGroupResource))
+	for gvr := range legacyCoreGroupResource {
+		m[unversioned.GroupVersionResource{"", gvr.Version, gvr.Resource}] = gvr
+	}
+	return m
+}()
+
 // Only add kinds to this list when there is no mapping from GVK to GVR (and thus there is no way to create the object)
 var kindWhiteList = map[unversioned.GroupKind]empty{
 	// k8s.io/kubernetes/pkg/api/v1
@@ -679,8 +688,15 @@ func TestEtcdStoragePath(t *testing.T) {
 		gvResource := gvk.GroupVersion().WithResource(mapping.Resource)
 		etcdSeen[gvResource] = empty{}
 
-		testData, hasTest := etcdStorageData[gvResource]
 		_, isEphemeral := ephemeralWhiteList[gvResource]
+
+		testData, hasTest := etcdStorageData[gvResource]
+		if nonLegacyResource, found := legacyToGroupResource[gvResource]; found {
+			// by default use the same test for the legacy as for the non-legacy resource
+			if !hasTest {
+				testData, hasTest = etcdStorageData[nonLegacyResource]
+			}
+		}
 
 		if !hasTest && !isEphemeral {
 			t.Errorf("no test data for %s from %s.  Please add a test for your new type to etcdStorageData.", kind, pkgPath)
@@ -766,9 +782,31 @@ func TestEtcdStoragePath(t *testing.T) {
 		t.Errorf("ephemeral whitelist does not match the types we saw:\nin ephemeral whitelist but not seen:\n%s\nseen but not in ephemeral whitelist:\n%s", inEphemeralWhiteList, inEphemeralSeen)
 	}
 
-	if inKindData, inKindSeen := diffMaps(kindWhiteList, kindSeen); len(inKindData) != 0 || len(inKindSeen) != 0 {
+	if inKindData, inKindSeen := diffMaps(filterOutWildcards(kindWhiteList), filterOutMatchingWithWidcards(kindSeen)); len(inKindData) != 0 || len(inKindSeen) != 0 {
 		t.Errorf("kind whitelist data does not match the types we saw:\nin kind whitelist but not seen:\n%s\nseen but not in kind whitelist:\n%s", inKindData, inKindSeen)
 	}
+}
+
+func filterOutMatchingWithWidcards(in map[unversioned.GroupKind]empty) map[unversioned.GroupKind]empty {
+	out := map[unversioned.GroupKind]empty{}
+	for gvr := range in {
+		wildcarded := gvr
+		wildcarded.Group = "*"
+		if _, found := kindWhiteList[wildcarded]; !found {
+			out[gvr] = empty{}
+		}
+	}
+	return out
+}
+
+func filterOutWildcards(in map[unversioned.GroupKind]empty) map[unversioned.GroupKind]empty {
+	out := map[unversioned.GroupKind]empty{}
+	for gvr := range in {
+		if gvr.Group != "*" {
+			out[gvr] = empty{}
+		}
+	}
+	return out
 }
 
 // stable fields to compare as a sanity check
@@ -815,6 +853,11 @@ func createEphemeralWhiteList(gvrs ...unversioned.GroupVersionResource) map[unve
 			panic("invalid ephemeral whitelist contains duplicate keys")
 		}
 		ephemeral[gvResource] = empty{}
+
+		// also make the legacy counterpart ephemeral
+		if legacyGVR, found := legacyToGroupResource[gvResource]; found {
+			ephemeral[legacyGVR] = empty{}
+		}
 	}
 	return ephemeral
 }
