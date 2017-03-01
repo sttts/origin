@@ -779,7 +779,7 @@ type allClient struct {
 func (c *allClient) verb(verb string, gvk unversioned.GroupVersionKind) (*restclient.Request, error) {
 	apiPath := "/apis"
 	switch {
-	case latest.OriginKind(gvk):
+	case latest.OriginLegacyKind(gvk):
 		apiPath = "/oapi"
 	case gvk.Group == kapi.GroupName:
 		apiPath = "/api"
