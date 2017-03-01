@@ -53,6 +53,7 @@ func addLegacyKnownTypes(scheme *runtime.Scheme) error {
 		&DeploymentRequest{},
 		&DeploymentLog{},
 		&DeploymentLogOptions{},
+		&extensions.Scale{},
 	}
 	scheme.AddKnownTypes(LegacySchemeGroupVersion, types...)
 	return nil
@@ -67,6 +68,7 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&DeploymentRequest{},
 		&DeploymentLog{},
 		&DeploymentLogOptions{},
+		&extensions.Scale{},
 	}
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		append(types,
@@ -74,7 +76,6 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 			&kapi.ListOptions{},
 			&kapi.DeleteOptions{},
 			&kapi.ExportOptions{},
-			&extensions.Scale{},
 		)...,
 	)
 	versioned.AddToGroupVersion(scheme, SchemeGroupVersion)
