@@ -618,11 +618,21 @@ var kindWhiteList = map[unversioned.GroupKind]empty{
 // namespace used for all tests, do not change this
 const testNamespace = "etcdstoragepathtestnamespace"
 
-// TestEtcdStoragePath tests to make sure that all objects are stored in an expected location in etcd.
+// TestEtcdStoragePathLegacy calls testEtcdStoragePath, but only considers non-legacy kinds
+func TestEtcdStoragePath(t *testing.T) {
+	testEtcdStoragePath(t, false)
+}
+
+// TestEtcdStoragePathLegacy replicates TestEtcdStoragePath, but for legacy types only
+func TestEtcdStoragePathLegacy(t *testing.T) {
+	testEtcdStoragePath(t, true)
+}
+
+// testEtcdStoragePath tests to make sure that all objects are stored in an expected location in etcd.
 // It will start failing when a new type is added to ensure that all future types are added to this test.
 // It will also fail when a type gets moved to a different location. Be very careful in this situation because
 // it essentially means that you will be break old clusters unless you create some migration path for the old data.
-func TestEtcdStoragePath(t *testing.T) {
+func testEtcdStoragePath(t *testing.T, legacy bool) {
 	etcdServer := testutil.RequireEtcd(t)
 	defer testutil.DumpEtcdOnFailure(t)
 	keys := etcd.NewKeysAPI(etcdServer.Client)
@@ -686,12 +696,26 @@ func TestEtcdStoragePath(t *testing.T) {
 		}
 
 		gvResource := gvk.GroupVersion().WithResource(mapping.Resource)
+
+		// filter out either all legacy resources or their counterparts
+		_, isLegacyResource := legacyToGroupResource[gvResource]
+		if !legacy && isLegacyResource {
+			continue
+		}
+		if _, hasLegacyCounterpart := legacyCoreGroupResource[gvResource]; legacy && hasLegacyCounterpart {
+			continue
+		}
+
 		etcdSeen[gvResource] = empty{}
 
 		_, isEphemeral := ephemeralWhiteList[gvResource]
 
 		testData, hasTest := etcdStorageData[gvResource]
 		if nonLegacyResource, found := legacyToGroupResource[gvResource]; found {
+			// inherit being ephemeral from the non-legacy counterpart
+			_, isCounterpartEphemeral := ephemeralWhiteList[nonLegacyResource]
+			isEphemeral = isEphemeral || isCounterpartEphemeral
+
 			// by default use the same test for the legacy as for the non-legacy resource
 			if !hasTest {
 				testData, hasTest = etcdStorageData[nonLegacyResource]
@@ -774,17 +798,33 @@ func TestEtcdStoragePath(t *testing.T) {
 		}()
 	}
 
-	if inEtcdData, inEtcdSeen := diffMaps(etcdStorageData, etcdSeen); len(inEtcdData) != 0 || len(inEtcdSeen) != 0 {
+	if inEtcdData, inEtcdSeen := diffMaps(possiblyLegacylizeKeys(legacy, etcdStorageData), etcdSeen); len(inEtcdData) != 0 || len(inEtcdSeen) != 0 {
 		t.Errorf("etcd data does not match the types we saw:\nin etcd data but not seen:\n%s\nseen but not in etcd data:\n%s", inEtcdData, inEtcdSeen)
 	}
 
-	if inEphemeralWhiteList, inEphemeralSeen := diffMaps(ephemeralWhiteList, ephemeralSeen); len(inEphemeralWhiteList) != 0 || len(inEphemeralSeen) != 0 {
+	if inEphemeralWhiteList, inEphemeralSeen := diffMaps(possiblyLegacylizeKeys(legacy, ephemeralWhiteList), ephemeralSeen); len(inEphemeralWhiteList) != 0 || len(inEphemeralSeen) != 0 {
 		t.Errorf("ephemeral whitelist does not match the types we saw:\nin ephemeral whitelist but not seen:\n%s\nseen but not in ephemeral whitelist:\n%s", inEphemeralWhiteList, inEphemeralSeen)
 	}
 
 	if inKindData, inKindSeen := diffMaps(filterOutWildcards(kindWhiteList), filterOutMatchingWithWidcards(kindSeen)); len(inKindData) != 0 || len(inKindSeen) != 0 {
 		t.Errorf("kind whitelist data does not match the types we saw:\nin kind whitelist but not seen:\n%s\nseen but not in kind whitelist:\n%s", inKindData, inKindSeen)
 	}
+}
+
+func possiblyLegacylizeKeys(legacy bool, in interface{}) map[unversioned.GroupVersionResource]empty {
+	inv := reflect.ValueOf(in)
+	ret := map[unversioned.GroupVersionResource]empty{}
+
+	for _, k := range inv.MapKeys() {
+		gvk := k.Interface().(unversioned.GroupVersionResource)
+		if _, found := legacyCoreGroupResource[gvk]; legacy && found {
+			ret[unversioned.GroupVersionResource{"", gvk.Version, gvk.Resource}] = empty{}
+		} else {
+			ret[gvk] = empty{}
+		}
+	}
+
+	return ret
 }
 
 func filterOutMatchingWithWidcards(in map[unversioned.GroupKind]empty) map[unversioned.GroupKind]empty {
@@ -853,11 +893,6 @@ func createEphemeralWhiteList(gvrs ...unversioned.GroupVersionResource) map[unve
 			panic("invalid ephemeral whitelist contains duplicate keys")
 		}
 		ephemeral[gvResource] = empty{}
-
-		// also make the legacy counterpart ephemeral
-		if legacyGVR, found := legacyToGroupResource[gvResource]; found {
-			ephemeral[legacyGVR] = empty{}
-		}
 	}
 	return ephemeral
 }
