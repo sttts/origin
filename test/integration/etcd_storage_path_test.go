@@ -367,76 +367,78 @@ var ephemeralWhiteList = createEphemeralWhiteList(
 	// github.com/openshift/origin/pkg/authorization/api/v1
 
 	// virtual objects that are not stored in etcd  // TODO this will change in the future when policies go away
-	gvr("", "v1", "roles"),
-	gvr("", "v1", "clusterroles"),
-	gvr("", "v1", "rolebindings"),
-	gvr("", "v1", "clusterrolebindings"),
+	gvr("authorization.openshift.io", "v1", "roles"),
+	gvr("authorization.openshift.io", "v1", "clusterroles"),
+	gvr("authorization.openshift.io", "v1", "rolebindings"),
+	gvr("authorization.openshift.io", "v1", "clusterrolebindings"),
 
 	// SAR objects that are not stored in etcd
-	gvr("", "v1", "subjectrulesreviews"),
-	gvr("", "v1", "selfsubjectrulesreviews"),
-	gvr("", "v1", "subjectaccessreviews"),
-	gvr("", "v1", "resourceaccessreviews"),
-	gvr("", "v1", "localsubjectaccessreviews"),
-	gvr("", "v1", "localresourceaccessreviews"),
-	gvr("", "v1", "ispersonalsubjectaccessreviews"),
-	gvr("", "v1", "resourceaccessreviewresponses"),
-	gvr("", "v1", "subjectaccessreviewresponses"),
+	gvr("authorization.openshift.io", "v1", "subjectrulesreviews"),
+	gvr("authorization.openshift.io", "v1", "selfsubjectrulesreviews"),
+	gvr("authorization.openshift.io", "v1", "subjectaccessreviews"),
+	gvr("authorization.openshift.io", "v1", "resourceaccessreviews"),
+	gvr("authorization.openshift.io", "v1", "localsubjectaccessreviews"),
+	gvr("authorization.openshift.io", "v1", "localresourceaccessreviews"),
+	gvr("authorization.openshift.io", "v1", "ispersonalsubjectaccessreviews"),
+	gvr("authorization.openshift.io", "v1", "resourceaccessreviewresponses"),
+	gvr("authorization.openshift.io", "v1", "subjectaccessreviewresponses"),
 	// --
 
 	// github.com/openshift/origin/pkg/build/api/v1
 
 	// used for streaming build logs from pod, not stored in etcd
-	gvr("", "v1", "buildlogs"),
-	gvr("", "v1", "buildlogoptionses"),
+	gvr("build.openshift.io", "v1", "buildlogs"),
+	gvr("build.openshift.io", "v1", "buildlogoptionses"),
 
 	// BuildGenerator helpers not stored in etcd
-	gvr("", "v1", "buildrequests"),
-	gvr("", "v1", "binarybuildrequestoptionses"),
+	gvr("build.openshift.io", "v1", "buildrequests"),
+	gvr("build.openshift.io", "v1", "binarybuildrequestoptionses"),
 	// --
 
 	// github.com/openshift/origin/pkg/deploy/api/v1
 
 	// used for streaming deployment logs from pod, not stored in etcd
-	gvr("", "v1", "deploymentlogs"),
-	gvr("", "v1", "deploymentlogoptionses"),
+	gvr("deploy.openshift.io", "v1", "deploymentlogs"),
+	gvr("deploy.openshift.io", "v1", "deploymentlogoptionses"),
 
-	gvr("", "v1", "deploymentrequests"),        // triggers new dc, not stored in etcd
-	gvr("", "v1", "deploymentconfigrollbacks"), // triggers rolleback dc, not stored in etcd
+	gvr("deploy.openshift.io", "v1", "deploymentrequests"),        // triggers new dc, not stored in etcd
+	gvr("deploy.openshift.io", "v1", "deploymentconfigrollbacks"), // triggers rolleback dc, not stored in etcd
 	// --
 
 	// github.com/openshift/origin/pkg/image/api/docker10
-	gvr("", "1.0", "dockerimages"), // part of imageapiv1.Image
+	gvr("image.openshift.io", "1.0", "dockerimages"), // part of imageapiv1.Image
 	// --
 
 	// github.com/openshift/origin/pkg/image/api/dockerpre012
-	gvr("", "pre012", "dockerimages"), // part of imageapiv1.Image
+	gvr("image.openshift.io", "pre012", "dockerimages"), // part of imageapiv1.Image
 	// --
 
 	// github.com/openshift/origin/pkg/image/api/v1
-	gvr("", "v1", "imagestreamtags"),     // part of image stream
-	gvr("", "v1", "imagesignatures"),     // part of image
-	gvr("", "v1", "imagestreamimports"),  // not stored in etcd
-	gvr("", "v1", "imagestreamimages"),   // not stored in etcd
-	gvr("", "v1", "imagestreammappings"), // not stored in etcd
+	gvr("image.openshift.io", "v1", "imagestreamtags"),     // part of image stream
+	gvr("image.openshift.io", "v1", "imagesignatures"),     // part of image
+	gvr("image.openshift.io", "v1", "imagestreamimports"),  // not stored in etcd
+	gvr("image.openshift.io", "v1", "imagestreamimages"),   // not stored in etcd
+	gvr("image.openshift.io", "v1", "imagestreammappings"), // not stored in etcd
 	// --
 
 	// github.com/openshift/origin/pkg/oauth/api/v1
-	gvr("", "v1", "oauthredirectreferences"), // Used for specifying redirects, never stored in etcd
+	gvr("oauth.openshift.io", "v1", "oauthredirectreferences"), // Used for specifying redirects, never stored in etcd
 	// --
 
 	// github.com/openshift/origin/pkg/project/api/v1
-	gvr("", "v1", "projectrequests"), // not stored in etcd
+	gvr("project.openshift.io", "v1", "projectrequests"),            // not stored in etcd
+	gvr("project.openshift.io", "v1", "projectrequestlimitconfigs"), // not stored in etcd
+
 	// --
 
 	// github.com/openshift/origin/pkg/quota/api/v1
-	gvr("", "v1", "appliedclusterresourcequotas"), // mirror of ClusterResourceQuota that cannot be created
+	gvr("quota.openshift.io", "v1", "appliedclusterresourcequotas"), // mirror of ClusterResourceQuota that cannot be created
 	// --
 
 	// github.com/openshift/origin/pkg/security/api/v1
-	gvr("", "v1", "podsecuritypolicyselfsubjectreviews"), // not stored in etcd
-	gvr("", "v1", "podsecuritypolicyreviews"),            // not stored in etcd
-	gvr("", "v1", "podsecuritypolicysubjectreviews"),     // not stored in etcd
+	gvr("security.openshift.io", "v1", "podsecuritypolicyselfsubjectreviews"), // not stored in etcd
+	gvr("security.openshift.io", "v1", "podsecuritypolicyreviews"),            // not stored in etcd
+	gvr("security.openshift.io", "v1", "podsecuritypolicysubjectreviews"),     // not stored in etcd
 	// --
 
 	// github.com/openshift/origin/pkg/template/api/v1
@@ -447,7 +449,7 @@ var ephemeralWhiteList = createEphemeralWhiteList(
 	// --
 
 	// github.com/openshift/origin/pkg/user/api/v1
-	gvr("", "v1", "useridentitymappings"), // pointer from user to identity, not stored in etcd
+	gvr("user.openshift.io", "v1", "useridentitymappings"), // pointer from user to identity, not stored in etcd
 	// --
 
 	// k8s.io/kubernetes/federation/apis/federation/v1beta1
@@ -547,6 +549,41 @@ var legacyCoreGroupResource = map[unversioned.GroupVersionResource]empty{
 	gvr("user.openshift.io", "v1", "groups"):                           {},
 	gvr("user.openshift.io", "v1", "users"):                            {},
 	gvr("user.openshift.io", "v1", "identities"):                       {},
+
+	// ephemeral resource
+	gvr("authorization.openshift.io", "v1", "roles"):                          {},
+	gvr("authorization.openshift.io", "v1", "clusterroles"):                   {},
+	gvr("authorization.openshift.io", "v1", "rolebindings"):                   {},
+	gvr("authorization.openshift.io", "v1", "clusterrolebindings"):            {},
+	gvr("authorization.openshift.io", "v1", "subjectrulesreviews"):            {},
+	gvr("authorization.openshift.io", "v1", "selfsubjectrulesreviews"):        {},
+	gvr("authorization.openshift.io", "v1", "subjectaccessreviews"):           {},
+	gvr("authorization.openshift.io", "v1", "resourceaccessreviews"):          {},
+	gvr("authorization.openshift.io", "v1", "localsubjectaccessreviews"):      {},
+	gvr("authorization.openshift.io", "v1", "localresourceaccessreviews"):     {},
+	gvr("authorization.openshift.io", "v1", "ispersonalsubjectaccessreviews"): {},
+	gvr("authorization.openshift.io", "v1", "resourceaccessreviewresponses"):  {},
+	gvr("authorization.openshift.io", "v1", "subjectaccessreviewresponses"):   {},
+	gvr("build.openshift.io", "v1", "buildlogoptionses"):                      {},
+	gvr("build.openshift.io", "v1", "buildrequests"):                          {},
+	gvr("build.openshift.io", "v1", "binarybuildrequestoptionses"):            {},
+	gvr("deploy.openshift.io", "v1", "deploymentlogoptionses"):                {},
+	gvr("deploy.openshift.io", "v1", "deploymentconfigrollbacks"):             {},
+	gvr("image.openshift.io", "1.0", "dockerimages"):                          {},
+	gvr("image.openshift.io", "pre012", "dockerimages"):                       {},
+	gvr("image.openshift.io", "v1", "imagestreamtags"):                        {},
+	gvr("image.openshift.io", "v1", "imagesignatures"):                        {},
+	gvr("image.openshift.io", "v1", "imagestreamimports"):                     {},
+	gvr("image.openshift.io", "v1", "imagestreamimages"):                      {},
+	gvr("image.openshift.io", "v1", "imagestreammappings"):                    {},
+	gvr("oauth.openshift.io", "v1", "oauthredirectreferences"):                {},
+	gvr("project.openshift.io", "v1", "projectrequests"):                      {},
+	gvr("project.openshift.io", "v1", "projectrequestlimitconfigs"):           {},
+	gvr("quota.openshift.io", "v1", "appliedclusterresourcequotas"):           {},
+	gvr("security.openshift.io", "v1", "podsecuritypolicyselfsubjectreviews"): {},
+	gvr("security.openshift.io", "v1", "podsecuritypolicyreviews"):            {},
+	gvr("security.openshift.io", "v1", "podsecuritypolicysubjectreviews"):     {},
+	gvr("user.openshift.io", "v1", "useridentitymappings"):                    {},
 }
 
 // Only add kinds to this list when there is no mapping from GVK to GVR (and thus there is no way to create the object)
