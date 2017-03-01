@@ -19,7 +19,6 @@ import (
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util/diff"
 	"k8s.io/kubernetes/pkg/util/flowcontrol"
-	"k8s.io/kubernetes/pkg/util/sets"
 
 	"github.com/openshift/origin/pkg/api/latest"
 	osclientcmd "github.com/openshift/origin/pkg/cmd/util/clientcmd"
@@ -522,23 +521,24 @@ var ephemeralWhiteList = createEphemeralWhiteList(
 )
 
 // Only add kinds to this list when there is no mapping from GVK to GVR (and thus there is no way to create the object)
-var kindWhiteList = sets.NewString(
+var kindWhiteList = map[unversioned.GroupKind]empty{
 	// k8s.io/kubernetes/pkg/api/v1
-	"DeleteOptions",
-	"ExportOptions",
-	"ListOptions",
-	"NodeProxyOptions",
-	"PodAttachOptions",
-	"PodExecOptions",
-	"PodLogOptions",
-	"PodProxyOptions",
-	"ServiceProxyOptions",
+	{"*", "Status"}:             {},
+	{"*", "DeleteOptions"}:      {},
+	{"*", "ExportOptions"}:      {},
+	{"*", "ListOptions"}:        {},
+	{"", "NodeProxyOptions"}:    {},
+	{"", "PodAttachOptions"}:    {},
+	{"", "PodExecOptions"}:      {},
+	{"", "PodLogOptions"}:       {},
+	{"", "PodProxyOptions"}:     {},
+	{"", "ServiceProxyOptions"}: {},
 	// --
 
 	// k8s.io/kubernetes/pkg/watch/versioned
-	"WatchEvent",
+	{"*", "WatchEvent"}: {},
 	// --
-)
+}
 
 // namespace used for all tests, do not change this
 const testNamespace = "etcdstoragepathtestnamespace"
@@ -584,7 +584,7 @@ func TestEtcdStoragePath(t *testing.T) {
 		t.Fatalf("error creating test namespace: %#v", err)
 	}
 
-	kindSeen := sets.NewString()
+	kindSeen := map[unversioned.GroupKind]empty{}
 	etcdSeen := map[unversioned.GroupVersionResource]empty{}
 	ephemeralSeen := map[unversioned.GroupVersionResource]empty{}
 
@@ -599,8 +599,10 @@ func TestEtcdStoragePath(t *testing.T) {
 
 		mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 		if err != nil {
-			kindSeen.Insert(kind)
-			if kindWhiteList.Has(kind) {
+			kindSeen[gvk.GroupKind()] = empty{}
+			_, gkFound := kindWhiteList[gvk.GroupKind()]
+			_, wildcardFound := kindWhiteList[unversioned.GroupKind{"*", kind}]
+			if gkFound || wildcardFound {
 				// t.Logf("skipping test for %s from %s because its GVK %s is whitelisted and has no mapping", kind, pkgPath, gvk)
 			} else {
 				t.Errorf("no mapping found for %s from %s but its GVK %s is not whitelisted", kind, pkgPath, gvk)
@@ -765,6 +767,8 @@ func keyStringer(i interface{}) string {
 	case string:
 		return base + key
 	case unversioned.GroupVersionResource:
+		return base + key.String()
+	case unversioned.GroupKind:
 		return base + key.String()
 	default:
 		panic("unexpected type")
