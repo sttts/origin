@@ -50,6 +50,11 @@ func OriginKind(gvk unversioned.GroupVersionKind) bool {
 	return getOrCreateOriginKinds()[gvk]
 }
 
+// OriginLegacyKind returns true for OriginKinds which are not in their own api group.
+func OriginLegacyKind(gvk unversioned.GroupVersionKind) bool {
+	return OriginKind(gvk) && gvk.Group == ""
+}
+
 // IsKindInAnyOriginGroup returns true if OpenShift owns the kind described in any apiVersion.
 // TODO: this may not work once we divide builds/deployments/images into their own API groups
 func IsKindInAnyOriginGroup(kind string) bool {
