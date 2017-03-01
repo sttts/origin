@@ -871,12 +871,12 @@ func TestEtcdStoragePath(t *testing.T) {
 		testData, hasTest := etcdStorageData[gvResource]
 
 		if !hasTest && !isEphemeral {
-			t.Errorf("no test data for %s from %s.  Please add a test for your new type to etcdStorageData.", kind, pkgPath)
+			t.Errorf("no test data for %s from %s.  Please add a test for your new type to etcdStorageData.", gvResource, pkgPath)
 			continue
 		}
 
 		if hasTest && isEphemeral {
-			t.Errorf("duplicate test data for %s from %s.  Object has both test data and is ephemeral.", kind, pkgPath)
+			t.Errorf("duplicate test data for %s from %s.  Object has both test data and is ephemeral.", gvResource, pkgPath)
 			continue
 		}
 
@@ -897,7 +897,7 @@ func TestEtcdStoragePath(t *testing.T) {
 		var input *metaObject
 		if shouldCreate {
 			if input, err = jsonToMetaObject(testData.stub); err != nil || input.isEmpty() {
-				t.Errorf("invalid test data for %s from %s: %v", kind, pkgPath, err)
+				t.Errorf("invalid test data for %s from %s: %v", gvk, pkgPath, err)
 				continue
 			}
 		}
@@ -913,20 +913,20 @@ func TestEtcdStoragePath(t *testing.T) {
 			}()
 
 			if err := client.createPrerequisites(mapper, testNamespace, testData.prerequisites, all); err != nil {
-				t.Errorf("failed to create prerequisites for %s from %s: %#v", kind, pkgPath, err)
+				t.Errorf("failed to create prerequisites for %s from %s: %#v", gvk, pkgPath, err)
 				return
 			}
 
 			if shouldCreate { // do not try to create items with no stub
 				if err := client.create(testData.stub, testNamespace, mapping, all); err != nil {
-					t.Errorf("failed to create stub for %s from %s: %#v", kind, pkgPath, err)
+					t.Errorf("failed to create stub for %s from %s: %#v", gvk, pkgPath, err)
 					return
 				}
 			}
 
 			output, err := getFromEtcd(keys, testData.expectedEtcdPath)
 			if err != nil {
-				t.Errorf("failed to get from etcd for %s from %s: %#v", kind, pkgPath, err)
+				t.Errorf("failed to get from etcd for %s from %s: %#v", gvk, pkgPath, err)
 				return
 			}
 
@@ -937,11 +937,11 @@ func TestEtcdStoragePath(t *testing.T) {
 
 			actualGVK := output.getGVK()
 			if actualGVK != expectedGVK {
-				t.Errorf("GVK for %s from %s does not match, expected %s got %s", kind, pkgPath, expectedGVK, actualGVK)
+				t.Errorf("GVK for %s from %s does not match, expected %s got %s", gvk, pkgPath, expectedGVK, actualGVK)
 			}
 
 			if !kapi.Semantic.DeepDerivative(input, output) {
-				t.Errorf("Test stub for %s from %s does not match: %s", kind, pkgPath, diff.ObjectGoPrintDiff(input, output))
+				t.Errorf("Test stub for %s from %s does not match: %s", gvk, pkgPath, diff.ObjectGoPrintDiff(input, output))
 			}
 		}()
 	}
