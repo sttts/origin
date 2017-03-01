@@ -61,7 +61,7 @@ var (
 	OriginAPIGroupCore                = ""
 	OriginAPIGroupAuthorization       = "authorization.openshift.io"
 	OriginAPIGroupBuild               = "build.openshift.io"
-	OriginAPIGroupDeploy              = "deploy.openshift.io"
+	OriginAPIGroupDeploy              = "apps.openshift.io"
 	OriginAPIGroupTemplate            = "template.openshift.io"
 	OriginAPIGroupImage               = "image.openshift.io"
 	OriginAPIGroupProject             = "project.openshift.io"
