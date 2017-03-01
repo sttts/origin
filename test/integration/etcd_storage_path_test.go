@@ -520,6 +520,35 @@ var ephemeralWhiteList = createEphemeralWhiteList(
 	// --
 )
 
+// legacyCoreGroupResource holds those GVRs which co-exist as a legacy core resource. This
+// list is not supposed to grow. DO NOT ADD ANYTHING.
+var legacyCoreGroupResource = map[unversioned.GroupVersionResource]empty{
+	gvr("authorization.openshift.io", "v1", "clusterpolicybindings"):   {},
+	gvr("authorization.openshift.io", "v1", "clusterpolicies"):         {},
+	gvr("authorization.openshift.io", "v1", "policybindings"):          {},
+	gvr("authorization.openshift.io", "v1", "rolebindingrestrictions"): {},
+	gvr("authorization.openshift.io", "v1", "policies"):                {},
+	gvr("build.openshift.io", "v1", "builds"):                          {},
+	gvr("build.openshift.io", "v1", "buildconfigs"):                    {},
+	gvr("deploy.openshift.io", "v1", "deploymentconfigs"):              {},
+	gvr("image.openshift.io", "v1", "imagestreams"):                    {},
+	gvr("image.openshift.io", "v1", "images"):                          {},
+	gvr("oauth.openshift.io", "v1", "oauthclientauthorizations"):       {},
+	gvr("oauth.openshift.io", "v1", "oauthaccesstokens"):               {},
+	gvr("oauth.openshift.io", "v1", "oauthauthorizetokens"):            {},
+	gvr("oauth.openshift.io", "v1", "oauthclients"):                    {},
+	gvr("project.openshift.io", "v1", "projects"):                      {},
+	gvr("quota.openshift.io", "v1", "clusterresourcequotas"):           {},
+	gvr("route.openshift.io", "v1", "routes"):                          {},
+	gvr("network.openshift.io", "v1", "netnamespaces"):                 {},
+	gvr("network.openshift.io", "v1", "hostsubnets"):                   {},
+	gvr("network.openshift.io", "v1", "clusternetworks"):               {},
+	gvr("template.openshift.io", "v1", "templates"):                    {},
+	gvr("user.openshift.io", "v1", "groups"):                           {},
+	gvr("user.openshift.io", "v1", "users"):                            {},
+	gvr("user.openshift.io", "v1", "identities"):                       {},
+}
+
 // Only add kinds to this list when there is no mapping from GVK to GVR (and thus there is no way to create the object)
 var kindWhiteList = map[unversioned.GroupKind]empty{
 	// k8s.io/kubernetes/pkg/api/v1
