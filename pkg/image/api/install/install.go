@@ -25,7 +25,7 @@ var accessor = meta.NewAccessor()
 
 // availableVersions lists all known external versions for this group from most preferred to least preferred
 var availableVersions = []unversioned.GroupVersion{
-	v1.LegacySchemeGroupVersion, docker10.SchemeGroupVersion, dockerpre012.SchemeGroupVersion,
+	v1.LegacySchemeGroupVersion, docker10.LegacySchemeGroupVersion, dockerpre012.LegacySchemeGroupVersion,
 }
 
 func init() {
@@ -83,9 +83,9 @@ func addVersionsToScheme(externalVersions ...unversioned.GroupVersion) {
 		switch v {
 		case v1.LegacySchemeGroupVersion:
 			v1.AddToSchemeInCoreGroup(kapi.Scheme)
-		case docker10.SchemeGroupVersion:
+		case docker10.LegacySchemeGroupVersion:
 			docker10.AddToSchemeInCoreGroup(kapi.Scheme)
-		case dockerpre012.SchemeGroupVersion:
+		case dockerpre012.LegacySchemeGroupVersion:
 			dockerpre012.AddToSchemeInCoreGroup(kapi.Scheme)
 
 		default:
