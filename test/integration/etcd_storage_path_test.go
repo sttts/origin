@@ -19,7 +19,6 @@ import (
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util/diff"
 	"k8s.io/kubernetes/pkg/util/flowcontrol"
-	"k8s.io/kubernetes/pkg/util/sets"
 
 	"github.com/openshift/origin/pkg/api/latest"
 	osclientcmd "github.com/openshift/origin/pkg/cmd/util/clientcmd"
@@ -41,6 +40,32 @@ var etcdStorageData = map[unversioned.GroupVersionResource]struct {
 	expectedGVK      *unversioned.GroupVersionKind // The GVK that we expect this object to be stored as - leave this nil to use the default
 }{
 	// github.com/openshift/origin/pkg/authorization/api/v1
+	gvr("authorization.openshift.io", "v1", "clusterpolicybindings"): { // no stub because cannot create one of these but it always exists
+		expectedEtcdPath: "openshift.io/authorization/cluster/policybindings/:default",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "ClusterPolicyBinding"},
+	},
+	gvr("authorization.openshift.io", "v1", "clusterpolicies"): { // no stub because cannot create one of these but it always exists
+		expectedEtcdPath: "openshift.io/authorization/cluster/policies/default",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "ClusterPolicy"},
+	},
+	gvr("authorization.openshift.io", "v1", "policybindings"): {
+		stub:             `{"metadata": {"name": ":default"}, "roleBindings": [{"name": "rb", "roleBinding": {"metadata": {"name": "rb", "namespace": "etcdstoragepathtestnamespace"}, "roleRef": {"name": "r"}}}]}`,
+		expectedEtcdPath: "openshift.io/authorization/local/policybindings/etcdstoragepathtestnamespace/:default",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "PolicyBinding"},
+	},
+	gvr("authorization.openshift.io", "v1", "rolebindingrestrictions"): {
+		stub:             `{"metadata": {"name": "rbr"}, "spec": {"serviceaccountrestriction": {"serviceaccounts": [{"name": "sa"}]}}}`,
+		expectedEtcdPath: "openshift.io/rolebindingrestrictions/etcdstoragepathtestnamespace/rbr",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "RoleBindingRestriction"},
+	},
+	gvr("authorization.openshift.io", "v1", "policies"): {
+		stub:             `{"metadata": {"name": "default"}, "roles": [{"name": "r", "role": {"metadata": {"name": "r", "namespace": "etcdstoragepathtestnamespace"}}}]}`,
+		expectedEtcdPath: "openshift.io/authorization/local/policies/etcdstoragepathtestnamespace/default",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "Policy"},
+	},
+	// --
+
+	// legacy github.com/openshift/origin/pkg/authorization/api/v1
 	gvr("", "v1", "clusterpolicybindings"): { // no stub because cannot create one of these but it always exists
 		expectedEtcdPath: "openshift.io/authorization/cluster/policybindings/:default",
 	},
@@ -48,50 +73,84 @@ var etcdStorageData = map[unversioned.GroupVersionResource]struct {
 		expectedEtcdPath: "openshift.io/authorization/cluster/policies/default",
 	},
 	gvr("", "v1", "policybindings"): {
-		stub:             `{"metadata": {"name": ":default"}, "roleBindings": [{"name": "rb", "roleBinding": {"metadata": {"name": "rb", "namespace": "etcdstoragepathtestnamespace"}, "roleRef": {"name": "r"}}}]}`,
-		expectedEtcdPath: "openshift.io/authorization/local/policybindings/etcdstoragepathtestnamespace/:default",
+		stub:             `{"metadata": {"name": ":legacydefault"}, "roleBindings": [{"name": "legacyrb", "roleBinding": {"metadata": {"name": "legacyrb", "namespace": "etcdstoragepathtestnamespace"}, "roleRef": {"name": "legacyr"}}}]}`,
+		expectedEtcdPath: "openshift.io/authorization/local/policybindings/etcdstoragepathtestnamespace/:legacydefault",
 	},
 	gvr("", "v1", "rolebindingrestrictions"): {
-		stub:             `{"metadata": {"name": "rbr"}, "spec": {"serviceaccountrestriction": {"serviceaccounts": [{"name": "sa"}]}}}`,
-		expectedEtcdPath: "openshift.io/rolebindingrestrictions/etcdstoragepathtestnamespace/rbr",
+		stub:             `{"metadata": {"name": "legacyrbr"}, "spec": {"serviceaccountrestriction": {"serviceaccounts": [{"name": "legacysa"}]}}}`,
+		expectedEtcdPath: "openshift.io/rolebindingrestrictions/etcdstoragepathtestnamespace/legacyrbr",
 	},
 	gvr("", "v1", "policies"): {
-		stub:             `{"metadata": {"name": "default"}, "roles": [{"name": "r", "role": {"metadata": {"name": "r", "namespace": "etcdstoragepathtestnamespace"}}}]}`,
-		expectedEtcdPath: "openshift.io/authorization/local/policies/etcdstoragepathtestnamespace/default",
+		stub:             `{"metadata": {"name": "legacydefault"}, "roles": [{"name": "legacyr", "role": {"metadata": {"name": "legacyr", "namespace": "etcdstoragepathtestnamespace"}}}]}`,
+		expectedEtcdPath: "openshift.io/authorization/local/policies/etcdstoragepathtestnamespace/legacydefault",
 	},
 	// --
 
 	// github.com/openshift/origin/pkg/build/api/v1
-	gvr("", "v1", "builds"): {
+	gvr("build.openshift.io", "v1", "builds"): {
 		stub:             `{"metadata": {"name": "build1"}, "spec": {"source": {"dockerfile": "Dockerfile1"}, "strategy": {"dockerStrategy": {"noCache": true}}}}`,
 		expectedEtcdPath: "openshift.io/builds/etcdstoragepathtestnamespace/build1",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "Build"},
 	},
-	gvr("", "v1", "buildconfigs"): {
+	gvr("build.openshift.io", "v1", "buildconfigs"): {
 		stub:             `{"metadata": {"name": "bc1"}, "spec": {"source": {"dockerfile": "Dockerfile0"}, "strategy": {"dockerStrategy": {"noCache": true}}}}`,
 		expectedEtcdPath: "openshift.io/buildconfigs/etcdstoragepathtestnamespace/bc1",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "BuildConfig"},
+	},
+	// --
+
+	// legacy github.com/openshift/origin/pkg/build/api/v1
+	gvr("", "v1", "builds"): {
+		stub:             `{"metadata": {"name": "legacybuild1"}, "spec": {"source": {"dockerfile": "Dockerfile1"}, "strategy": {"dockerStrategy": {"noCache": true}}}}`,
+		expectedEtcdPath: "openshift.io/builds/etcdstoragepathtestnamespace/legacybuild1",
+	},
+	gvr("", "v1", "buildconfigs"): {
+		stub:             `{"metadata": {"name": "legacybc1"}, "spec": {"source": {"dockerfile": "Dockerfile0"}, "strategy": {"dockerStrategy": {"noCache": true}}}}`,
+		expectedEtcdPath: "openshift.io/buildconfigs/etcdstoragepathtestnamespace/legacybc1",
 	},
 	// --
 
 	// github.com/openshift/origin/pkg/deploy/api/v1
-	gvr("", "v1", "deploymentconfigs"): {
+	gvr("deploy.openshift.io", "v1", "deploymentconfigs"): {
 		stub:             `{"metadata": {"name": "dc1"}, "spec": {"selector": {"d": "c"}, "template": {"metadata": {"labels": {"d": "c"}}, "spec": {"containers": [{"image": "fedora:latest", "name": "container2"}]}}}}`,
 		expectedEtcdPath: "openshift.io/deploymentconfigs/etcdstoragepathtestnamespace/dc1",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "DeploymentConfig"},
+	},
+	// --
+
+	// legacy github.com/openshift/origin/pkg/deploy/api/v1
+	gvr("", "v1", "deploymentconfigs"): {
+		stub:             `{"metadata": {"name": "legacydc1"}, "spec": {"selector": {"d": "c"}, "template": {"metadata": {"labels": {"d": "c"}}, "spec": {"containers": [{"image": "fedora:latest", "name": "container2"}]}}}}`,
+		expectedEtcdPath: "openshift.io/deploymentconfigs/etcdstoragepathtestnamespace/legacydc1",
 	},
 	// --
 
 	// github.com/openshift/origin/pkg/image/api/v1
-	gvr("", "v1", "imagestreams"): {
+	gvr("image.openshift.io", "v1", "imagestreams"): {
 		stub:             `{"metadata": {"name": "is1"}, "spec": {"dockerImageRepository": "docker"}}`,
 		expectedEtcdPath: "openshift.io/imagestreams/etcdstoragepathtestnamespace/is1",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "ImageStream"},
 	},
-	gvr("", "v1", "images"): {
+	gvr("image.openshift.io", "v1", "images"): {
 		stub:             `{"dockerImageReference": "fedora:latest", "metadata": {"name": "image1"}}`,
 		expectedEtcdPath: "openshift.io/images/image1",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "Image"},
+	},
+	// --
+
+	// legacy github.com/openshift/origin/pkg/image/api/v1
+	gvr("", "v1", "imagestreams"): {
+		stub:             `{"metadata": {"name": "legacyis1"}, "spec": {"dockerImageRepository": "docker"}}`,
+		expectedEtcdPath: "openshift.io/imagestreams/etcdstoragepathtestnamespace/legacyis1",
+	},
+	gvr("", "v1", "images"): {
+		stub:             `{"dockerImageReference": "fedora:latest", "metadata": {"name": "legacyimage1"}}`,
+		expectedEtcdPath: "openshift.io/images/legacyimage1",
 	},
 	// --
 
 	// github.com/openshift/origin/pkg/oauth/api/v1
-	gvr("", "v1", "oauthclientauthorizations"): {
+	gvr("oauth.openshift.io", "v1", "oauthclientauthorizations"): {
 		stub:             `{"clientName": "system:serviceaccount:etcdstoragepathtestnamespace:client", "metadata": {"name": "user:system:serviceaccount:etcdstoragepathtestnamespace:client"}, "scopes": ["user:info"], "userName": "user", "userUID": "cannot be empty"}`,
 		expectedEtcdPath: "openshift.io/oauth/clientauthorizations/user:system:serviceaccount:etcdstoragepathtestnamespace:client",
 		prerequisites: []prerequisite{
@@ -104,8 +163,9 @@ var etcdStorageData = map[unversioned.GroupVersionResource]struct {
 				stub:    `{"metadata": {"annotations": {"kubernetes.io/service-account.name": "client"}, "generateName": "client"}, "type": "kubernetes.io/service-account-token"}`,
 			},
 		},
+		expectedGVK: &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "OAuthClientAuthorization"},
 	},
-	gvr("", "v1", "oauthaccesstokens"): {
+	gvr("oauth.openshift.io", "v1", "oauthaccesstokens"): {
 		stub:             `{"clientName": "client1", "metadata": {"name": "tokenneedstobelongenoughelseitwontwork"}, "userName": "user", "userUID": "cannot be empty"}`,
 		expectedEtcdPath: "openshift.io/oauth/accesstokens/tokenneedstobelongenoughelseitwontwork",
 		prerequisites: []prerequisite{
@@ -114,8 +174,9 @@ var etcdStorageData = map[unversioned.GroupVersionResource]struct {
 				stub:    `{"metadata": {"name": "client1"}}`,
 			},
 		},
+		expectedGVK: &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "OAuthAccessToken"},
 	},
-	gvr("", "v1", "oauthauthorizetokens"): {
+	gvr("oauth.openshift.io", "v1", "oauthauthorizetokens"): {
 		stub:             `{"clientName": "client0", "metadata": {"name": "tokenneedstobelongenoughelseitwontwork"}, "userName": "user", "userUID": "cannot be empty"}`,
 		expectedEtcdPath: "openshift.io/oauth/authorizetokens/tokenneedstobelongenoughelseitwontwork",
 		prerequisites: []prerequisite{
@@ -124,73 +185,189 @@ var etcdStorageData = map[unversioned.GroupVersionResource]struct {
 				stub:    `{"metadata": {"name": "client0"}}`,
 			},
 		},
+		expectedGVK: &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "OAuthAuthorizeToken"},
 	},
-	gvr("", "v1", "oauthclients"): {
+	gvr("oauth.openshift.io", "v1", "oauthclients"): {
 		stub:             `{"metadata": {"name": "client"}}`,
 		expectedEtcdPath: "openshift.io/oauth/clients/client",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "OAuthClient"},
+	},
+	// --
+
+	// legacy github.com/openshift/origin/pkg/oauth/api/v1
+	gvr("", "v1", "oauthclientauthorizations"): {
+		stub:             `{"clientName": "system:serviceaccount:etcdstoragepathtestnamespace:legacyclient", "metadata": {"name": "user:system:serviceaccount:etcdstoragepathtestnamespace:legacyclient"}, "scopes": ["user:info"], "userName": "legacyuser", "userUID": "cannot be empty"}`,
+		expectedEtcdPath: "openshift.io/oauth/clientauthorizations/user:system:serviceaccount:etcdstoragepathtestnamespace:legacyclient",
+		prerequisites: []prerequisite{
+			{
+				gvrData: gvr("", "v1", "serviceaccounts"),
+				stub:    `{"metadata": {"annotations": {"serviceaccounts.openshift.io/oauth-redirecturi.foo": "http://bar"}, "name": "legacyclient"}}`,
+			},
+			{
+				gvrData: gvr("", "v1", "secrets"),
+				stub:    `{"metadata": {"annotations": {"kubernetes.io/service-account.name": "legacyclient"}, "generateName": "legacyclient"}, "type": "kubernetes.io/service-account-token"}`,
+			},
+		},
+	},
+	gvr("", "v1", "oauthaccesstokens"): {
+		stub:             `{"clientName": "legacyclient1", "metadata": {"name": "legacytokenneedstobelongenoughelseitwontwork"}, "userName": "legacyuser", "userUID": "cannot be empty"}`,
+		expectedEtcdPath: "openshift.io/oauth/accesstokens/legacytokenneedstobelongenoughelseitwontwork",
+		prerequisites: []prerequisite{
+			{
+				gvrData: gvr("", "v1", "oauthclients"),
+				stub:    `{"metadata": {"name": "legacyclient1"}}`,
+			},
+		},
+	},
+	gvr("", "v1", "oauthauthorizetokens"): {
+		stub:             `{"clientName": "legacyclient0", "metadata": {"name": "legacytokenneedstobelongenoughelseitwontwork"}, "userName": "legacyuser", "userUID": "cannot be empty"}`,
+		expectedEtcdPath: "openshift.io/oauth/authorizetokens/legacytokenneedstobelongenoughelseitwontwork",
+		prerequisites: []prerequisite{
+			{
+				gvrData: gvr("", "v1", "oauthclients"),
+				stub:    `{"metadata": {"name": "legacyclient0"}}`,
+			},
+		},
+	},
+	gvr("", "v1", "oauthclients"): {
+		stub:             `{"metadata": {"name": "legacyclient"}}`,
+		expectedEtcdPath: "openshift.io/oauth/clients/legacyclient",
 	},
 	// --
 
 	// github.com/openshift/origin/pkg/project/api/v1
-	gvr("", "v1", "projects"): {
+	gvr("project.openshift.io", "v1", "projects"): {
 		stub:             `{"metadata": {"name": "namespace2"}, "spec": {"finalizers": ["kubernetes", "openshift.io/origin"]}}`,
 		expectedEtcdPath: "kubernetes.io/namespaces/namespace2",
 		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "Namespace"}, // project is a proxy for namespace
 	},
 	// --
 
+	// legacy github.com/openshift/origin/pkg/project/api/v1
+	gvr("", "v1", "projects"): {
+		stub:             `{"metadata": {"name": "legacynamespace2"}, "spec": {"finalizers": ["kubernetes", "openshift.io/origin"]}}`,
+		expectedEtcdPath: "kubernetes.io/namespaces/legacynamespace2",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "Namespace"}, // project is a proxy for namespace
+	},
+	// --
+
 	// github.com/openshift/origin/pkg/quota/api/v1
-	gvr("", "v1", "clusterresourcequotas"): {
+	gvr("quota.openshift.io", "v1", "clusterresourcequotas"): {
 		stub:             `{"metadata": {"name": "quota1"}, "spec": {"selector": {"labels": {"matchLabels": {"a": "b"}}}}}`,
 		expectedEtcdPath: "openshift.io/clusterresourcequotas/quota1",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "ClusterResourceQuota"},
+	},
+	// --
+
+	// legacy github.com/openshift/origin/pkg/quota/api/v1
+	gvr("", "v1", "clusterresourcequotas"): {
+		stub:             `{"metadata": {"name": "legacyquota1"}, "spec": {"selector": {"labels": {"matchLabels": {"a": "b"}}}}}`,
+		expectedEtcdPath: "openshift.io/clusterresourcequotas/legacyquota1",
 	},
 	// --
 
 	// github.com/openshift/origin/pkg/route/api/v1
-	gvr("", "v1", "routes"): {
+	gvr("route.openshift.io", "v1", "routes"): {
 		stub:             `{"metadata": {"name": "route1"}, "spec": {"host": "hostname1", "to": {"name": "service1"}}}`,
 		expectedEtcdPath: "openshift.io/routes/etcdstoragepathtestnamespace/route1",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "Route"},
+	},
+	// --
+
+	// legacy github.com/openshift/origin/pkg/route/api/v1
+	gvr("", "v1", "routes"): {
+		stub:             `{"metadata": {"name": "legacyroute1"}, "spec": {"host": "hostname1", "to": {"name": "service1"}}}`,
+		expectedEtcdPath: "openshift.io/routes/etcdstoragepathtestnamespace/legacyroute1",
 	},
 	// --
 
 	// github.com/openshift/origin/pkg/sdn/api/v1
-	gvr("", "v1", "netnamespaces"): { // This will fail to delete because meta.name != NetName but it is keyed off NetName
+	gvr("network.openshift.io", "v1", "netnamespaces"): { // This will fail to delete because meta.name != NetName but it is keyed off NetName
 		stub:             `{"metadata": {"name": "nn1"}, "netid": 100, "netname": "networkname"}`,
 		expectedEtcdPath: "openshift.io/registry/sdnnetnamespaces/networkname",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "NetNamespace"},
 	},
-	gvr("", "v1", "hostsubnets"): { // This will fail to delete because meta.name != Host but it is keyed off Host
+	gvr("network.openshift.io", "v1", "hostsubnets"): { // This will fail to delete because meta.name != Host but it is keyed off Host
 		stub:             `{"host": "hostname", "hostIP": "192.168.1.1", "metadata": {"name": "hs1"}, "subnet": "192.168.1.1/24"}`,
 		expectedEtcdPath: "openshift.io/registry/sdnsubnets/hostname",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "HostSubnet"},
 	},
-	gvr("", "v1", "clusternetworks"): {
+	gvr("network.openshift.io", "v1", "clusternetworks"): {
 		stub:             `{"metadata": {"name": "cn1"}, "network": "192.168.0.1/24", "serviceNetwork": "192.168.1.1/24"}`,
 		expectedEtcdPath: "openshift.io/registry/sdnnetworks/cn1",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "ClusterNetwork"},
 	},
-	gvr("", "v1", "egressnetworkpolicies"): {
+	gvr("network.openshift.io", "v1", "egressnetworkpolicies"): {
 		stub:             `{"metadata": {"name": "enp1"}, "spec": {"egress": [{"to": {"cidrSelector": "192.168.1.1/24"}, "type": "Allow"}]}}`,
 		expectedEtcdPath: "openshift.io/registry/egressnetworkpolicy/etcdstoragepathtestnamespace/enp1",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "EgressNetworkPolicy"},
+	},
+	// --
+
+	// legacy github.com/openshift/origin/pkg/sdn/api/v1
+	gvr("", "v1", "netnamespaces"): { // This will fail to delete because meta.name != NetName but it is keyed off NetName
+		stub:             `{"metadata": {"name": "legacynn1"}, "netid": 100, "netname": "legacynetworkname"}`,
+		expectedEtcdPath: "openshift.io/registry/sdnnetnamespaces/legacynetworkname",
+	},
+	gvr("", "v1", "hostsubnets"): { // This will fail to delete because meta.name != Host but it is keyed off Host
+		stub:             `{"host": "legacyhostname", "hostIP": "192.168.1.1", "metadata": {"name": "legacyhs1"}, "subnet": "192.168.1.1/24"}`,
+		expectedEtcdPath: "openshift.io/registry/sdnsubnets/legacyhostname",
+	},
+	gvr("", "v1", "clusternetworks"): {
+		stub:             `{"metadata": {"name": "legacycn1"}, "network": "192.168.0.1/24", "serviceNetwork": "192.168.1.1/24"}`,
+		expectedEtcdPath: "openshift.io/registry/sdnnetworks/legacycn1",
+	},
+	gvr("", "v1", "egressnetworkpolicies"): {
+		stub:             `{"metadata": {"name": "legacyenp1"}, "spec": {"egress": [{"to": {"cidrSelector": "192.168.1.1/24"}, "type": "Allow"}]}}`,
+		expectedEtcdPath: "openshift.io/registry/egressnetworkpolicy/etcdstoragepathtestnamespace/legacyenp1",
 	},
 	// --
 
 	// github.com/openshift/origin/pkg/template/api/v1
-	gvr("", "v1", "templates"): {
+	gvr("template.openshift.io", "v1", "templates"): {
 		stub:             `{"message": "Jenkins template", "metadata": {"name": "template1"}}`,
 		expectedEtcdPath: "openshift.io/templates/etcdstoragepathtestnamespace/template1",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "Template"},
+	},
+	// --
+
+	// legacy github.com/openshift/origin/pkg/template/api/v1
+	gvr("", "v1", "templates"): {
+		stub:             `{"message": "Jenkins template", "metadata": {"name": "legacytemplate1"}}`,
+		expectedEtcdPath: "openshift.io/templates/etcdstoragepathtestnamespace/legacytemplate1",
 	},
 	// --
 
 	// github.com/openshift/origin/pkg/user/api/v1
-	gvr("", "v1", "groups"): {
+	gvr("user.openshift.io", "v1", "groups"): {
 		stub:             `{"metadata": {"name": "group"}, "users": ["user1", "user2"]}`,
 		expectedEtcdPath: "openshift.io/groups/group",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "Group"},
 	},
-	gvr("", "v1", "users"): {
+	gvr("user.openshift.io", "v1", "users"): {
 		stub:             `{"fullName": "user1", "metadata": {"name": "user1"}}`,
 		expectedEtcdPath: "openshift.io/users/user1",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "User"},
 	},
-	gvr("", "v1", "identities"): {
+	gvr("user.openshift.io", "v1", "identities"): {
 		stub:             `{"metadata": {"name": "github:user2"}, "providerName": "github", "providerUserName": "user2"}`,
 		expectedEtcdPath: "openshift.io/useridentities/github:user2",
+		expectedGVK:      &unversioned.GroupVersionKind{Group: "", Version: "v1", Kind: "Identity"},
+	},
+	// --
+
+	// legacy github.com/openshift/origin/pkg/user/api/v1
+	gvr("", "v1", "groups"): {
+		stub:             `{"metadata": {"name": "legacygroup"}, "users": ["legacyuser1", "legacyuser2"]}`,
+		expectedEtcdPath: "openshift.io/groups/legacygroup",
+	},
+	gvr("", "v1", "users"): {
+		stub:             `{"fullName": "legacyuser1", "metadata": {"name": "legacyuser1"}}`,
+		expectedEtcdPath: "openshift.io/users/legacyuser1",
+	},
+	gvr("", "v1", "identities"): {
+		stub:             `{"metadata": {"name": "github:legacyuser2"}, "providerName": "github", "providerUserName": "legacyuser2"}`,
+		expectedEtcdPath: "openshift.io/useridentities/github:legacyuser2",
 	},
 	// --
 
@@ -368,76 +545,72 @@ var ephemeralWhiteList = createEphemeralWhiteList(
 	// github.com/openshift/origin/pkg/authorization/api/v1
 
 	// virtual objects that are not stored in etcd  // TODO this will change in the future when policies go away
-	gvr("", "v1", "roles"),
-	gvr("", "v1", "clusterroles"),
-	gvr("", "v1", "rolebindings"),
-	gvr("", "v1", "clusterrolebindings"),
+	gvr("authorization.openshift.io", "v1", "roles"),
+	gvr("authorization.openshift.io", "v1", "clusterroles"),
+	gvr("authorization.openshift.io", "v1", "rolebindings"),
+	gvr("authorization.openshift.io", "v1", "clusterrolebindings"),
 
 	// SAR objects that are not stored in etcd
-	gvr("", "v1", "subjectrulesreviews"),
-	gvr("", "v1", "selfsubjectrulesreviews"),
-	gvr("", "v1", "subjectaccessreviews"),
-	gvr("", "v1", "resourceaccessreviews"),
-	gvr("", "v1", "localsubjectaccessreviews"),
-	gvr("", "v1", "localresourceaccessreviews"),
-	gvr("", "v1", "ispersonalsubjectaccessreviews"),
-	gvr("", "v1", "resourceaccessreviewresponses"),
-	gvr("", "v1", "subjectaccessreviewresponses"),
+	gvr("authorization.openshift.io", "v1", "subjectrulesreviews"),
+	gvr("authorization.openshift.io", "v1", "selfsubjectrulesreviews"),
+	gvr("authorization.openshift.io", "v1", "subjectaccessreviews"),
+	gvr("authorization.openshift.io", "v1", "resourceaccessreviews"),
+	gvr("authorization.openshift.io", "v1", "localsubjectaccessreviews"),
+	gvr("authorization.openshift.io", "v1", "localresourceaccessreviews"),
+	gvr("authorization.openshift.io", "v1", "ispersonalsubjectaccessreviews"),
+	gvr("authorization.openshift.io", "v1", "resourceaccessreviewresponses"),
+	gvr("authorization.openshift.io", "v1", "subjectaccessreviewresponses"),
 	// --
 
 	// github.com/openshift/origin/pkg/build/api/v1
 
 	// used for streaming build logs from pod, not stored in etcd
-	gvr("", "v1", "buildlogs"),
-	gvr("", "v1", "buildlogoptionses"),
+	gvr("build.openshift.io", "v1", "buildlogs"),
+	gvr("build.openshift.io", "v1", "buildlogoptionses"),
 
 	// BuildGenerator helpers not stored in etcd
-	gvr("", "v1", "buildrequests"),
-	gvr("", "v1", "binarybuildrequestoptionses"),
+	gvr("build.openshift.io", "v1", "buildrequests"),
+	gvr("build.openshift.io", "v1", "binarybuildrequestoptionses"),
+
+	gvr("build.openshift.io", "v1", "statuses"), // return value for calls, not stored in etcd
 	// --
 
 	// github.com/openshift/origin/pkg/deploy/api/v1
 
 	// used for streaming deployment logs from pod, not stored in etcd
-	gvr("", "v1", "deploymentlogs"),
-	gvr("", "v1", "deploymentlogoptionses"),
+	gvr("deploy.openshift.io", "v1", "deploymentlogs"),
+	gvr("deploy.openshift.io", "v1", "deploymentlogoptionses"),
 
-	gvr("", "v1", "deploymentrequests"),        // triggers new dc, not stored in etcd
-	gvr("", "v1", "deploymentconfigrollbacks"), // triggers rolleback dc, not stored in etcd
-	// --
+	gvr("deploy.openshift.io", "v1", "deploymentrequests"),        // triggers new dc, not stored in etcd
+	gvr("deploy.openshift.io", "v1", "deploymentconfigrollbacks"), // triggers rolleback dc, not stored in etcd
 
-	// github.com/openshift/origin/pkg/image/api/docker10
-	gvr("", "1.0", "dockerimages"), // part of imageapiv1.Image
-	// --
-
-	// github.com/openshift/origin/pkg/image/api/dockerpre012
-	gvr("", "pre012", "dockerimages"), // part of imageapiv1.Image
+	gvr("deploy.openshift.io", "v1", "scales"),
 	// --
 
 	// github.com/openshift/origin/pkg/image/api/v1
-	gvr("", "v1", "imagestreamtags"),     // part of image stream
-	gvr("", "v1", "imagesignatures"),     // part of image
-	gvr("", "v1", "imagestreamimports"),  // not stored in etcd
-	gvr("", "v1", "imagestreamimages"),   // not stored in etcd
-	gvr("", "v1", "imagestreammappings"), // not stored in etcd
+	gvr("image.openshift.io", "v1", "imagestreamtags"),     // part of image stream
+	gvr("image.openshift.io", "v1", "imagesignatures"),     // part of image
+	gvr("image.openshift.io", "v1", "imagestreamimports"),  // not stored in etcd
+	gvr("image.openshift.io", "v1", "imagestreamimages"),   // not stored in etcd
+	gvr("image.openshift.io", "v1", "imagestreammappings"), // not stored in etcd
 	// --
 
 	// github.com/openshift/origin/pkg/oauth/api/v1
-	gvr("", "v1", "oauthredirectreferences"), // Used for specifying redirects, never stored in etcd
+	gvr("oauth.openshift.io", "v1", "oauthredirectreferences"), // Used for specifying redirects, never stored in etcd
 	// --
 
 	// github.com/openshift/origin/pkg/project/api/v1
-	gvr("", "v1", "projectrequests"), // not stored in etcd
+	gvr("project.openshift.io", "v1", "projectrequests"), // not stored in etcd
 	// --
 
 	// github.com/openshift/origin/pkg/quota/api/v1
-	gvr("", "v1", "appliedclusterresourcequotas"), // mirror of ClusterResourceQuota that cannot be created
+	gvr("quota.openshift.io", "v1", "appliedclusterresourcequotas"), // mirror of ClusterResourceQuota that cannot be created
 	// --
 
 	// github.com/openshift/origin/pkg/security/api/v1
-	gvr("", "v1", "podsecuritypolicyselfsubjectreviews"), // not stored in etcd
-	gvr("", "v1", "podsecuritypolicyreviews"),            // not stored in etcd
-	gvr("", "v1", "podsecuritypolicysubjectreviews"),     // not stored in etcd
+	gvr("security.openshift.io", "v1", "podsecuritypolicyselfsubjectreviews"), // not stored in etcd
+	gvr("security.openshift.io", "v1", "podsecuritypolicyreviews"),            // not stored in etcd
+	gvr("security.openshift.io", "v1", "podsecuritypolicysubjectreviews"),     // not stored in etcd
 	// --
 
 	// github.com/openshift/origin/pkg/template/api/v1
@@ -448,7 +621,7 @@ var ephemeralWhiteList = createEphemeralWhiteList(
 	// --
 
 	// github.com/openshift/origin/pkg/user/api/v1
-	gvr("", "v1", "useridentitymappings"), // pointer from user to identity, not stored in etcd
+	gvr("user.openshift.io", "v1", "useridentitymappings"), // pointer from user to identity, not stored in etcd
 	// --
 
 	// k8s.io/kubernetes/federation/apis/federation/v1beta1
@@ -521,24 +694,106 @@ var ephemeralWhiteList = createEphemeralWhiteList(
 	// --
 )
 
+// legacyCoreGroupResource holds those GVRs which co-exist as a legacy core resource. This
+// list is not supposed to grow. DO NOT ADD ANYTHING.
+var legacyCoreGroupResource = map[unversioned.GroupVersionResource]empty{
+	gvr("authorization.openshift.io", "v1", "clusterpolicybindings"):   {},
+	gvr("authorization.openshift.io", "v1", "clusterpolicies"):         {},
+	gvr("authorization.openshift.io", "v1", "policybindings"):          {},
+	gvr("authorization.openshift.io", "v1", "rolebindingrestrictions"): {},
+	gvr("authorization.openshift.io", "v1", "policies"):                {},
+	gvr("build.openshift.io", "v1", "builds"):                          {},
+	gvr("build.openshift.io", "v1", "buildconfigs"):                    {},
+	gvr("deploy.openshift.io", "v1", "deploymentconfigs"):              {},
+	gvr("image.openshift.io", "v1", "imagestreams"):                    {},
+	gvr("image.openshift.io", "v1", "images"):                          {},
+	gvr("oauth.openshift.io", "v1", "oauthclientauthorizations"):       {},
+	gvr("oauth.openshift.io", "v1", "oauthaccesstokens"):               {},
+	gvr("oauth.openshift.io", "v1", "oauthauthorizetokens"):            {},
+	gvr("oauth.openshift.io", "v1", "oauthclients"):                    {},
+	gvr("project.openshift.io", "v1", "projects"):                      {},
+	gvr("quota.openshift.io", "v1", "clusterresourcequotas"):           {},
+	gvr("route.openshift.io", "v1", "routes"):                          {},
+	gvr("network.openshift.io", "v1", "netnamespaces"):                 {},
+	gvr("network.openshift.io", "v1", "hostsubnets"):                   {},
+	gvr("network.openshift.io", "v1", "clusternetworks"):               {},
+	gvr("template.openshift.io", "v1", "templates"):                    {},
+	gvr("user.openshift.io", "v1", "groups"):                           {},
+	gvr("user.openshift.io", "v1", "users"):                            {},
+	gvr("user.openshift.io", "v1", "identities"):                       {},
+
+	// ephemeral resource
+	gvr("authorization.openshift.io", "v1", "roles"):                             {},
+	gvr("authorization.openshift.io", "v1", "clusterroles"):                      {},
+	gvr("authorization.openshift.io", "v1", "rolebindings"):                      {},
+	gvr("authorization.openshift.io", "v1", "clusterrolebindings"):               {},
+	gvr("authorization.openshift.io", "v1", "subjectrulesreviews"):               {},
+	gvr("authorization.openshift.io", "v1", "selfsubjectrulesreviews"):           {},
+	gvr("authorization.openshift.io", "v1", "subjectaccessreviews"):              {},
+	gvr("authorization.openshift.io", "v1", "resourceaccessreviews"):             {},
+	gvr("authorization.openshift.io", "v1", "localsubjectaccessreviews"):         {},
+	gvr("authorization.openshift.io", "v1", "localresourceaccessreviews"):        {},
+	gvr("authorization.openshift.io", "v1", "ispersonalsubjectaccessreviews"):    {},
+	gvr("authorization.openshift.io", "v1", "resourceaccessreviewresponses"):     {},
+	gvr("authorization.openshift.io", "v1", "subjectaccessreviewresponses"):      {},
+	gvr("build.openshift.io", "v1", "buildlogs"):                                 {},
+	gvr("build.openshift.io", "v1", "buildlogoptionses"):                         {},
+	gvr("build.openshift.io", "v1", "buildrequests"):                             {},
+	gvr("build.openshift.io", "v1", "binarybuildrequestoptionses"):               {},
+	gvr("deploy.openshift.io", "v1", "deploymentlogs"):                           {},
+	gvr("deploy.openshift.io", "v1", "deploymentlogoptionses"):                   {},
+	gvr("deploy.openshift.io", "v1", "deploymentrequests"):                       {},
+	gvr("deploy.openshift.io", "v1", "deploymentconfigrollbacks"):                {},
+	gvr("deploy.openshift.io", "v1", "scales"):                                   {},
+	gvr("image.openshift.io", "1.0", "dockerimages"):                             {},
+	gvr("image.openshift.io", "pre012", "dockerimages"):                          {},
+	gvr("image.openshift.io", "v1", "imagestreamtags"):                           {},
+	gvr("image.openshift.io", "v1", "imagesignatures"):                           {},
+	gvr("image.openshift.io", "v1", "imagestreamimports"):                        {},
+	gvr("image.openshift.io", "v1", "imagestreamimages"):                         {},
+	gvr("image.openshift.io", "v1", "imagestreammappings"):                       {},
+	gvr("oauth.openshift.io", "v1", "oauthredirectreferences"):                   {},
+	gvr("project.openshift.io", "v1", "projectrequests"):                         {},
+	gvr("requestlimit.project.openshift.io", "v1", "projectrequestlimitconfigs"): {},
+	gvr("quota.openshift.io", "v1", "appliedclusterresourcequotas"):              {},
+	gvr("security.openshift.io", "v1", "podsecuritypolicyselfsubjectreviews"):    {},
+	gvr("security.openshift.io", "v1", "podsecuritypolicyreviews"):               {},
+	gvr("security.openshift.io", "v1", "podsecuritypolicysubjectreviews"):        {},
+	gvr("user.openshift.io", "v1", "useridentitymappings"):                       {},
+}
+
+// legacyToGroupResource maps legacy core group resources to their api group counterpart.
+var legacyToGroupResource = func() map[unversioned.GroupVersionResource]unversioned.GroupVersionResource {
+	m := make(map[unversioned.GroupVersionResource]unversioned.GroupVersionResource, len(legacyCoreGroupResource))
+	for gvr := range legacyCoreGroupResource {
+		m[unversioned.GroupVersionResource{"", gvr.Version, gvr.Resource}] = gvr
+	}
+	return m
+}()
+
 // Only add kinds to this list when there is no mapping from GVK to GVR (and thus there is no way to create the object)
-var kindWhiteList = sets.NewString(
+var kindWhiteList = map[unversioned.GroupKind]empty{
+	// github.com/openshift/origin/pkg/image/api
+	{"*", "DockerImage"}: {},
+	// --
+
 	// k8s.io/kubernetes/pkg/api/v1
-	"DeleteOptions",
-	"ExportOptions",
-	"ListOptions",
-	"NodeProxyOptions",
-	"PodAttachOptions",
-	"PodExecOptions",
-	"PodLogOptions",
-	"PodProxyOptions",
-	"ServiceProxyOptions",
+	{"*", "Status"}:             {},
+	{"*", "DeleteOptions"}:      {},
+	{"*", "ExportOptions"}:      {},
+	{"*", "ListOptions"}:        {},
+	{"", "NodeProxyOptions"}:    {},
+	{"", "PodAttachOptions"}:    {},
+	{"", "PodExecOptions"}:      {},
+	{"", "PodLogOptions"}:       {},
+	{"", "PodProxyOptions"}:     {},
+	{"", "ServiceProxyOptions"}: {},
 	// --
 
 	// k8s.io/kubernetes/pkg/watch/versioned
-	"WatchEvent",
+	{"*", "WatchEvent"}: {},
 	// --
-)
+}
 
 // namespace used for all tests, do not change this
 const testNamespace = "etcdstoragepathtestnamespace"
@@ -584,7 +839,7 @@ func TestEtcdStoragePath(t *testing.T) {
 		t.Fatalf("error creating test namespace: %#v", err)
 	}
 
-	kindSeen := sets.NewString()
+	kindSeen := map[unversioned.GroupKind]empty{}
 	etcdSeen := map[unversioned.GroupVersionResource]empty{}
 	ephemeralSeen := map[unversioned.GroupVersionResource]empty{}
 
@@ -599,8 +854,10 @@ func TestEtcdStoragePath(t *testing.T) {
 
 		mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 		if err != nil {
-			kindSeen.Insert(kind)
-			if kindWhiteList.Has(kind) {
+			kindSeen[gvk.GroupKind()] = empty{}
+			_, gkFound := kindWhiteList[gvk.GroupKind()]
+			_, wildcardFound := kindWhiteList[unversioned.GroupKind{"*", kind}]
+			if gkFound || wildcardFound {
 				// t.Logf("skipping test for %s from %s because its GVK %s is whitelisted and has no mapping", kind, pkgPath, gvk)
 			} else {
 				t.Errorf("no mapping found for %s from %s but its GVK %s is not whitelisted", kind, pkgPath, gvk)
@@ -610,9 +867,8 @@ func TestEtcdStoragePath(t *testing.T) {
 
 		gvResource := gvk.GroupVersion().WithResource(mapping.Resource)
 		etcdSeen[gvResource] = empty{}
-
-		testData, hasTest := etcdStorageData[gvResource]
 		_, isEphemeral := ephemeralWhiteList[gvResource]
+		testData, hasTest := etcdStorageData[gvResource]
 
 		if !hasTest && !isEphemeral {
 			t.Errorf("no test data for %s from %s.  Please add a test for your new type to etcdStorageData.", kind, pkgPath)
@@ -698,9 +954,29 @@ func TestEtcdStoragePath(t *testing.T) {
 		t.Errorf("ephemeral whitelist does not match the types we saw:\nin ephemeral whitelist but not seen:\n%s\nseen but not in ephemeral whitelist:\n%s", inEphemeralWhiteList, inEphemeralSeen)
 	}
 
-	if inKindData, inKindSeen := diffMaps(kindWhiteList, kindSeen); len(inKindData) != 0 || len(inKindSeen) != 0 {
+	if inKindData, inKindSeen := diffMaps(withoutWidcards(kindWhiteList, kindSeen)); len(inKindData) != 0 || len(inKindSeen) != 0 {
 		t.Errorf("kind whitelist data does not match the types we saw:\nin kind whitelist but not seen:\n%s\nseen but not in kind whitelist:\n%s", inKindData, inKindSeen)
 	}
+}
+
+// withoutWidcards remove all wildcards GroupKinds from the whitelist and all GroupKinds which match a wildcard from the seen list.
+func withoutWidcards(whitelist, seen map[unversioned.GroupKind]empty) (map[unversioned.GroupKind]empty, map[unversioned.GroupKind]empty) {
+	filteredWhitelist := map[unversioned.GroupKind]empty{}
+	for gvr := range whitelist {
+		if gvr.Group != "*" {
+			filteredWhitelist[gvr] = empty{}
+		}
+	}
+
+	out := map[unversioned.GroupKind]empty{}
+	for gvr := range seen {
+		wildcarded := gvr
+		wildcarded.Group = "*"
+		if _, found := whitelist[wildcarded]; !found {
+			out[gvr] = empty{}
+		}
+	}
+	return filteredWhitelist, out
 }
 
 // stable fields to compare as a sanity check
@@ -747,6 +1023,11 @@ func createEphemeralWhiteList(gvrs ...unversioned.GroupVersionResource) map[unve
 			panic("invalid ephemeral whitelist contains duplicate keys")
 		}
 		ephemeral[gvResource] = empty{}
+
+		// also make the legacy counterpart ephemeral
+		if _, found := legacyCoreGroupResource[gvResource]; found {
+			ephemeral[unversioned.GroupVersionResource{Group: "", Version: gvResource.Version, Resource: gvResource.Resource}] = empty{}
+		}
 	}
 	return ephemeral
 }
@@ -765,6 +1046,8 @@ func keyStringer(i interface{}) string {
 	case string:
 		return base + key
 	case unversioned.GroupVersionResource:
+		return base + key.String()
+	case unversioned.GroupKind:
 		return base + key.String()
 	default:
 		panic("unexpected type")
