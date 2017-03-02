@@ -126,6 +126,7 @@ func (g *configRESTOptionsGetter) loadSettings() error {
 		{"network.openshift.io", "v1", "netnamespaces"},
 		{"network.openshift.io", "v1", "hostsubnets"},
 		{"network.openshift.io", "v1", "clusternetworks"},
+		{"network.openshift.io", "v1", "egressnetworkpolicies"},
 		{"template.openshift.io", "v1", "templates"},
 		{"user.openshift.io", "v1", "groups"},
 		{"user.openshift.io", "v1", "users"},

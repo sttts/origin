@@ -717,6 +717,7 @@ var legacyCoreGroupResource = map[unversioned.GroupVersionResource]empty{
 	gvr("network.openshift.io", "v1", "netnamespaces"):                 {},
 	gvr("network.openshift.io", "v1", "hostsubnets"):                   {},
 	gvr("network.openshift.io", "v1", "clusternetworks"):               {},
+	gvr("network.openshift.io", "v1", "egressnetworkpolicies"):         {},
 	gvr("template.openshift.io", "v1", "templates"):                    {},
 	gvr("user.openshift.io", "v1", "groups"):                           {},
 	gvr("user.openshift.io", "v1", "users"):                            {},
