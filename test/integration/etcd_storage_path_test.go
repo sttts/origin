@@ -33,7 +33,7 @@ import (
 
 // Etcd data for all persisted objects.
 var etcdStorageData = map[unversioned.GroupVersionResource]struct {
-	stub             string                        // Valid JSON stub to use during create
+	ns, stub             string                    // Valid JSON stub with optional namespace to use during create
 	prerequisites    []prerequisite                // Optional, ordered list of JSON objects to create before stub
 	expectedEtcdPath string                        // Expected location of object in etcd, do not use any variables, constants, etc to derive this value - always supply the full raw string
 	expectedGVK      *unversioned.GroupVersionKind // The GVK that we expect this object to be stored as - leave this nil to use the default
@@ -72,16 +72,19 @@ var etcdStorageData = map[unversioned.GroupVersionResource]struct {
 		expectedEtcdPath: "openshift.io/authorization/cluster/policies/default",
 	},
 	gvr("", "v1", "policybindings"): {
-		stub:             `{"metadata": {"name": ":legacydefault"}, "roleBindings": [{"name": "legacyrb", "roleBinding": {"metadata": {"name": "legacyrb", "namespace": "etcdstoragepathtestnamespace"}, "roleRef": {"name": "legacyr"}}}]}`,
-		expectedEtcdPath: "openshift.io/authorization/local/policybindings/etcdstoragepathtestnamespace/:legacydefault",
+		ns: legacyTestNamespace,
+		stub:             `{"metadata": {"name": ":default"}, "roleBindings": [{"name": "rb", "roleBinding": {"metadata": {"name": "rb", "namespace": "legacyetcdstoragepathtestnamespace"}, "roleRef": {"name": "r"}}}]}`,
+		expectedEtcdPath: "openshift.io/authorization/local/policybindings/legacyetcdstoragepathtestnamespace/:default",
 	},
 	gvr("", "v1", "rolebindingrestrictions"): {
-		stub:             `{"metadata": {"name": "legacyrbr"}, "spec": {"serviceaccountrestriction": {"serviceaccounts": [{"name": "legacysa"}]}}}`,
-		expectedEtcdPath: "openshift.io/rolebindingrestrictions/etcdstoragepathtestnamespace/legacyrbr",
+		ns: legacyTestNamespace,
+		stub:             `{"metadata": {"name": "rbr"}, "spec": {"serviceaccountrestriction": {"serviceaccounts": [{"name": "sa"}]}}}`,
+		expectedEtcdPath: "openshift.io/rolebindingrestrictions/legacyetcdstoragepathtestnamespace/rbr",
 	},
 	gvr("", "v1", "policies"): {
-		stub:             `{"metadata": {"name": "legacydefault"}, "roles": [{"name": "legacyr", "role": {"metadata": {"name": "legacyr", "namespace": "etcdstoragepathtestnamespace"}}}]}`,
-		expectedEtcdPath: "openshift.io/authorization/local/policies/etcdstoragepathtestnamespace/legacydefault",
+		ns: legacyTestNamespace,
+		stub:             `{"metadata": {"name": "default"}, "roles": [{"name": "r", "role": {"metadata": {"name": "r", "namespace": "etcdstoragepathtestnamespace"}}}]}`,
+		expectedEtcdPath: "openshift.io/authorization/local/policies/legacyetcdstoragepathtestnamespace/default",
 	},
 	// --
 
@@ -100,12 +103,14 @@ var etcdStorageData = map[unversioned.GroupVersionResource]struct {
 
 	// legacy github.com/openshift/origin/pkg/build/api/v1
 	gvr("", "v1", "builds"): {
-		stub:             `{"metadata": {"name": "legacybuild1"}, "spec": {"source": {"dockerfile": "Dockerfile1"}, "strategy": {"dockerStrategy": {"noCache": true}}}}`,
-		expectedEtcdPath: "openshift.io/builds/etcdstoragepathtestnamespace/legacybuild1",
+		ns: legacyTestNamespace,
+		stub:             `{"metadata": {"name": "build1"}, "spec": {"source": {"dockerfile": "Dockerfile1"}, "strategy": {"dockerStrategy": {"noCache": true}}}}`,
+		expectedEtcdPath: "openshift.io/builds/legacyetcdstoragepathtestnamespace/build1",
 	},
 	gvr("", "v1", "buildconfigs"): {
-		stub:             `{"metadata": {"name": "legacybc1"}, "spec": {"source": {"dockerfile": "Dockerfile0"}, "strategy": {"dockerStrategy": {"noCache": true}}}}`,
-		expectedEtcdPath: "openshift.io/buildconfigs/etcdstoragepathtestnamespace/legacybc1",
+		ns: legacyTestNamespace,
+		stub:             `{"metadata": {"name": "bc1"}, "spec": {"source": {"dockerfile": "Dockerfile0"}, "strategy": {"dockerStrategy": {"noCache": true}}}}`,
+		expectedEtcdPath: "openshift.io/buildconfigs/legacyetcdstoragepathtestnamespace/bc1",
 	},
 	// --
 
@@ -119,8 +124,9 @@ var etcdStorageData = map[unversioned.GroupVersionResource]struct {
 
 	// legacy github.com/openshift/origin/pkg/deploy/api/v1
 	gvr("", "v1", "deploymentconfigs"): {
-		stub:             `{"metadata": {"name": "legacydc1"}, "spec": {"selector": {"d": "c"}, "template": {"metadata": {"labels": {"d": "c"}}, "spec": {"containers": [{"image": "fedora:latest", "name": "container2"}]}}}}`,
-		expectedEtcdPath: "openshift.io/deploymentconfigs/etcdstoragepathtestnamespace/legacydc1",
+		ns: legacyTestNamespace,
+		stub:             `{"metadata": {"name": "dc1"}, "spec": {"selector": {"d": "c"}, "template": {"metadata": {"labels": {"d": "c"}}, "spec": {"containers": [{"image": "fedora:latest", "name": "container2"}]}}}}`,
+		expectedEtcdPath: "openshift.io/deploymentconfigs/legacyetcdstoragepathtestnamespace/dc1",
 	},
 	// --
 
@@ -139,8 +145,9 @@ var etcdStorageData = map[unversioned.GroupVersionResource]struct {
 
 	// legacy github.com/openshift/origin/pkg/image/api/v1
 	gvr("", "v1", "imagestreams"): {
-		stub:             `{"metadata": {"name": "legacyis1"}, "spec": {"dockerImageRepository": "docker"}}`,
-		expectedEtcdPath: "openshift.io/imagestreams/etcdstoragepathtestnamespace/legacyis1",
+		ns: legacyTestNamespace,
+		stub:             `{"metadata": {"name": "is1"}, "spec": {"dockerImageRepository": "docker"}}`,
+		expectedEtcdPath: "openshift.io/imagestreams/legacyetcdstoragepathtestnamespace/is1",
 	},
 	gvr("", "v1", "images"): {
 		stub:             `{"dockerImageReference": "fedora:latest", "metadata": {"name": "legacyimage1"}}`,
@@ -195,35 +202,42 @@ var etcdStorageData = map[unversioned.GroupVersionResource]struct {
 
 	// legacy github.com/openshift/origin/pkg/oauth/api/v1
 	gvr("", "v1", "oauthclientauthorizations"): {
-		stub:             `{"clientName": "system:serviceaccount:etcdstoragepathtestnamespace:legacyclient", "metadata": {"name": "user:system:serviceaccount:etcdstoragepathtestnamespace:legacyclient"}, "scopes": ["user:info"], "userName": "legacyuser", "userUID": "cannot be empty"}`,
-		expectedEtcdPath: "openshift.io/oauth/clientauthorizations/user:system:serviceaccount:etcdstoragepathtestnamespace:legacyclient",
+		ns: legacyTestNamespace,
+		stub:             `{"clientName": "system:serviceaccount:legacyetcdstoragepathtestnamespace:legacyclient", "metadata": {"name": "user:system:serviceaccount:legacyetcdstoragepathtestnamespace:legacyclient"}, "scopes": ["user:info"], "userName": "user", "userUID": "cannot be empty"}`,
+		expectedEtcdPath: "openshift.io/oauth/clientauthorizations/user:system:serviceaccount:legacyetcdstoragepathtestnamespace:legacyclient",
 		prerequisites: []prerequisite{
 			{
 				gvrData: gvr("", "v1", "serviceaccounts"),
+				ns: legacyTestNamespace,
 				stub:    `{"metadata": {"annotations": {"serviceaccounts.openshift.io/oauth-redirecturi.foo": "http://bar"}, "name": "legacyclient"}}`,
 			},
 			{
 				gvrData: gvr("", "v1", "secrets"),
+				ns: legacyTestNamespace,
 				stub:    `{"metadata": {"annotations": {"kubernetes.io/service-account.name": "legacyclient"}, "generateName": "legacyclient"}, "type": "kubernetes.io/service-account-token"}`,
 			},
 		},
 	},
 	gvr("", "v1", "oauthaccesstokens"): {
-		stub:             `{"clientName": "legacyclient1", "metadata": {"name": "legacytokenneedstobelongenoughelseitwontwork"}, "userName": "legacyuser", "userUID": "cannot be empty"}`,
+		ns: legacyTestNamespace,
+		stub:             `{"clientName": "legacyclient1", "metadata": {"name": "legacytokenneedstobelongenoughelseitwontwork"}, "userName": "user", "userUID": "cannot be empty"}`,
 		expectedEtcdPath: "openshift.io/oauth/accesstokens/legacytokenneedstobelongenoughelseitwontwork",
 		prerequisites: []prerequisite{
 			{
 				gvrData: gvr("", "v1", "oauthclients"),
+				ns: legacyTestNamespace,
 				stub:    `{"metadata": {"name": "legacyclient1"}}`,
 			},
 		},
 	},
 	gvr("", "v1", "oauthauthorizetokens"): {
-		stub:             `{"clientName": "legacyclient0", "metadata": {"name": "legacytokenneedstobelongenoughelseitwontwork"}, "userName": "legacyuser", "userUID": "cannot be empty"}`,
+		ns: legacyTestNamespace,
+		stub:             `{"clientName": "legacyclient0", "metadata": {"name": "legacytokenneedstobelongenoughelseitwontwork"}, "userName": "user", "userUID": "cannot be empty"}`,
 		expectedEtcdPath: "openshift.io/oauth/authorizetokens/legacytokenneedstobelongenoughelseitwontwork",
 		prerequisites: []prerequisite{
 			{
 				gvrData: gvr("", "v1", "oauthclients"),
+				ns: legacyTestNamespace,
 				stub:    `{"metadata": {"name": "legacyclient0"}}`,
 			},
 		},
@@ -275,8 +289,9 @@ var etcdStorageData = map[unversioned.GroupVersionResource]struct {
 
 	// legacy github.com/openshift/origin/pkg/route/api/v1
 	gvr("", "v1", "routes"): {
-		stub:             `{"metadata": {"name": "legacyroute1"}, "spec": {"host": "hostname1", "to": {"name": "service1"}}}`,
-		expectedEtcdPath: "openshift.io/routes/etcdstoragepathtestnamespace/legacyroute1",
+		ns: legacyTestNamespace,
+		stub:             `{"metadata": {"name": "route1"}, "spec": {"host": "hostname1", "to": {"name": "service1"}}}`,
+		expectedEtcdPath: "openshift.io/routes/legacyetcdstoragepathtestnamespace/route1",
 	},
 	// --
 
@@ -317,8 +332,9 @@ var etcdStorageData = map[unversioned.GroupVersionResource]struct {
 		expectedEtcdPath: "openshift.io/registry/sdnnetworks/legacycn1",
 	},
 	gvr("", "v1", "egressnetworkpolicies"): {
-		stub:             `{"metadata": {"name": "legacyenp1"}, "spec": {"egress": [{"to": {"cidrSelector": "192.168.1.1/24"}, "type": "Allow"}]}}`,
-		expectedEtcdPath: "openshift.io/registry/egressnetworkpolicy/etcdstoragepathtestnamespace/legacyenp1",
+		ns: legacyTestNamespace,
+		stub:             `{"metadata": {"name": "enp1"}, "spec": {"egress": [{"to": {"cidrSelector": "192.168.1.1/24"}, "type": "Allow"}]}}`,
+		expectedEtcdPath: "openshift.io/registry/egressnetworkpolicy/legacyetcdstoragepathtestnamespace/enp1",
 	},
 	// --
 
@@ -332,8 +348,9 @@ var etcdStorageData = map[unversioned.GroupVersionResource]struct {
 
 	// legacy github.com/openshift/origin/pkg/template/api/v1
 	gvr("", "v1", "templates"): {
-		stub:             `{"message": "Jenkins template", "metadata": {"name": "legacytemplate1"}}`,
-		expectedEtcdPath: "openshift.io/templates/etcdstoragepathtestnamespace/legacytemplate1",
+		ns: legacyTestNamespace,
+		stub:             `{"message": "Jenkins template", "metadata": {"name": "template1"}}`,
+		expectedEtcdPath: "openshift.io/templates/legacyetcdstoragepathtestnamespace/template1",
 	},
 	// --
 
@@ -795,8 +812,9 @@ var kindWhiteList = map[unversioned.GroupKind]empty{
 	// --
 }
 
-// namespace used for all tests, do not change this
+// namespaces used for all tests, do not change this
 const testNamespace = "etcdstoragepathtestnamespace"
+const legacyTestNamespace = "legacyetcdstoragepathtestnamespace"
 
 // TestEtcdStoragePath tests to make sure that all objects are stored in an expected location in etcd.
 // It will start failing when a new type is added to ensure that all future types are added to this test.
@@ -837,6 +855,9 @@ func TestEtcdStoragePath(t *testing.T) {
 
 	if _, err := kubeClient.Core().Namespaces().Create(&kapi.Namespace{ObjectMeta: kapi.ObjectMeta{Name: testNamespace}}); err != nil {
 		t.Fatalf("error creating test namespace: %#v", err)
+	}
+	if _, err := kubeClient.Core().Namespaces().Create(&kapi.Namespace{ObjectMeta: kapi.ObjectMeta{Name: legacyTestNamespace}}); err != nil {
+		t.Fatalf("error creating legacy test namespace: %#v", err)
 	}
 
 	kindSeen := map[unversioned.GroupKind]empty{}
@@ -912,13 +933,17 @@ func TestEtcdStoragePath(t *testing.T) {
 				}
 			}()
 
-			if err := client.createPrerequisites(mapper, testNamespace, testData.prerequisites, all); err != nil {
+			if err := client.createPrerequisites(mapper, testData.prerequisites, all); err != nil {
 				t.Errorf("failed to create prerequisites for %s from %s: %#v", gvk, pkgPath, err)
 				return
 			}
 
 			if shouldCreate { // do not try to create items with no stub
-				if err := client.create(testData.stub, testNamespace, mapping, all); err != nil {
+				ns := testNamespace
+				if testData.ns != "" {
+					ns = testData.ns
+				}
+				if err := client.create(testData.stub, ns, mapping, all); err != nil {
 					t.Errorf("failed to create stub for %s from %s: %#v", gvk, pkgPath, err)
 					return
 				}
@@ -1003,6 +1028,7 @@ func (obj *metaObject) isEmpty() bool {
 type prerequisite struct {
 	gvrData unversioned.GroupVersionResource
 	stub    string
+	ns string
 }
 
 type empty struct{}
@@ -1125,7 +1151,7 @@ func (c *allClient) cleanup(all *[]cleanupData) error {
 	return nil
 }
 
-func (c *allClient) createPrerequisites(mapper meta.RESTMapper, ns string, prerequisites []prerequisite, all *[]cleanupData) error {
+func (c *allClient) createPrerequisites(mapper meta.RESTMapper, prerequisites []prerequisite, all *[]cleanupData) error {
 	for _, prerequisite := range prerequisites {
 		gvk, err := mapper.KindFor(prerequisite.gvrData)
 		if err != nil {
@@ -1134,6 +1160,10 @@ func (c *allClient) createPrerequisites(mapper meta.RESTMapper, ns string, prere
 		mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 		if err != nil {
 			return err
+		}
+		ns := testNamespace
+		if prerequisite.ns != "" {
+			ns = prerequisite.ns
 		}
 		if err := c.create(prerequisite.stub, ns, mapping, all); err != nil {
 			return err
