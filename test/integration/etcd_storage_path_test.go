@@ -305,11 +305,11 @@ var etcdStorageData = map[unversioned.GroupVersionResource]struct {
 
 	// legacy github.com/openshift/origin/pkg/sdn/api/v1
 	gvr("", "v1", "netnamespaces"): { // This will fail to delete because meta.name != NetName but it is keyed off NetName
-		stub:             `{"metadata": {"name": "legacynn1"}, "netid": 100, "netname": "legacynetworkname"}`,
+		stub:             `{"metadata": {"name": "legacynetworkname"}, "netid": 100, "netname": "legacynetworkname"}`,
 		expectedEtcdPath: "openshift.io/registry/sdnnetnamespaces/legacynetworkname",
 	},
 	gvr("", "v1", "hostsubnets"): { // This will fail to delete because meta.name != Host but it is keyed off Host
-		stub:             `{"host": "legacyhostname", "hostIP": "192.168.1.1", "metadata": {"name": "legacyhs1"}, "subnet": "192.168.1.1/24"}`,
+		stub:             `{"host": "legacyhostname", "hostIP": "192.168.1.1", "metadata": {"name": "legacyhostname"}, "subnet": "192.168.1.1/24"}`,
 		expectedEtcdPath: "openshift.io/registry/sdnsubnets/legacyhostname",
 	},
 	gvr("", "v1", "clusternetworks"): {
