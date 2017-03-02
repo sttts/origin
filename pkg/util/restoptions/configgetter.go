@@ -113,7 +113,7 @@ func (g *configRESTOptionsGetter) loadSettings() error {
 		{"authorization.openshift.io", "v1", "policies"},
 		{"build.openshift.io", "v1", "builds"},
 		{"build.openshift.io", "v1", "buildconfigs"},
-		{"deploy.openshift.io", "v1", "deploymentconfigs"},
+		{"apps.openshift.io", "v1", "deploymentconfigs"},
 		{"image.openshift.io", "v1", "imagestreams"},
 		{"image.openshift.io", "v1", "images"},
 		{"oauth.openshift.io", "v1", "oauthclientauthorizations"},
