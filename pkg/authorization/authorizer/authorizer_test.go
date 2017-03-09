@@ -6,10 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apiserver/pkg/authentication/serviceaccount"
+	"k8s.io/apiserver/pkg/authentication/user"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/auth/user"
-	"k8s.io/kubernetes/pkg/serviceaccount"
-	"k8s.io/kubernetes/pkg/util/sets"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	testpolicyregistry "github.com/openshift/origin/pkg/authorization/registry/test"
@@ -28,7 +30,7 @@ type authorizeTest struct {
 	bindings              []authorizationapi.PolicyBinding
 	bindingRetrievalError error
 
-	context    kapi.Context
+	context    apirequest.Context
 	attributes *DefaultAuthorizationAttributes
 
 	expectedAllowed bool
@@ -38,7 +40,7 @@ type authorizeTest struct {
 
 func TestAPIGroupDeny(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "adze"), &user.DefaultInfo{Name: "Anna"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "adze"), &user.DefaultInfo{Name: "Anna"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "list",
 			APIGroup: "group",
@@ -56,7 +58,7 @@ func TestAPIGroupDeny(t *testing.T) {
 
 func TestAPIGroupDefaultAllow(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "adze"), &user.DefaultInfo{Name: "Anna"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "adze"), &user.DefaultInfo{Name: "Anna"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "list",
 			Resource: "pods",
@@ -73,7 +75,7 @@ func TestAPIGroupDefaultAllow(t *testing.T) {
 
 func TestAPIGroupAllAllow(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "adze"), &user.DefaultInfo{Name: "Anna"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "adze"), &user.DefaultInfo{Name: "Anna"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "list",
 			APIGroup: "group",
@@ -87,7 +89,7 @@ func TestAPIGroupAllAllow(t *testing.T) {
 	test.clusterBindings = newDefaultClusterPolicyBindings()
 	test.bindings = append(test.bindings, newAdzeBindings()...)
 	test.policies[0].Roles["by-group"] = &authorizationapi.Role{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      "by-group",
 			Namespace: "adze",
 		},
@@ -98,7 +100,7 @@ func TestAPIGroupAllAllow(t *testing.T) {
 		},
 	}
 	test.bindings[0].RoleBindings["by-group"] = &authorizationapi.RoleBinding{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: "by-group",
 		},
 		RoleRef: kapi.ObjectReference{
@@ -112,7 +114,7 @@ func TestAPIGroupAllAllow(t *testing.T) {
 
 func TestAPIAllAllow(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "adze"), &user.DefaultInfo{Name: "Anna"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "adze"), &user.DefaultInfo{Name: "Anna"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "list",
 			APIGroup: "group",
@@ -126,7 +128,7 @@ func TestAPIAllAllow(t *testing.T) {
 	test.clusterBindings = newDefaultClusterPolicyBindings()
 	test.bindings = append(test.bindings, newAdzeBindings()...)
 	test.policies[0].Roles["by-group"] = &authorizationapi.Role{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      "by-group",
 			Namespace: "adze",
 		},
@@ -137,7 +139,7 @@ func TestAPIAllAllow(t *testing.T) {
 		},
 	}
 	test.bindings[0].RoleBindings["by-group"] = &authorizationapi.RoleBinding{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: "by-group",
 		},
 		RoleRef: kapi.ObjectReference{
@@ -151,7 +153,7 @@ func TestAPIAllAllow(t *testing.T) {
 
 func TestResourceNameDeny(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), kapi.NamespaceNone), &user.DefaultInfo{Name: "just-a-user"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), kapi.NamespaceNone), &user.DefaultInfo{Name: "just-a-user"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:         "get",
 			Resource:     "users",
@@ -167,7 +169,7 @@ func TestResourceNameDeny(t *testing.T) {
 
 func TestResourceNameAllow(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), kapi.NamespaceNone), &user.DefaultInfo{Name: "just-a-user"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), kapi.NamespaceNone), &user.DefaultInfo{Name: "just-a-user"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:         "get",
 			Resource:     "users",
@@ -183,7 +185,7 @@ func TestResourceNameAllow(t *testing.T) {
 
 func TestClusterBindingServiceAccountSubject(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), kapi.NamespaceNone), &user.DefaultInfo{Name: serviceaccount.MakeUsername("foo", "default")}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), kapi.NamespaceNone), &user.DefaultInfo{Name: serviceaccount.MakeUsername("foo", "default")}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:         "get",
 			Resource:     "users",
@@ -199,7 +201,7 @@ func TestClusterBindingServiceAccountSubject(t *testing.T) {
 
 func TestLocalBindingServiceAccountSubject(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "adze"), &user.DefaultInfo{Name: serviceaccount.MakeUsername("adze", "second")}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "adze"), &user.DefaultInfo{Name: serviceaccount.MakeUsername("adze", "second")}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "get",
 			Resource: "pods",
@@ -217,7 +219,7 @@ func TestLocalBindingServiceAccountSubject(t *testing.T) {
 
 func TestLocalBindingOtherServiceAccountSubject(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "adze"), &user.DefaultInfo{Name: serviceaccount.MakeUsername("other", "first")}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "adze"), &user.DefaultInfo{Name: serviceaccount.MakeUsername("other", "first")}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "get",
 			Resource: "pods",
@@ -235,7 +237,7 @@ func TestLocalBindingOtherServiceAccountSubject(t *testing.T) {
 
 func TestDeniedWithError(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "adze"), &user.DefaultInfo{Name: "Anna"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "adze"), &user.DefaultInfo{Name: "Anna"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "update",
 			Resource: "roles",
@@ -248,7 +250,7 @@ func TestDeniedWithError(t *testing.T) {
 	test.clusterBindings = newDefaultClusterPolicyBindings()
 	test.bindings = append(test.bindings, newAdzeBindings()...)
 	test.bindings[0].RoleBindings["missing"] = &authorizationapi.RoleBinding{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: "missing",
 		},
 		RoleRef: kapi.ObjectReference{
@@ -263,7 +265,7 @@ func TestDeniedWithError(t *testing.T) {
 
 func TestAllowedWithMissingBinding(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "adze"), &user.DefaultInfo{Name: "Anna"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "adze"), &user.DefaultInfo{Name: "Anna"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "update",
 			Resource: "roles",
@@ -276,7 +278,7 @@ func TestAllowedWithMissingBinding(t *testing.T) {
 	test.clusterBindings = newDefaultClusterPolicyBindings()
 	test.bindings = append(test.bindings, newAdzeBindings()...)
 	test.bindings[0].RoleBindings["missing"] = &authorizationapi.RoleBinding{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: "missing",
 		},
 		RoleRef: kapi.ObjectReference{
@@ -290,7 +292,7 @@ func TestAllowedWithMissingBinding(t *testing.T) {
 
 func TestHealthAllow(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.NewContext(), &user.DefaultInfo{Name: "no-one", Groups: []string{"system:unauthenticated"}}),
+		context: apirequest.WithUser(apirequest.NewContext(), &user.DefaultInfo{Name: "no-one", Groups: []string{"system:unauthenticated"}}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:           "get",
 			NonResourceURL: true,
@@ -307,7 +309,7 @@ func TestHealthAllow(t *testing.T) {
 
 func TestNonResourceAllow(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.NewContext(), &user.DefaultInfo{Name: "ClusterAdmin"}),
+		context: apirequest.WithUser(apirequest.NewContext(), &user.DefaultInfo{Name: "ClusterAdmin"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:           "get",
 			NonResourceURL: true,
@@ -324,7 +326,7 @@ func TestNonResourceAllow(t *testing.T) {
 
 func TestNonResourceDeny(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.NewContext(), &user.DefaultInfo{Name: "no-one"}),
+		context: apirequest.WithUser(apirequest.NewContext(), &user.DefaultInfo{Name: "no-one"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:           "get",
 			NonResourceURL: true,
@@ -341,7 +343,7 @@ func TestNonResourceDeny(t *testing.T) {
 
 func TestHealthDeny(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.NewContext(), &user.DefaultInfo{Name: "no-one"}),
+		context: apirequest.WithUser(apirequest.NewContext(), &user.DefaultInfo{Name: "no-one"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:           "get",
 			NonResourceURL: true,
@@ -358,7 +360,7 @@ func TestHealthDeny(t *testing.T) {
 
 func TestAdminEditingGlobalDeploymentConfig(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), kapi.NamespaceNone), &user.DefaultInfo{Name: "ClusterAdmin"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), kapi.NamespaceNone), &user.DefaultInfo{Name: "ClusterAdmin"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "update",
 			Resource: "deploymentConfigs",
@@ -374,7 +376,7 @@ func TestAdminEditingGlobalDeploymentConfig(t *testing.T) {
 
 func TestDisallowedViewingGlobalPods(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), kapi.NamespaceNone), &user.DefaultInfo{Name: "SomeYahoo"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), kapi.NamespaceNone), &user.DefaultInfo{Name: "SomeYahoo"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "get",
 			Resource: "pods",
@@ -390,7 +392,7 @@ func TestDisallowedViewingGlobalPods(t *testing.T) {
 
 func TestProjectAdminEditPolicy(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "adze"), &user.DefaultInfo{Name: "Anna"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "adze"), &user.DefaultInfo{Name: "Anna"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "update",
 			Resource: "roles",
@@ -408,7 +410,7 @@ func TestProjectAdminEditPolicy(t *testing.T) {
 
 func TestGlobalPolicyOutranksLocalPolicy(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "adze"), &user.DefaultInfo{Name: "ClusterAdmin"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "adze"), &user.DefaultInfo{Name: "ClusterAdmin"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "update",
 			Resource: "roles",
@@ -426,7 +428,7 @@ func TestGlobalPolicyOutranksLocalPolicy(t *testing.T) {
 
 func TestResourceRestrictionsWork(t *testing.T) {
 	test1 := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "adze"), &user.DefaultInfo{Name: "Rachel"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "adze"), &user.DefaultInfo{Name: "Rachel"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "get",
 			Resource: "buildConfigs",
@@ -441,7 +443,7 @@ func TestResourceRestrictionsWork(t *testing.T) {
 	test1.test(t)
 
 	test2 := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "adze"), &user.DefaultInfo{Name: "Rachel"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "adze"), &user.DefaultInfo{Name: "Rachel"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "get",
 			Resource: "pods",
@@ -458,7 +460,7 @@ func TestResourceRestrictionsWork(t *testing.T) {
 
 func TestResourceRestrictionsWithWeirdWork(t *testing.T) {
 	test1 := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "adze"), &user.DefaultInfo{Name: "Rachel"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "adze"), &user.DefaultInfo{Name: "Rachel"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "get",
 			Resource: "BUILDCONFIGS",
@@ -473,7 +475,7 @@ func TestResourceRestrictionsWithWeirdWork(t *testing.T) {
 	test1.test(t)
 
 	test2 := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "adze"), &user.DefaultInfo{Name: "Rachel"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "adze"), &user.DefaultInfo{Name: "Rachel"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "get",
 			Resource: "buildconfigs",
@@ -490,7 +492,7 @@ func TestResourceRestrictionsWithWeirdWork(t *testing.T) {
 
 func TestLocalRightsDoNotGrantGlobalRights(t *testing.T) {
 	test := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "backsaw"), &user.DefaultInfo{Name: "Rachel"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "backsaw"), &user.DefaultInfo{Name: "Rachel"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "get",
 			Resource: "buildConfigs",
@@ -508,7 +510,7 @@ func TestLocalRightsDoNotGrantGlobalRights(t *testing.T) {
 
 func TestVerbRestrictionsWork(t *testing.T) {
 	test1 := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "adze"), &user.DefaultInfo{Name: "Valerie"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "adze"), &user.DefaultInfo{Name: "Valerie"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "get",
 			Resource: "buildConfigs",
@@ -523,7 +525,7 @@ func TestVerbRestrictionsWork(t *testing.T) {
 	test1.test(t)
 
 	test2 := &authorizeTest{
-		context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "adze"), &user.DefaultInfo{Name: "Valerie"}),
+		context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "adze"), &user.DefaultInfo{Name: "Valerie"}),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "create",
 			Resource: "buildConfigs",
@@ -603,12 +605,12 @@ func newDefaultClusterPolicies() []authorizationapi.ClusterPolicy {
 }
 func newDefaultClusterPolicyBindings() []authorizationapi.ClusterPolicyBinding {
 	policyBinding := authorizationapi.ClusterPolicyBinding{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: authorizationapi.ClusterPolicyBindingName,
 		},
 		RoleBindings: map[string]*authorizationapi.ClusterRoleBinding{
 			"extra-cluster-admins": {
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "cluster-admins",
 				},
 				RoleRef: kapi.ObjectReference{
@@ -617,7 +619,7 @@ func newDefaultClusterPolicyBindings() []authorizationapi.ClusterPolicyBinding {
 				Subjects: []kapi.ObjectReference{{Kind: authorizationapi.UserKind, Name: "ClusterAdmin"}, {Kind: authorizationapi.GroupKind, Name: "RootUsers"}, {Name: "default", Namespace: "foo", Kind: authorizationapi.ServiceAccountKind}},
 			},
 			"user-only": {
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "user-only",
 				},
 				RoleRef: kapi.ObjectReference{
@@ -636,13 +638,13 @@ func newDefaultClusterPolicyBindings() []authorizationapi.ClusterPolicyBinding {
 func newAdzePolicies() []authorizationapi.Policy {
 	return []authorizationapi.Policy{
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name:      authorizationapi.PolicyName,
 				Namespace: "adze",
 			},
 			Roles: map[string]*authorizationapi.Role{
 				"restrictedViewer": {
-					ObjectMeta: kapi.ObjectMeta{
+					ObjectMeta: metav1.ObjectMeta{
 						Name:      "admin",
 						Namespace: "adze",
 					},
@@ -659,13 +661,13 @@ func newAdzePolicies() []authorizationapi.Policy {
 func newAdzeBindings() []authorizationapi.PolicyBinding {
 	return []authorizationapi.PolicyBinding{
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name:      authorizationapi.ClusterPolicyBindingName,
 				Namespace: "adze",
 			},
 			RoleBindings: map[string]*authorizationapi.RoleBinding{
 				"projectAdmins": {
-					ObjectMeta: kapi.ObjectMeta{
+					ObjectMeta: metav1.ObjectMeta{
 						Name:      "projectAdmins",
 						Namespace: "adze",
 					},
@@ -675,7 +677,7 @@ func newAdzeBindings() []authorizationapi.PolicyBinding {
 					Subjects: []kapi.ObjectReference{{Kind: authorizationapi.UserKind, Name: "Anna"}},
 				},
 				"viewers": {
-					ObjectMeta: kapi.ObjectMeta{
+					ObjectMeta: metav1.ObjectMeta{
 						Name:      "viewers",
 						Namespace: "adze",
 					},
@@ -689,7 +691,7 @@ func newAdzeBindings() []authorizationapi.PolicyBinding {
 					},
 				},
 				"editors": {
-					ObjectMeta: kapi.ObjectMeta{
+					ObjectMeta: metav1.ObjectMeta{
 						Name:      "editors",
 						Namespace: "adze",
 					},
@@ -701,13 +703,13 @@ func newAdzeBindings() []authorizationapi.PolicyBinding {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name:      authorizationapi.GetPolicyBindingName("adze"),
 				Namespace: "adze",
 			},
 			RoleBindings: map[string]*authorizationapi.RoleBinding{
 				"restrictedViewers": {
-					ObjectMeta: kapi.ObjectMeta{
+					ObjectMeta: metav1.ObjectMeta{
 						Name:      "restrictedViewers",
 						Namespace: "adze",
 					},

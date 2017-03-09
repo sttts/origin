@@ -5,10 +5,10 @@ import (
 	"reflect"
 	"testing"
 
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/auth/user"
-	"k8s.io/kubernetes/pkg/util/diff"
-	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/diff"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apiserver/pkg/authentication/user"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	"github.com/openshift/origin/pkg/authorization/authorizer"
@@ -33,8 +33,8 @@ type testAuthorizer struct {
 	actualUserInfo   user.Info
 }
 
-func (a *testAuthorizer) Authorize(ctx kapi.Context, passedAttributes authorizer.Action) (allowed bool, reason string, err error) {
-	a.actualUserInfo, _ = kapi.UserFrom(ctx)
+func (a *testAuthorizer) Authorize(ctx apirequest.Context, passedAttributes authorizer.Action) (allowed bool, reason string, err error) {
+	a.actualUserInfo, _ = apirequest.UserFrom(ctx)
 
 	// allow the initial check for "can I run this SAR at all"
 	if passedAttributes.GetResource() == "localsubjectaccessreviews" {
@@ -53,7 +53,7 @@ func (a *testAuthorizer) Authorize(ctx kapi.Context, passedAttributes authorizer
 	}
 	return a.allowed, a.reason, errors.New(a.err)
 }
-func (a *testAuthorizer) GetAllowedSubjects(ctx kapi.Context, passedAttributes authorizer.Action) (sets.String, sets.String, error) {
+func (a *testAuthorizer) GetAllowedSubjects(ctx apirequest.Context, passedAttributes authorizer.Action) (sets.String, sets.String, error) {
 	return sets.String{}, sets.String{}, nil
 }
 
@@ -92,7 +92,7 @@ func TestConflictingNamespace(t *testing.T) {
 	}
 
 	storage := NewREST(subjectaccessreview.NewRegistry(subjectaccessreview.NewREST(authorizer)))
-	ctx := kapi.WithNamespace(kapi.NewContext(), "bar")
+	ctx := apirequest.WithNamespace(apirequest.NewContext(), "bar")
 	_, err := storage.Create(ctx, reviewRequest)
 	if err == nil {
 		t.Fatalf("unexpected non-error: %v", err)
@@ -273,9 +273,9 @@ func (r *subjectAccessTest) runTest(t *testing.T) {
 
 	expectedAttributes := authorizer.ToDefaultAuthorizationAttributes(r.reviewRequest.Action)
 
-	ctx := kapi.WithNamespace(kapi.NewContext(), r.reviewRequest.Action.Namespace)
+	ctx := apirequest.WithNamespace(apirequest.NewContext(), r.reviewRequest.Action.Namespace)
 	if r.requestingUser != nil {
-		ctx = kapi.WithUser(ctx, r.requestingUser)
+		ctx = apirequest.WithUser(ctx, r.requestingUser)
 	}
 
 	obj, err := storage.Create(ctx, r.reviewRequest)

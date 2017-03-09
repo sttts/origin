@@ -1,8 +1,9 @@
 package admission
 
 import (
-	"k8s.io/kubernetes/pkg/admission"
-	"k8s.io/kubernetes/pkg/client/restclient"
+	"k8s.io/apiserver/pkg/admission"
+	restclient "k8s.io/client-go/rest"
+	kubeapiserveradmission "k8s.io/kubernetes/pkg/kubeapiserver/admission"
 	"k8s.io/kubernetes/pkg/quota"
 
 	"github.com/openshift/origin/pkg/authorization/authorizer"
@@ -31,49 +32,47 @@ type PluginInitializer struct {
 
 // Initialize will check the initialization interfaces implemented by each plugin
 // and provide the appropriate initialization data
-func (i *PluginInitializer) Initialize(plugins []admission.Interface) {
-	for _, plugin := range plugins {
-		if wantsOpenshiftClient, ok := plugin.(WantsOpenshiftClient); ok {
-			wantsOpenshiftClient.SetOpenshiftClient(i.OpenshiftClient)
+func (i *PluginInitializer) Initialize(plugin admission.Interface) {
+	if wantsOpenshiftClient, ok := plugin.(WantsOpenshiftClient); ok {
+		wantsOpenshiftClient.SetOpenshiftClient(i.OpenshiftClient)
+	}
+	if wantsProjectCache, ok := plugin.(WantsProjectCache); ok {
+		wantsProjectCache.SetProjectCache(i.ProjectCache)
+	}
+	if wantsOriginQuotaRegistry, ok := plugin.(WantsOriginQuotaRegistry); ok {
+		wantsOriginQuotaRegistry.SetOriginQuotaRegistry(i.OriginQuotaRegistry)
+	}
+	if wantsAuthorizer, ok := plugin.(WantsAuthorizer); ok {
+		wantsAuthorizer.SetAuthorizer(i.Authorizer)
+	}
+	if kubeWantsAuthorizer, ok := plugin.(kubeapiserveradmission.WantsAuthorizer); ok {
+		kubeAuthorizer, err := adapter.NewAuthorizer(i.Authorizer)
+		// this shouldn't happen
+		if err != nil {
+			panic(err)
 		}
-		if wantsProjectCache, ok := plugin.(WantsProjectCache); ok {
-			wantsProjectCache.SetProjectCache(i.ProjectCache)
-		}
-		if wantsOriginQuotaRegistry, ok := plugin.(WantsOriginQuotaRegistry); ok {
-			wantsOriginQuotaRegistry.SetOriginQuotaRegistry(i.OriginQuotaRegistry)
-		}
-		if wantsAuthorizer, ok := plugin.(WantsAuthorizer); ok {
-			wantsAuthorizer.SetAuthorizer(i.Authorizer)
-		}
-		if kubeWantsAuthorizer, ok := plugin.(admission.WantsAuthorizer); ok {
-			kubeAuthorizer, err := adapter.NewAuthorizer(i.Authorizer)
-			// this shouldn't happen
-			if err != nil {
-				panic(err)
-			}
-			kubeWantsAuthorizer.SetAuthorizer(kubeAuthorizer)
-		}
-		if wantsJenkinsPipelineConfig, ok := plugin.(WantsJenkinsPipelineConfig); ok {
-			wantsJenkinsPipelineConfig.SetJenkinsPipelineConfig(i.JenkinsPipelineConfig)
-		}
-		if wantsRESTClientConfig, ok := plugin.(WantsRESTClientConfig); ok {
-			wantsRESTClientConfig.SetRESTClientConfig(i.RESTClientConfig)
-		}
-		if wantsInformers, ok := plugin.(WantsInformers); ok {
-			wantsInformers.SetInformers(i.Informers)
-		}
-		if wantsInformerFactory, ok := plugin.(admission.WantsInformerFactory); ok {
-			wantsInformerFactory.SetInformerFactory(i.Informers.KubernetesInformers())
-		}
-		if wantsClusterQuotaMapper, ok := plugin.(WantsClusterQuotaMapper); ok {
-			wantsClusterQuotaMapper.SetClusterQuotaMapper(i.ClusterQuotaMapper)
-		}
-		if wantsDefaultRegistryFunc, ok := plugin.(WantsDefaultRegistryFunc); ok {
-			wantsDefaultRegistryFunc.SetDefaultRegistryFunc(i.DefaultRegistryFn)
-		}
-		if wantsGroupCache, ok := plugin.(WantsGroupCache); ok {
-			wantsGroupCache.SetGroupCache(i.GroupCache)
-		}
+		kubeWantsAuthorizer.SetAuthorizer(kubeAuthorizer)
+	}
+	if wantsJenkinsPipelineConfig, ok := plugin.(WantsJenkinsPipelineConfig); ok {
+		wantsJenkinsPipelineConfig.SetJenkinsPipelineConfig(i.JenkinsPipelineConfig)
+	}
+	if wantsRESTClientConfig, ok := plugin.(WantsRESTClientConfig); ok {
+		wantsRESTClientConfig.SetRESTClientConfig(i.RESTClientConfig)
+	}
+	if wantsInformers, ok := plugin.(WantsInformers); ok {
+		wantsInformers.SetInformers(i.Informers)
+	}
+	if wantsInformerFactory, ok := plugin.(kubeapiserveradmission.WantsInternalKubeInformerFactory); ok {
+		wantsInformerFactory.SetInternalKubeInformerFactory(i.Informers.InternalKubernetesInformers())
+	}
+	if wantsClusterQuotaMapper, ok := plugin.(WantsClusterQuotaMapper); ok {
+		wantsClusterQuotaMapper.SetClusterQuotaMapper(i.ClusterQuotaMapper)
+	}
+	if wantsDefaultRegistryFunc, ok := plugin.(WantsDefaultRegistryFunc); ok {
+		wantsDefaultRegistryFunc.SetDefaultRegistryFunc(i.DefaultRegistryFn)
+	}
+	if wantsGroupCache, ok := plugin.(WantsGroupCache); ok {
+		wantsGroupCache.SetGroupCache(i.GroupCache)
 	}
 }
 

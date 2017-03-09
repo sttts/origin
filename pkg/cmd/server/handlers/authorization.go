@@ -9,11 +9,12 @@ import (
 
 	restful "github.com/emicklei/go-restful"
 
+	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kapierrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/sets"
 
 	"github.com/openshift/origin/pkg/authorization/authorizer"
 )
@@ -29,18 +30,18 @@ func NewBypassAuthorizer(auth authorizer.Authorizer, paths ...string) authorizer
 	return bypassAuthorizer{paths: sets.NewString(paths...), authorizer: auth}
 }
 
-func (a bypassAuthorizer) Authorize(ctx kapi.Context, attributes authorizer.Action) (allowed bool, reason string, err error) {
+func (a bypassAuthorizer) Authorize(ctx apirequest.Context, attributes authorizer.Action) (allowed bool, reason string, err error) {
 	if attributes.IsNonResourceURL() && a.paths.Has(attributes.GetURL()) {
 		return true, "always allowed", nil
 	}
 	return a.authorizer.Authorize(ctx, attributes)
 }
-func (a bypassAuthorizer) GetAllowedSubjects(ctx kapi.Context, attributes authorizer.Action) (sets.String, sets.String, error) {
+func (a bypassAuthorizer) GetAllowedSubjects(ctx apirequest.Context, attributes authorizer.Action) (sets.String, sets.String, error) {
 	return a.authorizer.GetAllowedSubjects(ctx, attributes)
 }
 
 // AuthorizationFilter imposes normal authorization rules
-func AuthorizationFilter(handler http.Handler, authorizer authorizer.Authorizer, authorizationAttributeBuilder authorizer.AuthorizationAttributeBuilder, contextMapper kapi.RequestContextMapper) http.Handler {
+func AuthorizationFilter(handler http.Handler, authorizer authorizer.Authorizer, authorizationAttributeBuilder authorizer.AuthorizationAttributeBuilder, contextMapper apirequest.RequestContextMapper) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		attributes, err := authorizationAttributeBuilder.GetAttributes(req)
 		if err != nil {
@@ -96,7 +97,7 @@ func Forbidden(reason string, attributes authorizer.Action, w http.ResponseWrite
 	// We don't have direct access to kind or name (not that those apply either in the general case)
 	// We create a NewForbidden to stay close the API, but then we override the message to get a serialization
 	// that makes sense when a human reads it.
-	forbiddenError := kapierrors.NewForbidden(unversioned.GroupResource{Group: group, Resource: resource}, name, errors.New("") /*discarded*/)
+	forbiddenError := kapierrors.NewForbidden(schema.GroupResource{Group: group, Resource: resource}, name, errors.New("") /*discarded*/)
 	forbiddenError.ErrStatus.Message = reason
 
 	formatted := &bytes.Buffer{}

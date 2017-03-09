@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/auth/user"
-	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apiserver/pkg/authentication/user"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 
 	"github.com/openshift/origin/pkg/authorization/authorizer"
 )
@@ -20,24 +20,24 @@ func TestAuthorizer(t *testing.T) {
 
 func TestCacheKey(t *testing.T) {
 	tests := map[string]struct {
-		Context kapi.Context
+		Context apirequest.Context
 		Attrs   authorizer.Action
 
 		ExpectedKey string
 		ExpectedErr bool
 	}{
 		"uncacheable request attributes": {
-			Context:     kapi.NewContext(),
+			Context:     apirequest.NewContext(),
 			Attrs:       &authorizer.DefaultAuthorizationAttributes{RequestAttributes: true},
 			ExpectedErr: true,
 		},
 		"empty": {
-			Context:     kapi.NewContext(),
+			Context:     apirequest.NewContext(),
 			Attrs:       &authorizer.DefaultAuthorizationAttributes{},
 			ExpectedKey: `{"apiGroup":"","apiVersion":"","nonResourceURL":false,"resource":"","resourceName":"","url":"","verb":""}`,
 		},
 		"full": {
-			Context: kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), "myns"), &user.DefaultInfo{Name: "me", Groups: []string{"group1", "group2"}}),
+			Context: apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), "myns"), &user.DefaultInfo{Name: "me", Groups: []string{"group1", "group2"}}),
 			Attrs: &authorizer.DefaultAuthorizationAttributes{
 				Verb:              "v",
 				APIVersion:        "av",
@@ -64,7 +64,7 @@ func TestCacheKey(t *testing.T) {
 }
 
 func TestCacheKeyFields(t *testing.T) {
-	keyJSON, err := cacheKey(kapi.NewContext(), &authorizer.DefaultAuthorizationAttributes{})
+	keyJSON, err := cacheKey(apirequest.NewContext(), &authorizer.DefaultAuthorizationAttributes{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

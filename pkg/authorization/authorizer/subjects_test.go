@@ -3,8 +3,8 @@ package authorizer
 import (
 	"testing"
 
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/sets"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	testpolicyregistry "github.com/openshift/origin/pkg/authorization/registry/test"
@@ -19,7 +19,7 @@ type subjectsTest struct {
 	policyRetrievalError  error
 	bindingRetrievalError error
 
-	context    kapi.Context
+	context    apirequest.Context
 	attributes *DefaultAuthorizationAttributes
 
 	expectedUsers  sets.String
@@ -29,7 +29,7 @@ type subjectsTest struct {
 
 func TestSubjects(t *testing.T) {
 	test := &subjectsTest{
-		context: kapi.WithNamespace(kapi.NewContext(), "adze"),
+		context: apirequest.WithNamespace(apirequest.NewContext(), "adze"),
 		attributes: &DefaultAuthorizationAttributes{
 			Verb:     "get",
 			Resource: "pods",

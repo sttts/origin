@@ -3,6 +3,8 @@ package bootstrappolicy
 import (
 	"fmt"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/apis/apps"
 	kauthenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
@@ -13,7 +15,6 @@ import (
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/apis/policy"
 	"k8s.io/kubernetes/pkg/apis/storage"
-	"k8s.io/kubernetes/pkg/util/sets"
 
 	oapi "github.com/openshift/origin/pkg/api"
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
@@ -82,7 +83,7 @@ var (
 func GetBootstrapOpenshiftRoles(openshiftNamespace string) []authorizationapi.Role {
 	roles := []authorizationapi.Role{
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name:      OpenshiftSharedResourceViewRoleName,
 				Namespace: openshiftNamespace,
 			},
@@ -114,7 +115,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 
 	roles := []authorizationapi.ClusterRole{
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: ClusterAdminRoleName,
 				Annotations: map[string]string{
 					oapi.OpenShiftDescription: "A super-user that can perform any action in the cluster. When granted to a user within a project, they have full control over quota and membership and can perform every action on every resource in the project.",
@@ -130,7 +131,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: SudoerRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -141,7 +142,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: ClusterReaderRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -223,7 +224,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: ClusterDebuggerRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -237,7 +238,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: BuildStrategyDockerRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -248,7 +249,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: BuildStrategyCustomRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -259,7 +260,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: BuildStrategySourceRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -270,7 +271,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: BuildStrategyJenkinsPipelineRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -281,7 +282,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: StorageAdminRoleName,
 			},
 			Rules: []authorizationapi.PolicyRule{
@@ -291,7 +292,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: AdminRoleName,
 				Annotations: map[string]string{
 					oapi.OpenShiftDescription: "A user that has edit rights within the project and can change the project's membership.",
@@ -356,7 +357,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: EditRoleName,
 				Annotations: map[string]string{
 					oapi.OpenShiftDescription: "A user that can create and edit most objects in a project, but can not update the project's membership.",
@@ -411,7 +412,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: ViewRoleName,
 				Annotations: map[string]string{
 					oapi.OpenShiftDescription: "A user who can view but not edit any resources within the project. They can not view secrets or membership.",
@@ -463,7 +464,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: BasicUserRoleName,
 				Annotations: map[string]string{
 					oapi.OpenShiftDescription: "A user that can get basic information about projects.",
@@ -481,7 +482,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: SelfAccessReviewerRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -494,7 +495,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: SelfProvisionerRoleName,
 				Annotations: map[string]string{
 					oapi.OpenShiftDescription: "A user that can request projects.",
@@ -506,7 +507,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: StatusCheckerRoleName,
 				Annotations: map[string]string{
 					oapi.OpenShiftDescription: "A user that can get basic cluster status information.",
@@ -525,7 +526,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: ImageAuditorRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -536,7 +537,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: ImagePullerRoleName,
 				Annotations: map[string]string{
 					oapi.OpenShiftDescription: "Grants the right to pull images from within a project.",
@@ -552,7 +553,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			// if we found another permission needed by them, we'd add it there so the intent is different if you used the ImageBuilderRole
 			// you could end up accidentally granting more permissions than you intended.  This is intended to only grant enough powers to
 			// push an image to our registry
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: ImagePusherRoleName,
 				Annotations: map[string]string{
 					oapi.OpenShiftDescription: "Grants the right to push and pull images from within a project.",
@@ -564,7 +565,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: ImageBuilderRoleName,
 				Annotations: map[string]string{
 					oapi.OpenShiftDescription: "Grants the right to build, push and pull images from within a project.  Used primarily with service accounts for builds.",
@@ -580,7 +581,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: ImagePrunerRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -598,7 +599,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: ImageSignerRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -610,7 +611,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: DeployerRoleName,
 				Annotations: map[string]string{
 					oapi.OpenShiftDescription: "Grants the right to deploy within a project.  Used primarily with service accounts for automated deployments.",
@@ -626,7 +627,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: MasterRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -641,7 +642,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: OAuthTokenDeleterRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -652,7 +653,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: RouterRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -667,7 +668,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: RegistryRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -683,7 +684,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: NodeProxierRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -695,7 +696,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: NodeAdminRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -710,7 +711,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: NodeReaderRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -728,7 +729,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: NodeRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -777,7 +778,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 		},
 
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: SDNReaderRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -792,7 +793,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 		},
 
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: SDNManagerRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -806,7 +807,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 		},
 
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: WebHooksRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -818,7 +819,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 		},
 
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: DiscoveryRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -830,7 +831,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 		},
 
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: RegistryAdminRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -854,7 +855,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: RegistryEditorRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -871,7 +872,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: RegistryViewerRoleName,
 				Annotations: map[string]string{
 					roleSystemOnly: roleIsSystemOnly,
@@ -933,7 +934,7 @@ func GetBootstrapClusterRoles() []authorizationapi.ClusterRole {
 func GetBootstrapOpenshiftRoleBindings(openshiftNamespace string) []authorizationapi.RoleBinding {
 	return []authorizationapi.RoleBinding{
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name:      OpenshiftSharedResourceViewRoleBindingName,
 				Namespace: openshiftNamespace,
 			},
@@ -949,7 +950,7 @@ func GetBootstrapOpenshiftRoleBindings(openshiftNamespace string) []authorizatio
 func GetBootstrapClusterRoleBindings() []authorizationapi.ClusterRoleBinding {
 	return []authorizationapi.ClusterRoleBinding{
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: MasterRoleBindingName,
 			},
 			RoleRef: kapi.ObjectReference{
@@ -958,7 +959,7 @@ func GetBootstrapClusterRoleBindings() []authorizationapi.ClusterRoleBinding {
 			Subjects: []kapi.ObjectReference{{Kind: authorizationapi.SystemGroupKind, Name: MastersGroup}},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: NodeAdminRoleBindingName,
 			},
 			RoleRef: kapi.ObjectReference{
@@ -971,7 +972,7 @@ func GetBootstrapClusterRoleBindings() []authorizationapi.ClusterRoleBinding {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: ClusterAdminRoleBindingName,
 			},
 			RoleRef: kapi.ObjectReference{
@@ -984,7 +985,7 @@ func GetBootstrapClusterRoleBindings() []authorizationapi.ClusterRoleBinding {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: ClusterReaderRoleBindingName,
 			},
 			RoleRef: kapi.ObjectReference{
@@ -993,7 +994,7 @@ func GetBootstrapClusterRoleBindings() []authorizationapi.ClusterRoleBinding {
 			Subjects: []kapi.ObjectReference{{Kind: authorizationapi.SystemGroupKind, Name: ClusterReaderGroup}},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: BasicUserRoleBindingName,
 			},
 			RoleRef: kapi.ObjectReference{
@@ -1002,7 +1003,7 @@ func GetBootstrapClusterRoleBindings() []authorizationapi.ClusterRoleBinding {
 			Subjects: []kapi.ObjectReference{{Kind: authorizationapi.SystemGroupKind, Name: AuthenticatedGroup}},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: SelfAccessReviewerRoleBindingName,
 			},
 			RoleRef: kapi.ObjectReference{
@@ -1014,7 +1015,7 @@ func GetBootstrapClusterRoleBindings() []authorizationapi.ClusterRoleBinding {
 			},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: SelfProvisionerRoleBindingName,
 			},
 			RoleRef: kapi.ObjectReference{
@@ -1023,7 +1024,7 @@ func GetBootstrapClusterRoleBindings() []authorizationapi.ClusterRoleBinding {
 			Subjects: []kapi.ObjectReference{{Kind: authorizationapi.SystemGroupKind, Name: AuthenticatedOAuthGroup}},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: OAuthTokenDeleterRoleBindingName,
 			},
 			RoleRef: kapi.ObjectReference{
@@ -1032,7 +1033,7 @@ func GetBootstrapClusterRoleBindings() []authorizationapi.ClusterRoleBinding {
 			Subjects: []kapi.ObjectReference{{Kind: authorizationapi.SystemGroupKind, Name: AuthenticatedGroup}, {Kind: authorizationapi.SystemGroupKind, Name: UnauthenticatedGroup}},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: StatusCheckerRoleBindingName,
 			},
 			RoleRef: kapi.ObjectReference{
@@ -1041,7 +1042,7 @@ func GetBootstrapClusterRoleBindings() []authorizationapi.ClusterRoleBinding {
 			Subjects: []kapi.ObjectReference{{Kind: authorizationapi.SystemGroupKind, Name: AuthenticatedGroup}, {Kind: authorizationapi.SystemGroupKind, Name: UnauthenticatedGroup}},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: NodeRoleBindingName,
 			},
 			RoleRef: kapi.ObjectReference{
@@ -1050,7 +1051,7 @@ func GetBootstrapClusterRoleBindings() []authorizationapi.ClusterRoleBinding {
 			Subjects: []kapi.ObjectReference{{Kind: authorizationapi.SystemGroupKind, Name: NodesGroup}},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: NodeProxierRoleBindingName,
 			},
 			RoleRef: kapi.ObjectReference{
@@ -1060,7 +1061,7 @@ func GetBootstrapClusterRoleBindings() []authorizationapi.ClusterRoleBinding {
 			Subjects: []kapi.ObjectReference{{Kind: authorizationapi.SystemGroupKind, Name: NodesGroup}},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: SDNReaderRoleBindingName,
 			},
 			RoleRef: kapi.ObjectReference{
@@ -1070,7 +1071,7 @@ func GetBootstrapClusterRoleBindings() []authorizationapi.ClusterRoleBinding {
 			Subjects: []kapi.ObjectReference{{Kind: authorizationapi.SystemGroupKind, Name: NodesGroup}},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: WebHooksRoleBindingName,
 			},
 			RoleRef: kapi.ObjectReference{
@@ -1079,7 +1080,7 @@ func GetBootstrapClusterRoleBindings() []authorizationapi.ClusterRoleBinding {
 			Subjects: []kapi.ObjectReference{{Kind: authorizationapi.SystemGroupKind, Name: AuthenticatedGroup}, {Kind: authorizationapi.SystemGroupKind, Name: UnauthenticatedGroup}},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: DiscoveryRoleBindingName,
 			},
 			RoleRef: kapi.ObjectReference{
@@ -1095,17 +1096,17 @@ func GetBootstrapClusterRoleBindings() []authorizationapi.ClusterRoleBinding {
 		// Cluster admins can remove these role bindings, and the reconcile-cluster-role-bindings command
 		// run during an upgrade won't re-add the "system:authenticated" group
 		{
-			ObjectMeta: kapi.ObjectMeta{Name: BuildStrategyDockerRoleBindingName},
+			ObjectMeta: metav1.ObjectMeta{Name: BuildStrategyDockerRoleBindingName},
 			RoleRef:    kapi.ObjectReference{Name: BuildStrategyDockerRoleName},
 			Subjects:   []kapi.ObjectReference{{Kind: authorizationapi.SystemGroupKind, Name: AuthenticatedGroup}},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{Name: BuildStrategySourceRoleBindingName},
+			ObjectMeta: metav1.ObjectMeta{Name: BuildStrategySourceRoleBindingName},
 			RoleRef:    kapi.ObjectReference{Name: BuildStrategySourceRoleName},
 			Subjects:   []kapi.ObjectReference{{Kind: authorizationapi.SystemGroupKind, Name: AuthenticatedGroup}},
 		},
 		{
-			ObjectMeta: kapi.ObjectMeta{Name: BuildStrategyJenkinsPipelineRoleBindingName},
+			ObjectMeta: metav1.ObjectMeta{Name: BuildStrategyJenkinsPipelineRoleBindingName},
 			RoleRef:    kapi.ObjectReference{Name: BuildStrategyJenkinsPipelineRoleName},
 			Subjects:   []kapi.ObjectReference{{Kind: authorizationapi.SystemGroupKind, Name: AuthenticatedGroup}},
 		},

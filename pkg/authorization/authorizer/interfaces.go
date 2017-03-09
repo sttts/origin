@@ -3,15 +3,14 @@ package authorizer
 import (
 	"net/http"
 
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/apiserver/request"
-	"k8s.io/kubernetes/pkg/auth/user"
-	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apiserver/pkg/authentication/user"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 )
 
 type Authorizer interface {
-	Authorize(ctx kapi.Context, a Action) (allowed bool, reason string, err error)
-	GetAllowedSubjects(ctx kapi.Context, attributes Action) (sets.String, sets.String, error)
+	Authorize(ctx apirequest.Context, a Action) (allowed bool, reason string, err error)
+	GetAllowedSubjects(ctx apirequest.Context, attributes Action) (sets.String, sets.String, error)
 }
 
 type AuthorizationAttributeBuilder interface {
@@ -19,7 +18,7 @@ type AuthorizationAttributeBuilder interface {
 }
 
 type RequestInfoFactory interface {
-	NewRequestInfo(req *http.Request) (*request.RequestInfo, error)
+	NewRequestInfo(req *http.Request) (*apirequest.RequestInfo, error)
 }
 
 type Action interface {

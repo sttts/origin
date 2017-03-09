@@ -5,8 +5,9 @@ import (
 	"net/http"
 	"strings"
 
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 
 	buildapi "github.com/openshift/origin/pkg/build/api"
 	"github.com/openshift/origin/pkg/build/client"
@@ -31,7 +32,7 @@ type WebHook struct {
 }
 
 // ServeHTTP implements rest.HookHandler
-func (w *WebHook) ServeHTTP(writer http.ResponseWriter, req *http.Request, ctx kapi.Context, name, subpath string) error {
+func (w *WebHook) ServeHTTP(writer http.ResponseWriter, req *http.Request, ctx apirequest.Context, name, subpath string) error {
 	parts := strings.Split(subpath, "/")
 	if len(parts) != 2 {
 		return errors.NewBadRequest(fmt.Sprintf("unexpected hook subpath %s", subpath))
@@ -43,7 +44,7 @@ func (w *WebHook) ServeHTTP(writer http.ResponseWriter, req *http.Request, ctx k
 		return errors.NewNotFound(buildapi.Resource("buildconfighook"), hookType)
 	}
 
-	config, err := w.registry.GetBuildConfig(ctx, name)
+	config, err := w.registry.GetBuildConfig(ctx, name, &metav1.GetOptions{})
 	if err != nil {
 		// clients should not be able to find information about build configs in
 		// the system unless the config exists and the secret matches
@@ -68,7 +69,7 @@ func (w *WebHook) ServeHTTP(writer http.ResponseWriter, req *http.Request, ctx k
 	buildTriggerCauses := generateBuildTriggerInfo(revision, hookType, secret)
 	request := &buildapi.BuildRequest{
 		TriggeredBy: buildTriggerCauses,
-		ObjectMeta:  kapi.ObjectMeta{Name: name},
+		ObjectMeta:  metav1.ObjectMeta{Name: name},
 		Revision:    revision,
 		Env:         envvars,
 		DockerStrategyOptions: dockerStrategyOptions,

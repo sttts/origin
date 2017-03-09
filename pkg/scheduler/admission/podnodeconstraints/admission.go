@@ -7,13 +7,13 @@ import (
 
 	"github.com/golang/glog"
 
-	admission "k8s.io/kubernetes/pkg/admission"
+	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
+	admission "k8s.io/apiserver/pkg/admission"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kapierrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/apis/extensions"
-	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	"k8s.io/kubernetes/pkg/util/sets"
 
 	"github.com/openshift/origin/pkg/api/meta"
 	"github.com/openshift/origin/pkg/authorization/authorizer"
@@ -24,7 +24,7 @@ import (
 
 // kindsToIgnore is a list of kinds that contain a PodSpec that
 // we choose not to handle in this plugin
-var kindsToIgnore = []unversioned.GroupKind{
+var kindsToIgnore = []schema.GroupKind{
 	extensions.Kind("DaemonSet"),
 }
 
@@ -63,7 +63,7 @@ type podNodeConstraints struct {
 	authorizer             authorizer.Authorizer
 }
 
-func shouldCheckResource(resource unversioned.GroupResource, kind unversioned.GroupKind) (bool, error) {
+func shouldCheckResource(resource schema.GroupResource, kind schema.GroupKind) (bool, error) {
 	expectedKind, shouldCheck := meta.HasPodSpec(resource)
 	if !shouldCheck {
 		return false, nil
@@ -175,7 +175,7 @@ func (o *podNodeConstraints) Validate() error {
 
 // build LocalSubjectAccessReview struct to validate role via checkAccess
 func (o *podNodeConstraints) checkPodsBindAccess(attr admission.Attributes) (bool, error) {
-	ctx := kapi.WithUser(kapi.WithNamespace(kapi.NewContext(), attr.GetNamespace()), attr.GetUserInfo())
+	ctx := apirequest.WithUser(apirequest.WithNamespace(apirequest.NewContext(), attr.GetNamespace()), attr.GetUserInfo())
 	authzAttr := authorizer.DefaultAuthorizationAttributes{
 		Verb:     "create",
 		Resource: "pods/binding",

@@ -10,12 +10,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/apimachinery/registered"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
-	"k8s.io/kubernetes/pkg/runtime"
 )
 
 // ErrExit is a marker interface for cli commands indicating that the response has been processed
@@ -44,9 +43,9 @@ func GetDisplayFilename(filename string) string {
 
 // ResolveResource returns the resource type and name of the resourceString.
 // If the resource string has no specified type, defaultResource will be returned.
-func ResolveResource(defaultResource unversioned.GroupResource, resourceString string, mapper meta.RESTMapper) (unversioned.GroupResource, string, error) {
+func ResolveResource(defaultResource schema.GroupResource, resourceString string, mapper meta.RESTMapper) (schema.GroupResource, string, error) {
 	if mapper == nil {
-		return unversioned.GroupResource{}, "", errors.New("mapper cannot be nil")
+		return schema.GroupResource{}, "", errors.New("mapper cannot be nil")
 	}
 
 	var name string
@@ -58,24 +57,24 @@ func ResolveResource(defaultResource unversioned.GroupResource, resourceString s
 		name = parts[1]
 
 		// Allow specifying the group the same way kubectl does, as "resource.group.name"
-		groupResource := unversioned.ParseGroupResource(parts[0])
+		groupResource := schema.ParseGroupResource(parts[0])
 		// normalize resource case
 		groupResource.Resource = strings.ToLower(groupResource.Resource)
 
 		gvr, err := mapper.ResourceFor(groupResource.WithVersion(""))
 		if err != nil {
-			return unversioned.GroupResource{}, "", err
+			return schema.GroupResource{}, "", err
 		}
 		return gvr.GroupResource(), name, nil
 	default:
-		return unversioned.GroupResource{}, "", fmt.Errorf("invalid resource format: %s", resourceString)
+		return schema.GroupResource{}, "", fmt.Errorf("invalid resource format: %s", resourceString)
 	}
 
 	return defaultResource, name, nil
 }
 
 // convertItemsForDisplay returns a new list that contains parallel elements that have been converted to the most preferred external version
-func convertItemsForDisplay(objs []runtime.Object, preferredVersions ...unversioned.GroupVersion) ([]runtime.Object, error) {
+func convertItemsForDisplay(objs []runtime.Object, preferredVersions ...schema.GroupVersion) ([]runtime.Object, error) {
 	ret := []runtime.Object{}
 
 	for i := range objs {
@@ -84,12 +83,12 @@ func convertItemsForDisplay(objs []runtime.Object, preferredVersions ...unversio
 		if err != nil {
 			return nil, err
 		}
-		groupMeta, err := registered.Group(kind.Group)
+		groupMeta, err := kapi.Registry.Group(kind.Group)
 		if err != nil {
 			return nil, err
 		}
 
-		requestedVersion := unversioned.GroupVersion{}
+		requestedVersion := schema.GroupVersion{}
 		for _, preferredVersion := range preferredVersions {
 			if preferredVersion.Group == kind.Group {
 				requestedVersion = preferredVersion
@@ -97,7 +96,7 @@ func convertItemsForDisplay(objs []runtime.Object, preferredVersions ...unversio
 			}
 		}
 
-		actualOutputVersion := unversioned.GroupVersion{}
+		actualOutputVersion := schema.GroupVersion{}
 		for _, externalVersion := range groupMeta.GroupVersions {
 			if externalVersion == requestedVersion {
 				actualOutputVersion = externalVersion
@@ -124,7 +123,7 @@ func convertItemsForDisplay(objs []runtime.Object, preferredVersions ...unversio
 // TODO: print-objects should have preferred output versions
 func convertItemsForDisplayFromDefaultCommand(cmd *cobra.Command, objs []runtime.Object) ([]runtime.Object, error) {
 	requested := kcmdutil.GetFlagString(cmd, "output-version")
-	version, err := unversioned.ParseGroupVersion(requested)
+	version, err := schema.ParseGroupVersion(requested)
 	if err != nil {
 		return nil, err
 	}

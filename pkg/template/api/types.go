@@ -1,17 +1,16 @@
 package api
 
 import (
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/runtime"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // +genclient=true
 
 // Template contains the inputs needed to produce a Config.
 type Template struct {
-	unversioned.TypeMeta
-	kapi.ObjectMeta
+	metav1.TypeMeta
+	metav1.ObjectMeta
 
 	// message is an optional instructional message that will
 	// be displayed when this template is instantiated.
@@ -40,8 +39,8 @@ type Template struct {
 
 // TemplateList is a list of Template objects.
 type TemplateList struct {
-	unversioned.TypeMeta
-	unversioned.ListMeta
+	metav1.TypeMeta
+	metav1.ListMeta
 	Items []Template
 }
 

@@ -17,10 +17,10 @@ import (
 	"github.com/docker/distribution/registry/handlers"
 	_ "github.com/docker/distribution/registry/storage/driver/inmemory"
 
-	kapi "k8s.io/kubernetes/pkg/api"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgotesting "k8s.io/client-go/testing"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
-	"k8s.io/kubernetes/pkg/client/testing/core"
-	"k8s.io/kubernetes/pkg/runtime"
 
 	"github.com/openshift/origin/pkg/client/testclient"
 	registrytest "github.com/openshift/origin/pkg/dockerregistry/testutil"
@@ -43,7 +43,7 @@ func TestSignatureGet(t *testing.T) {
 	installFakeAccessController(t)
 
 	testSignature := imageapi.ImageSignature{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: "sha256:4028782c08eae4a8c9a28bf661c0a8d1c2fc8e19dbaae2b018b21011197e1484@cddeb7006d914716e2728000746a0b23",
 		},
 		Type:    "atomic",
@@ -163,8 +163,8 @@ func TestSignaturePut(t *testing.T) {
 	}
 	var newImageSignature *imageapi.ImageSignature
 
-	client.AddReactor("create", "imagesignatures", func(action core.Action) (handled bool, ret runtime.Object, err error) {
-		sign, ok := action.(core.CreateAction).GetObject().(*imageapi.ImageSignature)
+	client.AddReactor("create", "imagesignatures", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
+		sign, ok := action.(clientgotesting.CreateAction).GetObject().(*imageapi.ImageSignature)
 		if !ok {
 			return true, nil, fmt.Errorf("unexpected object received: %#v", sign)
 		}

@@ -7,8 +7,9 @@ import (
 	"os"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/kubernetes/pkg/client/retry"
-	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
 
 	"github.com/docker/distribution/reference"
 	"github.com/fsouza/go-dockerclient"
@@ -183,7 +184,7 @@ func updateBuildRevision(build *api.Build, sourceInfo *git.SourceInfo) *api.Sour
 func retryBuildStatusUpdate(build *api.Build, client client.BuildInterface, sourceRev *api.SourceRevision) error {
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		// before updating, make sure we are using the latest version of the build
-		latestBuild, err := client.Get(build.Name)
+		latestBuild, err := client.Get(build.Name, metav1.GetOptions{})
 		if err != nil {
 			// usually this means we failed to get resources due to the missing
 			// privilleges

@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"net/http"
 
+	"k8s.io/apiserver/pkg/authentication/serviceaccount"
+	"k8s.io/apiserver/pkg/authentication/user"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/server/httplog"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/auth/user"
-	"k8s.io/kubernetes/pkg/httplog"
-	"k8s.io/kubernetes/pkg/serviceaccount"
 
 	authenticationapi "github.com/openshift/origin/pkg/auth/api"
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
@@ -22,7 +23,7 @@ type GroupCache interface {
 }
 
 // ImpersonationFilter checks for impersonation rules against the current user.
-func ImpersonationFilter(handler http.Handler, a authorizer.Authorizer, groupCache GroupCache, contextMapper kapi.RequestContextMapper) http.Handler {
+func ImpersonationFilter(handler http.Handler, a authorizer.Authorizer, groupCache GroupCache, contextMapper apirequest.RequestContextMapper) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		requestedUser := req.Header.Get(authenticationapi.ImpersonateUserHeader)
 		if len(requestedUser) == 0 {
@@ -114,7 +115,7 @@ func ImpersonationFilter(handler http.Handler, a authorizer.Authorizer, groupCac
 				return
 			}
 
-			authCheckCtx := kapi.WithNamespace(ctx, subject.Namespace)
+			authCheckCtx := apirequest.WithNamespace(ctx, subject.Namespace)
 
 			allowed, reason, err := a.Authorize(authCheckCtx, actingAsAttributes)
 			if err != nil {
@@ -137,9 +138,9 @@ func ImpersonationFilter(handler http.Handler, a authorizer.Authorizer, groupCac
 			Groups: groups,
 			Extra:  extra,
 		}
-		contextMapper.Update(req, kapi.WithUser(ctx, newUser))
+		contextMapper.Update(req, apirequest.WithUser(ctx, newUser))
 
-		oldUser, _ := kapi.UserFrom(ctx)
+		oldUser, _ := apirequest.UserFrom(ctx)
 		httplog.LogOf(req, w).Addf("%v is acting as %v", oldUser, newUser)
 
 		handler.ServeHTTP(w, req)

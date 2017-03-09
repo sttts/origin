@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/auth/user"
-	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apiserver/pkg/authentication/user"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	defaultauthorizer "github.com/openshift/origin/pkg/authorization/authorizer"
@@ -90,9 +90,9 @@ func TestAuthorize(t *testing.T) {
 		delegate := &fakeAuthorizer{allowed: tc.delegateAuthAllowed}
 		authorizer := NewAuthorizer(delegate, nil, defaultauthorizer.NewForbiddenMessageResolver(""))
 
-		ctx := kapi.WithNamespace(kapi.NewContext(), "ns")
+		ctx := apirequest.WithNamespace(apirequest.NewContext(), "ns")
 		if tc.user != nil {
-			ctx = kapi.WithUser(ctx, tc.user)
+			ctx = apirequest.WithUser(ctx, tc.user)
 
 		}
 
@@ -125,11 +125,11 @@ type fakeAuthorizer struct {
 	called  bool
 }
 
-func (a *fakeAuthorizer) Authorize(ctx kapi.Context, passedAttributes defaultauthorizer.Action) (bool, string, error) {
+func (a *fakeAuthorizer) Authorize(ctx apirequest.Context, passedAttributes defaultauthorizer.Action) (bool, string, error) {
 	a.called = true
 	return a.allowed, "", nil
 }
 
-func (a *fakeAuthorizer) GetAllowedSubjects(ctx kapi.Context, attributes defaultauthorizer.Action) (sets.String, sets.String, error) {
+func (a *fakeAuthorizer) GetAllowedSubjects(ctx apirequest.Context, attributes defaultauthorizer.Action) (sets.String, sets.String, error) {
 	return nil, nil, nil
 }

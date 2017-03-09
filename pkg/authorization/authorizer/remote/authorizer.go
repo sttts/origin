@@ -3,9 +3,9 @@ package remote
 import (
 	"github.com/golang/glog"
 
-	kapi "k8s.io/kubernetes/pkg/api"
-	kerrs "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/util/sets"
+	kerrs "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 
 	authzapi "github.com/openshift/origin/pkg/authorization/api"
 	"github.com/openshift/origin/pkg/authorization/authorizer"
@@ -30,19 +30,19 @@ func NewAuthorizer(client RemoteAuthorizerClient) (authorizer.Authorizer, error)
 	return &RemoteAuthorizer{client}, nil
 }
 
-func (r *RemoteAuthorizer) Authorize(ctx kapi.Context, a authorizer.Action) (bool, string, error) {
+func (r *RemoteAuthorizer) Authorize(ctx apirequest.Context, a authorizer.Action) (bool, string, error) {
 	var (
 		result *authzapi.SubjectAccessReviewResponse
 		err    error
 	)
 
 	// Extract namespace from context
-	namespace, _ := kapi.NamespaceFrom(ctx)
+	namespace, _ := apirequest.NamespaceFrom(ctx)
 
 	// Extract user from context
 	user := ""
 	groups := sets.NewString()
-	userInfo, ok := kapi.UserFrom(ctx)
+	userInfo, ok := apirequest.UserFrom(ctx)
 	if ok {
 		user = userInfo.GetName()
 		groups.Insert(userInfo.GetGroups()...)
@@ -70,14 +70,14 @@ func (r *RemoteAuthorizer) Authorize(ctx kapi.Context, a authorizer.Action) (boo
 	return result.Allowed, result.Reason, nil
 }
 
-func (r *RemoteAuthorizer) GetAllowedSubjects(ctx kapi.Context, attributes authorizer.Action) (sets.String, sets.String, error) {
+func (r *RemoteAuthorizer) GetAllowedSubjects(ctx apirequest.Context, attributes authorizer.Action) (sets.String, sets.String, error) {
 	var (
 		result *authzapi.ResourceAccessReviewResponse
 		err    error
 	)
 
 	// Extract namespace from context
-	namespace, _ := kapi.NamespaceFrom(ctx)
+	namespace, _ := apirequest.NamespaceFrom(ctx)
 
 	if len(namespace) > 0 {
 		result, err = r.client.LocalResourceAccessReviews(namespace).Create(&authzapi.LocalResourceAccessReview{Action: getAction(namespace, attributes)})
