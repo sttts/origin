@@ -2,6 +2,7 @@ package oauthauthorizetoken
 
 import (
 	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 
@@ -13,7 +14,7 @@ type Registry interface {
 	// ListAuthorizeTokens obtains a list of authorize tokens that match a selector.
 	ListAuthorizeTokens(ctx apirequest.Context, options *metainternal.ListOptions) (*api.OAuthAuthorizeTokenList, error)
 	// GetAuthorizeToken retrieves a specific authorize token.
-	GetAuthorizeToken(ctx apirequest.Context, name string) (*api.OAuthAuthorizeToken, error)
+	GetAuthorizeToken(ctx apirequest.Context, name string, options *metav1.GetOptions) (*api.OAuthAuthorizeToken, error)
 	// CreateAuthorizeToken creates a new authorize token.
 	CreateAuthorizeToken(ctx apirequest.Context, token *api.OAuthAuthorizeToken) (*api.OAuthAuthorizeToken, error)
 	// DeleteAuthorizeToken deletes an authorize token.
@@ -47,8 +48,8 @@ func (s *storage) ListAuthorizeTokens(ctx apirequest.Context, options *metainter
 	return obj.(*api.OAuthAuthorizeTokenList), nil
 }
 
-func (s *storage) GetAuthorizeToken(ctx apirequest.Context, name string) (*api.OAuthAuthorizeToken, error) {
-	obj, err := s.Get(ctx, name)
+func (s *storage) GetAuthorizeToken(ctx apirequest.Context, name string, options *metav1.GetOptions) (*api.OAuthAuthorizeToken, error) {
+	obj, err := s.Get(ctx, name, options)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +65,7 @@ func (s *storage) CreateAuthorizeToken(ctx apirequest.Context, token *api.OAuthA
 }
 
 func (s *storage) DeleteAuthorizeToken(ctx apirequest.Context, name string) error {
-	_, err := s.Delete(ctx, name, nil)
+	_, _, err := s.Delete(ctx, name, nil)
 	if err != nil {
 		return err
 	}

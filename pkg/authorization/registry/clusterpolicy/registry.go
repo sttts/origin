@@ -2,6 +2,7 @@ package clusterpolicy
 
 import (
 	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -16,7 +17,7 @@ type Registry interface {
 	// ListClusterPolicies obtains list of policies that match a selector.
 	ListClusterPolicies(ctx apirequest.Context, options *metainternal.ListOptions) (*authorizationapi.ClusterPolicyList, error)
 	// GetClusterPolicy retrieves a specific policy.
-	GetClusterPolicy(ctx apirequest.Context, id string) (*authorizationapi.ClusterPolicy, error)
+	GetClusterPolicy(ctx apirequest.Context, id string, options *metav1.GetOptions) (*authorizationapi.ClusterPolicy, error)
 	// CreateClusterPolicy creates a new policy.
 	CreateClusterPolicy(ctx apirequest.Context, policy *authorizationapi.ClusterPolicy) error
 	// UpdateClusterPolicy updates a policy.
@@ -75,8 +76,8 @@ func (s *storage) WatchClusterPolicies(ctx apirequest.Context, options *metainte
 	return s.Watch(ctx, options)
 }
 
-func (s *storage) GetClusterPolicy(ctx apirequest.Context, name string) (*authorizationapi.ClusterPolicy, error) {
-	obj, err := s.Get(ctx, name)
+func (s *storage) GetClusterPolicy(ctx apirequest.Context, name string, options *metav1.GetOptions) (*authorizationapi.ClusterPolicy, error) {
+	obj, err := s.Get(ctx, name, options)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +85,7 @@ func (s *storage) GetClusterPolicy(ctx apirequest.Context, name string) (*author
 }
 
 func (s *storage) DeleteClusterPolicy(ctx apirequest.Context, name string) error {
-	_, err := s.Delete(ctx, name, nil)
+	_, _, err := s.Delete(ctx, name, nil)
 	return err
 }
 
@@ -109,8 +110,8 @@ func (s *simulatedStorage) UpdatePolicy(ctx apirequest.Context, policy *authoriz
 	return s.clusterRegistry.UpdateClusterPolicy(ctx, authorizationapi.ToClusterPolicy(policy))
 }
 
-func (s *simulatedStorage) GetPolicy(ctx apirequest.Context, name string) (*authorizationapi.Policy, error) {
-	ret, err := s.clusterRegistry.GetClusterPolicy(ctx, name)
+func (s *simulatedStorage) GetPolicy(ctx apirequest.Context, name string, options *metav1.GetOptions) (*authorizationapi.Policy, error) {
+	ret, err := s.clusterRegistry.GetClusterPolicy(ctx, name, options)
 	return authorizationapi.ToPolicy(ret), err
 }
 
@@ -126,6 +127,6 @@ func (s ReadOnlyClusterPolicy) List(options metainternal.ListOptions) (*authoriz
 	return s.ListClusterPolicies(apirequest.WithNamespace(apirequest.NewContext(), ""), &options)
 }
 
-func (s ReadOnlyClusterPolicy) Get(name string) (*authorizationapi.ClusterPolicy, error) {
-	return s.GetClusterPolicy(apirequest.WithNamespace(apirequest.NewContext(), ""), name)
+func (s ReadOnlyClusterPolicy) Get(name string, options *metav1.GetOptions) (*authorizationapi.ClusterPolicy, error) {
+	return s.GetClusterPolicy(apirequest.WithNamespace(apirequest.NewContext(), ""), name, options)
 }

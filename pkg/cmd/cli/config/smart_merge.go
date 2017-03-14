@@ -9,7 +9,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/third_party/forked/golang/netutil"
 	restclient "k8s.io/client-go/rest"
-	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
 	"github.com/openshift/origin/pkg/auth/authenticator/request/x509request"
 	osclient "github.com/openshift/origin/pkg/client"
@@ -196,7 +196,7 @@ func MergeConfig(startingConfig, addition clientcmdapi.Config) (*clientcmdapi.Co
 }
 
 // FindExistingContextName finds the nickname for the passed context
-func FindExistingContextName(haystack clientcmdapi.Config, needle clientcmdapirequest.Context) string {
+func FindExistingContextName(haystack clientcmdapi.Config, needle clientcmdapi.Context) string {
 	for key, context := range haystack.Contexts {
 		context.LocationOfOrigin = ""
 		if reflect.DeepEqual(context, needle) {
