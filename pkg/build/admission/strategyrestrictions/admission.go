@@ -16,7 +16,7 @@ import (
 )
 
 func init() {
-	admission.RegisterPlugin("BuildByStrategy", func(c clientset.Interface, config io.Reader) (admission.Interface, error) {
+	admission.RegisterPlugin("BuildByStrategy", func(config io.Reader) (admission.Interface, error) {
 		return NewBuildByStrategy(), nil
 	})
 }

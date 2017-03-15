@@ -19,7 +19,7 @@ import (
 const RestrictedEndpointsPluginName = "openshift.io/RestrictedEndpointsAdmission"
 
 func init() {
-	kadmission.RegisterPlugin(RestrictedEndpointsPluginName, func(client clientset.Interface, config io.Reader) (kadmission.Interface, error) {
+	admission.RegisterPlugin(RestrictedEndpointsPluginName, func(config io.Reader) (admission.Interface, error) {
 		return NewRestrictedEndpointsAdmission(nil), nil
 	})
 }
