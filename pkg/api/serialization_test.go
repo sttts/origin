@@ -31,9 +31,9 @@ import (
 	// install all APIs
 	_ "github.com/openshift/origin/pkg/api/install"
 	_ "github.com/openshift/origin/pkg/quota/api/install"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 	_ "k8s.io/kubernetes/pkg/api/install"
 	"k8s.io/kubernetes/pkg/apis/componentconfig"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
 )
 
 func originFuzzer(t *testing.T, seed int64) *fuzz.Fuzzer {
