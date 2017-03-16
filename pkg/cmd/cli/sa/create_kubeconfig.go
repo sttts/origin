@@ -8,7 +8,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	kclientcmd "k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	kapi "k8s.io/kubernetes/pkg/api"
@@ -125,13 +124,13 @@ func (o *CreateKubeconfigOptions) Validate() error {
 }
 
 func (o *CreateKubeconfigOptions) Run() error {
-	serviceAccount, err := o.SAClient.Get(o.SAName)
+	serviceAccount, err := o.SAClient.Get(o.SAName, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
 
 	for _, reference := range serviceAccount.Secrets {
-		secret, err := o.SecretsClient.Get(reference.Name)
+		secret, err := o.SecretsClient.Get(reference.Name, metav1.GetOptions{})
 		if err != nil {
 			continue
 		}
@@ -151,7 +150,7 @@ func (o *CreateKubeconfigOptions) Run() error {
 			ctx.Namespace = o.ContextNamespace
 			// rename the current context
 			cfg.CurrentContext = o.SAName
-			cfg.Contexts = map[string]*clientcmdapirequest.Context{
+			cfg.Contexts = map[string]*clientcmdapi.Context{
 				cfg.CurrentContext: ctx,
 			}
 			// use the server name
