@@ -19,9 +19,9 @@ package capabilities
 import (
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/util/sets"
-	"k8s.io/kubernetes/pkg/util/validation/field"
 )
 
 // defaultCapabilities implements the CapabilitiesSecurityContextConstraintsStrategy interface
@@ -101,15 +101,9 @@ func (s *defaultCapabilities) Validate(pod *api.Pod, container *api.Container) f
 		return allErrs
 	}
 
-	allowedAdd := makeCapSet(s.allowedCaps)
-	allowAllCaps := allowedAdd.Has(string(api.CapabilityAll))
-	if allowAllCaps {
-		// skip validation against allowed/defaultAdd/requiredDrop because all capabilities are allowed by a wildcard
-		return allErrs
-	}
-
 	// validate that anything being added is in the default or allowed sets
 	defaultAdd := makeCapSet(s.defaultAddCapabilities)
+	allowedAdd := makeCapSet(s.allowedCaps)
 
 	for _, cap := range container.SecurityContext.Capabilities.Add {
 		sCap := string(cap)
