@@ -7,12 +7,10 @@ import (
 	"github.com/golang/glog"
 
 	kapierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	kutilerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	kapi "k8s.io/kubernetes/pkg/api"
@@ -58,9 +56,9 @@ type DeploymentConfigController struct {
 	// dcStore provides a local cache for deployment configs.
 	dcStore oscache.StoreToDeploymentConfigLister
 	// rcStore provides a local cache for replication controllers.
-	rcStore cache.StoreToReplicationControllerLister
+	rcStore oscache.ReplicationControllerStoreLister
 	// podStore provides a local cache for pods.
-	podStore cache.StoreToPodLister
+	podStore oscache.PodStoreLister
 
 	// dcStoreSynced makes sure the dc store is synced before reconcling any deployment config.
 	dcStoreSynced func() bool
@@ -118,7 +116,7 @@ func (c *DeploymentConfigController) Handle(config *deployapi.DeploymentConfig) 
 			// Retry faster on conflicts
 			var updatedDeployment *kapi.ReplicationController
 			if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-				rc, err := c.rcStore.ReplicationControllers(deployment.Namespace).Get(deployment.Name, metav1.GetOptions{})
+				rc, err := c.rcStore.ReplicationControllers(deployment.Namespace).Get(deployment.Name)
 				if kapierrors.IsNotFound(err) {
 					return nil
 				}
@@ -235,7 +233,7 @@ func (c *DeploymentConfigController) reconcileDeployments(existingDeployments []
 		if newReplicaCount != oldReplicaCount {
 			if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 				// refresh the replication controller version
-				rc, err := c.rcStore.ReplicationControllers(deployment.Namespace).Get(deployment.Name, metav1.GetOptions{})
+				rc, err := c.rcStore.ReplicationControllers(deployment.Namespace).Get(deployment.Name)
 				if err != nil {
 					return err
 				}

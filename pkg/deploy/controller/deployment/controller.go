@@ -16,6 +16,7 @@ import (
 	kapi "k8s.io/kubernetes/pkg/api"
 	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
 
+	oscache "github.com/openshift/origin/pkg/client/cache"
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	deployutil "github.com/openshift/origin/pkg/deploy/util"
 	"github.com/openshift/origin/pkg/util"
@@ -50,9 +51,9 @@ type DeploymentController struct {
 	queue workqueue.RateLimitingInterface
 
 	// rcStore is a store of replication controllers.
-	rcStore cache.StoreToReplicationControllerLister
+	rcStore cache.Indexer
 	// podStore is a store of pods.
-	podStore cache.StoreToPodLister
+	podStore oscache.PodStoreLister
 	// rcStoreSynced makes sure the rc store is synced before reconcling any deployment.
 	rcStoreSynced func() bool
 	// podStoreSynced makes sure the pod store is synced before reconcling any deployment.
@@ -86,7 +87,7 @@ func (c *DeploymentController) Handle(deployment *kapi.ReplicationController) er
 	nextStatus := currentStatus
 
 	deployerPodName := deployutil.DeployerPodNameForDeployment(deployment.Name)
-	deployer, deployerErr := c.podStore.Pods(deployment.Namespace).Get(deployerPodName, metav1.GetOptions{})
+	deployer, deployerErr := c.podStore.Pods(deployment.Namespace).Get(deployerPodName)
 	if deployerErr == nil {
 		nextStatus = c.nextStatus(deployer, deployment, updatedAnnotations)
 	}
