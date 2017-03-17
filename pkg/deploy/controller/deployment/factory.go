@@ -8,6 +8,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	kv1core "k8s.io/client-go/kubernetes/typed/core/v1"
+	kclientv1 "k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
@@ -15,6 +16,7 @@ import (
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	kcontroller "k8s.io/kubernetes/pkg/controller"
 
+	oscache "github.com/openshift/origin/pkg/client/cache"
 	deployutil "github.com/openshift/origin/pkg/deploy/util"
 )
 
@@ -28,8 +30,8 @@ const (
 // NewDeploymentController creates a new DeploymentController.
 func NewDeploymentController(rcInformer, podInformer cache.SharedIndexInformer, kc kclientset.Interface, sa, image string, env []kapi.EnvVar, codec runtime.Codec) *DeploymentController {
 	eventBroadcaster := record.NewBroadcaster()
-	eventBroadcaster.StartRecordingToSink(&kv1core.EventSinkImpl{Interface: v1core.New(kubeClient.Core().RESTClient()).Events("")})
-	recorder := eventBroadcaster.NewRecorder(kapi.EventSource{Component: "deployments-controller"})
+	eventBroadcaster.StartRecordingToSink(&kv1core.EventSinkImpl{Interface: kv1core.New(kc.Core().RESTClient()).Events("")})
+	recorder := eventBroadcaster.NewRecorder(kapi.Scheme, kclientv1.EventSource{Component: "deployments-controller"})
 
 	c := &DeploymentController{
 		rn: kc.Core(),
@@ -44,13 +46,13 @@ func NewDeploymentController(rcInformer, podInformer cache.SharedIndexInformer, 
 		codec:          codec,
 	}
 
-	c.rcStore.Indexer = rcInformer.GetIndexer()
+	c.rcStore = rcInformer.GetIndexer()
 	rcInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    c.addReplicationController,
 		UpdateFunc: c.updateReplicationController,
 	})
 
-	c.podStore.Indexer = podInformer.GetIndexer()
+	c.podStore = oscache.NewPodStoreLister(podInformer.GetIndexer())
 	podInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		UpdateFunc: c.updatePod,
 		DeleteFunc: c.deletePod,
@@ -201,7 +203,7 @@ func (c *DeploymentController) work() bool {
 }
 
 func (c *DeploymentController) getByKey(key string) (*kapi.ReplicationController, error) {
-	obj, exists, err := c.rcStore.Indexer.GetByKey(key)
+	obj, exists, err := c.rcStore.GetByKey(key)
 	if err != nil {
 		glog.Infof("Unable to retrieve replication controller %q from store: %v", key, err)
 		c.queue.Add(key)

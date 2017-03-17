@@ -8,6 +8,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	kv1core "k8s.io/client-go/kubernetes/typed/core/v1"
+	kclientv1 "k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
@@ -16,6 +17,7 @@ import (
 	kcontroller "k8s.io/kubernetes/pkg/controller"
 
 	osclient "github.com/openshift/origin/pkg/client"
+	oscache "github.com/openshift/origin/pkg/client/cache"
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 )
 
@@ -32,8 +34,8 @@ const (
 // NewDeploymentConfigController creates a new DeploymentConfigController.
 func NewDeploymentConfigController(dcInformer, rcInformer, podInformer cache.SharedIndexInformer, oc osclient.Interface, kc kclientset.Interface, codec runtime.Codec) *DeploymentConfigController {
 	eventBroadcaster := record.NewBroadcaster()
-	eventBroadcaster.StartRecordingToSink(&kv1core.EventSinkImpl{Interface: v1core.New(kubeClient.Core().RESTClient()).Events("")})
-	recorder := eventBroadcaster.NewRecorder(kapi.EventSource{Component: "deploymentconfig-controller"})
+	eventBroadcaster.StartRecordingToSink(&kv1core.EventSinkImpl{Interface: kv1core.New(kc.Core().RESTClient()).Events("")})
+	recorder := eventBroadcaster.NewRecorder(kapi.Scheme, kclientv1.EventSource{Component: "deploymentconfig-controller"})
 
 	c := &DeploymentConfigController{
 		dn: oc,
@@ -51,12 +53,12 @@ func NewDeploymentConfigController(dcInformer, rcInformer, podInformer cache.Sha
 		UpdateFunc: c.updateDeploymentConfig,
 		DeleteFunc: c.deleteDeploymentConfig,
 	})
-	c.rcStore.Indexer = rcInformer.GetIndexer()
+	c.rcStore = oscache.NewReplicationControllerStoreLister(rcInformer.GetIndexer())
 	rcInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		UpdateFunc: c.updateReplicationController,
 		DeleteFunc: c.deleteReplicationController,
 	})
-	c.podStore.Indexer = podInformer.GetIndexer()
+	c.podStore = oscache.NewPodStoreLister(podInformer.GetIndexer())
 	podInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		UpdateFunc: c.updatePod,
 		DeleteFunc: c.deletePod,

@@ -403,7 +403,7 @@ func TestHandleScenarios(t *testing.T) {
 		c := NewDeploymentConfigController(dcInformer, rcInformer, podInformer, oc, kc, codec)
 
 		for i := range toStore {
-			c.rcStore.Indexer.Add(toStore[i])
+			c.rcStore.Add(toStore[i])
 		}
 
 		config := deploytest.OkDeploymentConfig(test.newVersion)
