@@ -611,7 +611,11 @@ func newServiceAccountTokenGetter(options configapi.MasterConfig) (serviceaccoun
 
 	// TODO: could be hoisted if other Origin code needs direct access to etcd, otherwise discourage this access pattern
 	// as we move to be more on top of Kube.
-	_, kubeStorageFactory, err := kubernetes.BuildDefaultAPIServer(options)
+	apiserverOptions, err := kubernetes.BuildKubeAPIserverOptions(options)
+	if err != nil {
+		return nil, err
+	}
+	kubeStorageFactory, err := kubernetes.BuildStorageFactory(options, apiserverOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -659,7 +663,7 @@ func newAuthenticator(config configapi.MasterConfig, restOptionsGetter restoptio
 		tokenAuthenticators = append(tokenAuthenticators,
 			// if you have a bearer token, you're a human (usually)
 			// if you change this, have a look at the impersonationFilter where we attach groups to the impersonated user
-			group.NewGroupAdder(union.New(oauthTokenRequestAuthenticators...), []string{bootstrappolicy.AuthenticatedOAuthGroup}))
+			authgroup.NewGroupAdder(union.New(oauthTokenRequestAuthenticators...), []string{bootstrappolicy.AuthenticatedOAuthGroup}))
 	}
 
 	if len(tokenAuthenticators) > 0 {
@@ -676,7 +680,7 @@ func newAuthenticator(config configapi.MasterConfig, restOptionsGetter restoptio
 		authenticators = append(authenticators, certauth)
 	}
 
-	resultingAuthenticator := union.NewFailOnError(authenticators...)
+	resultingAuthenticator := union.New(authenticators...)
 
 	topLevelAuthenticators := []authenticator.Request{}
 	// if we have a front proxy providing authentication configuration, wire it up and it should come first
@@ -697,10 +701,9 @@ func newAuthenticator(config configapi.MasterConfig, restOptionsGetter restoptio
 		topLevelAuthenticators = append(topLevelAuthenticators, resultingAuthenticator)
 
 	}
-
 	topLevelAuthenticators = append(topLevelAuthenticators, anonymous.NewAuthenticator())
 
-	return group.NewAuthenticatedGroupAdder(union.NewFailOnError(topLevelAuthenticators...)), nil
+	return kauthgroup.NewAuthenticatedGroupAdder(union.New(topLevelAuthenticators...)), nil
 }
 
 func newProjectAuthorizationCache(subjectLocator authorizer.SubjectLocator, kubeClient *kclientset.Clientset, informerFactory shared.InformerFactory) *projectauth.AuthorizationCache {
