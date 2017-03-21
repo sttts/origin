@@ -134,10 +134,7 @@ func BuildKubeApiserverOptions(masterConfig configapi.MasterConfig) (*kapiserver
 		}
 		server.SecureServing.SNICertKeys = append(server.SecureServing.SNICertKeys, sniCert)
 	}
-	return server, nil
-}
 
-func BuildStorageFactory(masterConfig configapi.MasterConfig, server *kapiserveroptions.ServerRunOptions) (apiserverstorage.StorageFactory, error) {
 	// resolve extended arguments
 	// TODO: this should be done in config validation (along with the above) so we can provide
 	// proper errors
@@ -145,6 +142,10 @@ func BuildStorageFactory(masterConfig configapi.MasterConfig, server *kapiserver
 		return nil, kerrors.NewAggregate(err)
 	}
 
+	return server, nil
+}
+
+func BuildStorageFactory(masterConfig configapi.MasterConfig, server *kapiserveroptions.ServerRunOptions) (apiserverstorage.StorageFactory, error) {
 	resourceEncodingConfig := apiserverstorage.NewDefaultResourceEncodingConfig(kapi.Registry)
 	resourceEncodingConfig.SetVersionEncoding(
 		kapi.GroupName,
