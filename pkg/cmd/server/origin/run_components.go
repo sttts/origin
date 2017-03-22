@@ -335,7 +335,7 @@ func (c *MasterConfig) RunDeploymentController() {
 	podInformer := c.Informers.KubernetesInformers().Core().V1().Pods().Informer()
 	_, kclient := c.DeploymentControllerClients()
 
-	_, kclientConfig, err := configapi.GetKubeClient(c.Options.MasterClients.OpenShiftLoopbackKubeConfig, c.Options.MasterClients.OpenShiftLoopbackClientConnectionOverrides)
+	_, kclientConfig, err := configapi.GetInternalKubeClient(c.Options.MasterClients.OpenShiftLoopbackKubeConfig, c.Options.MasterClients.OpenShiftLoopbackClientConnectionOverrides)
 	if err != nil {
 		glog.Fatalf("Unable to initialize deployment controller: %v", err)
 	}
