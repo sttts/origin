@@ -606,7 +606,7 @@ func newServiceAccountTokenGetter(options configapi.MasterConfig) (serviceaccoun
 
 	// TODO: could be hoisted if other Origin code needs direct access to etcd, otherwise discourage this access pattern
 	// as we move to be more on top of Kube.
-	apiserverOptions, err := kubernetes.BuildKubeApiserverOptions(options)
+	apiserverOptions, err := kubernetes.BuildKubeAPIserverOptions(options)
 	if err != nil {
 		return nil, err
 	}

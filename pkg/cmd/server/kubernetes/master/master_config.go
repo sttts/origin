@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	knet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/sets"
+	utilwait "k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
@@ -37,6 +38,7 @@ import (
 	storagefactory "k8s.io/apiserver/pkg/storage/storagebackend/factory"
 	utilflag "k8s.io/apiserver/pkg/util/flag"
 	kapiserveroptions "k8s.io/kubernetes/cmd/kube-apiserver/app/options"
+	"k8s.io/kubernetes/cmd/kube-apiserver/app/preflight"
 	cmapp "k8s.io/kubernetes/cmd/kube-controller-manager/app/options"
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/apis/autoscaling"
@@ -65,6 +67,9 @@ import (
 	"github.com/openshift/origin/pkg/version"
 )
 
+const etcdRetryLimit = 60
+const etcdRetryInterval = 1 * time.Second
+
 // request paths that match this regular expression will be treated as long running
 // and not subjected to the default server timeout.
 const originLongRunningEndpointsRE = "(/|^)buildconfigs/.*/instantiatebinary$"
@@ -85,9 +90,9 @@ type MasterConfig struct {
 	Informers shared.InformerFactory
 }
 
-// BuildKubeApiserverOptions constructs the appropriate kube-apiserver run options.
+// BuildKubeAPIserverOptions constructs the appropriate kube-apiserver run options.
 // It returns an error if no KubernetesMasterConfig was defined.
-func BuildKubeApiserverOptions(masterConfig configapi.MasterConfig) (*kapiserveroptions.ServerRunOptions, error) {
+func BuildKubeAPIserverOptions(masterConfig configapi.MasterConfig) (*kapiserveroptions.ServerRunOptions, error) {
 	if masterConfig.KubernetesMasterConfig == nil {
 		return nil, fmt.Errorf("no kubernetesMasterConfig defined, unable to load settings")
 	}
@@ -110,7 +115,6 @@ func BuildKubeApiserverOptions(masterConfig configapi.MasterConfig) (*kapiserver
 
 	// Adjust defaults
 	server.EventTTL = 2 * time.Hour
-	server.Authentication.WithAnyonymous()
 	server.ServiceClusterIPRange = net.IPNet(flagtypes.DefaultIPNet(masterConfig.KubernetesMasterConfig.ServicesSubnet))
 	server.ServiceNodePortRange = *portRange
 	server.Features.EnableProfiling = true
@@ -145,6 +149,8 @@ func BuildKubeApiserverOptions(masterConfig configapi.MasterConfig) (*kapiserver
 	return server, nil
 }
 
+// BuildStorageFactory builds a storage factory based on server.Etcd.StorageConfig with overrides from masterConfig.
+// This storage factory is ONLY USED FOR kubernetes registries right now. Compare pkg/util/restoptions/configgetter.go.
 func BuildStorageFactory(masterConfig configapi.MasterConfig, server *kapiserveroptions.ServerRunOptions) (apiserverstorage.StorageFactory, error) {
 	resourceEncodingConfig := apiserverstorage.NewDefaultResourceEncodingConfig(kapi.Registry)
 	resourceEncodingConfig.SetVersionEncoding(
@@ -227,12 +233,6 @@ func buildUpstreamGenericConfig(s *kapiserveroptions.ServerRunOptions) (*apiserv
 
 	s.Authentication.ApplyAuthorization(s.Authorization)
 
-	// TODO(rebase): verify that the following option structs are applied to the config somewhere
-	// err = s.Authorization.ApplyTo(genericConfig)
-	// err = s.CloudProvider.ApplyTo(genericConfig)
-	// err = s.StorageSerialization.ApplyTo(genericConfig)
-	// err = s.APIEnablement.ApplyTo(genericConfig)
-
 	// validate options
 	if errs := s.Validate(); len(errs) != 0 {
 		return nil, kerrors.NewAggregate(errs)
@@ -242,38 +242,30 @@ func buildUpstreamGenericConfig(s *kapiserveroptions.ServerRunOptions) (*apiserv
 	genericConfig := apiserver.NewConfig().
 		WithSerializer(kapi.Codecs)
 
-	err = s.GenericServerRunOptions.ApplyTo(genericConfig)
-	if err != nil {
+	if err := s.GenericServerRunOptions.ApplyTo(genericConfig); err != nil {
 		return nil, err
 	}
-	err = s.Etcd.ApplyTo(genericConfig)
-	if err != nil {
+	if err := s.Etcd.ApplyTo(genericConfig); err != nil {
 		return nil, err
 	}
-	err = s.SecureServing.ApplyTo(genericConfig)
-	if err != nil {
+	if err := s.SecureServing.ApplyTo(genericConfig); err != nil {
 		return nil, err
 	}
-	err = s.InsecureServing.ApplyTo(genericConfig)
-	if err != nil {
+	if err := s.InsecureServing.ApplyTo(genericConfig); err != nil {
 		return nil, err
 	}
-	err = s.Audit.ApplyTo(genericConfig)
-	if err != nil {
+	if err := s.Audit.ApplyTo(genericConfig); err != nil {
 		return nil, err
 	}
-	err = s.Features.ApplyTo(genericConfig)
-	if err != nil {
+	if err := s.Features.ApplyTo(genericConfig); err != nil {
 		return nil, err
 	}
-	err = s.Authentication.ApplyTo(genericConfig)
-	if err != nil {
+	if err := s.Authentication.ApplyTo(genericConfig); err != nil {
 		return nil, err
 	}
-	// TODO(rebase): do we want to wait here in origin?
-	//if err := utilwait.PollImmediate(etcdRetryInterval, etcdRetryLimit*etcdRetryInterval, preflight.EtcdConnection{ServerList: s.Etcd.StorageConfig.ServerList}.CheckEtcdServers); err != nil {
-	//	return nil, nil, fmt.Errorf("error waiting for etcd connection: %v", err)
-	//}
+	if err := utilwait.PollImmediate(etcdRetryInterval, etcdRetryLimit*etcdRetryInterval, preflight.EtcdConnection{ServerList: s.Etcd.StorageConfig.ServerList}.CheckEtcdServers); err != nil {
+		return nil, fmt.Errorf("error waiting for etcd connection: %v", err)
+	}
 
 	// Use protobufs for self-communication.
 	// Since not every generic apiserver has to support protobufs, we
@@ -373,7 +365,7 @@ func buildKubeApiserverConfig(
 	originAuthenticator authenticator.Request,
 	kubeAuthorizer authorizer.Authorizer,
 ) (*master.Config, error) {
-	apiserverOptions, err := BuildKubeApiserverOptions(masterConfig)
+	apiserverOptions, err := BuildKubeAPIserverOptions(masterConfig)
 	if err != nil {
 		return nil, err
 	}
