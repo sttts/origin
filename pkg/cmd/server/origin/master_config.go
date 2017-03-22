@@ -106,7 +106,7 @@ type MasterConfig struct {
 	Authenticator authenticator.Request
 	Authorizer    authorizer.Authorizer
 
-	// TODO(sttts): replace AuthorizationAttributeBuilder with kapiserverfilters.NewRequestAttributeGetter
+	// TODO(sttts): replace AuthorizationAttributeBuilder with apiserverfilters.NewRequestAttributeGetter
 	AuthorizationAttributeBuilder authorizer.AuthorizationAttributeBuilder
 
 	GroupCache                    *usercache.GroupCache

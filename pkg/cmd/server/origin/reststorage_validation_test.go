@@ -6,12 +6,12 @@ import (
 	"time"
 
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/apiserver/pkg/storage/storagebackend"
 	extapi "k8s.io/kubernetes/pkg/apis/extensions"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 	"k8s.io/kubernetes/pkg/controller/informers"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
-	"k8s.io/kubernetes/pkg/storage/storagebackend"
 
 	_ "github.com/openshift/origin/pkg/api/install"
 	"github.com/openshift/origin/pkg/api/validation"
