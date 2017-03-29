@@ -637,6 +637,8 @@ var ephemeralWhiteList = createEphemeralWhiteList(
 	// --
 
 	// github.com/openshift/origin/pkg/image/api/v1
+	gvr("image.openshift.io", "pre012", "dockerimages"),    // part of image
+	gvr("image.openshift.io", "1.0", "dockerimages"),       // part of image
 	gvr("", "v1", "imagestreamtags"),                       // part of image stream
 	gvr("image.openshift.io", "v1", "imagestreamtags"),     // part of image stream
 	gvr("", "v1", "imagesignatures"),                       // part of image
