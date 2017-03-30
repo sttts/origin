@@ -196,7 +196,7 @@ func (r *REST) Update(ctx apirequest.Context, tagName string, objInfo rest.Updat
 		return nil, false, err
 	}
 
-	obj, err := objInfo.UpdatedObject(ctx, old)
+	obj, err := objInfo.UpdatedObject(ctx, old, false)
 	if err != nil {
 		return nil, false, err
 	}

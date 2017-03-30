@@ -95,10 +95,10 @@ type convertingObjectInfo struct {
 	rest.UpdatedObjectInfo
 }
 
-func (i convertingObjectInfo) UpdatedObject(ctx apirequest.Context, old runtime.Object) (runtime.Object, error) {
+func (i convertingObjectInfo) UpdatedObject(ctx apirequest.Context, old runtime.Object, maybeStale bool) (runtime.Object, error) {
 	oldObj := old.(*authorizationapi.RoleBinding)
 	convertedOldObj := authorizationapi.ToClusterRoleBinding(oldObj)
-	obj, err := i.UpdatedObjectInfo.UpdatedObject(ctx, convertedOldObj)
+	obj, err := i.UpdatedObjectInfo.UpdatedObject(ctx, convertedOldObj, maybeStale)
 	if err != nil {
 		return nil, err
 	}

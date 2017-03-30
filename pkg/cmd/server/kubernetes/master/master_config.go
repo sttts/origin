@@ -64,6 +64,7 @@ import (
 	"github.com/openshift/origin/pkg/cmd/server/election"
 	cmdflags "github.com/openshift/origin/pkg/cmd/util/flags"
 	"github.com/openshift/origin/pkg/controller/shared"
+	kubecompatextensionsv1beta1 "github.com/openshift/origin/pkg/kubecompat/apis/extensions/v1beta1"
 	openapigenerated "github.com/openshift/origin/pkg/openapi"
 	"github.com/openshift/origin/pkg/version"
 )
@@ -169,6 +170,7 @@ func BuildStorageFactory(masterConfig configapi.MasterConfig, server *kapiserver
 	if err != nil {
 		return nil, err
 	}
+	storageGroupsToEncodingVersion[autoscaling.GroupName] = kubecompatextensionsv1beta1.SchemeGroupVersion
 
 	storageFactory, err := kubeapiserver.NewStorageFactory(
 		server.Etcd.StorageConfig,

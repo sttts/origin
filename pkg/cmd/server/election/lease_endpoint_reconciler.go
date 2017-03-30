@@ -52,7 +52,7 @@ func (s *storageLeases) ListLeases() ([]string, error) {
 
 // UpdateLease resets the TTL on a master IP in storage
 func (s *storageLeases) UpdateLease(ip string) error {
-	return s.storage.GuaranteedUpdate(apirequest.NewDefaultContext(), s.baseKey+"/"+ip, &api.Endpoints{}, true, nil, func(input kruntime.Object, respMeta storage.ResponseMeta) (kruntime.Object, *uint64, error) {
+	return s.storage.GuaranteedUpdate(apirequest.NewDefaultContext(), s.baseKey+"/"+ip, &api.Endpoints{}, true, nil, func(input kruntime.Object, maybeStale bool, respMeta storage.ResponseMeta) (kruntime.Object, *uint64, error) {
 		// just make sure we've got the right IP set, and then refresh the TTL
 		existing := input.(*api.Endpoints)
 		existing.Subsets = []api.EndpointSubset{

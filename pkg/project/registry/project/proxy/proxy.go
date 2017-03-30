@@ -151,7 +151,7 @@ func (s *REST) Update(ctx apirequest.Context, name string, objInfo rest.UpdatedO
 		return nil, false, err
 	}
 
-	obj, err := objInfo.UpdatedObject(ctx, oldObj)
+	obj, err := objInfo.UpdatedObject(ctx, oldObj, false)
 	if err != nil {
 		return nil, false, err
 	}
