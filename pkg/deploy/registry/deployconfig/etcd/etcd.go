@@ -87,7 +87,7 @@ func (r *ScaleREST) Update(ctx apirequest.Context, name string, objInfo rest.Upd
 	}
 
 	old := api.ScaleFromConfig(deploymentConfig)
-	obj, err := objInfo.UpdatedObject(ctx, old)
+	obj, err := objInfo.UpdatedObject(ctx, old, false)
 	if err != nil {
 		return nil, false, err
 	}

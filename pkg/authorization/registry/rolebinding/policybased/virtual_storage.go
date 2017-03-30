@@ -195,7 +195,7 @@ func (m *VirtualStorage) updateRoleBinding(ctx apirequest.Context, name string, 
 		}
 
 		// get the updated object, so we know what namespace we're binding against
-		obj, err := objInfo.UpdatedObject(ctx, old)
+		obj, err := objInfo.UpdatedObject(ctx, old, false)
 		if err != nil {
 			return err
 		}

@@ -57,7 +57,7 @@ func (s *REST) Create(ctx apirequest.Context, obj runtime.Object) (runtime.Objec
 // Both the identity and user must already exist.
 // If the identity is associated with another user already, it is disassociated.
 func (s *REST) Update(ctx apirequest.Context, name string, objInfo rest.UpdatedObjectInfo) (runtime.Object, bool, error) {
-	obj, err := objInfo.UpdatedObject(ctx, nil)
+	obj, err := objInfo.UpdatedObject(ctx, nil, false)
 	if err != nil {
 		return nil, false, err
 	}

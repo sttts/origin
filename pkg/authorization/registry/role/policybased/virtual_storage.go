@@ -188,7 +188,7 @@ func (m *VirtualStorage) updateRole(ctx apirequest.Context, name string, objInfo
 			return kapierrors.NewNotFound(m.Resource, name)
 		}
 
-		obj, err := objInfo.UpdatedObject(ctx, oldRole)
+		obj, err := objInfo.UpdatedObject(ctx, oldRole, false)
 		if err != nil {
 			return err
 		}
