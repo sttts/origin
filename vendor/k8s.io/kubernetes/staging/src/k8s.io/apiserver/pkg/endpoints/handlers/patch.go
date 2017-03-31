@@ -74,30 +74,25 @@ func patchObjectJSON(
 	return
 }
 
-// strategicPatchObject applies a strategic merge patch of <patchJS> to
+// strategicPatchObjectInPlace applies a strategic merge patch of <patchJS> to
 // <originalObject> and stores the result in <objToUpdate>.
 // It additionally returns the map[string]interface{} representation of the
 // <originalObject> and <patchJS>.
 // NOTE: Both <originalObject> and <objToUpdate> are supposed to be versioned.
-func strategicPatchObject(
+func strategicPatchObjectInPlace(
 	codec runtime.Codec,
-	originalObject runtime.Object,
+	originalObjMap map[string]interface{},
 	patchJS []byte,
 	objToUpdate runtime.Object,
 	versionedObj runtime.Object,
-) (originalObjMap map[string]interface{}, patchMap map[string]interface{}, retErr error) {
-	originalObjMap = make(map[string]interface{})
-	if err := unstructured.DefaultConverter.ToUnstructured(originalObject, &originalObjMap); err != nil {
-		return nil, nil, err
-	}
-
+) (patchMap map[string]interface{}, retErr error) {
 	patchMap = make(map[string]interface{})
 	if err := json.Unmarshal(patchJS, &patchMap); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	if err := applyPatchToObject(codec, originalObjMap, patchMap, objToUpdate, versionedObj); err != nil {
-		return nil, nil, err
+	if err := applyPatchToObjectInPlace(codec, originalObjMap, patchMap, objToUpdate, versionedObj); err != nil {
+		return nil, err
 	}
 	return
 }
@@ -105,14 +100,14 @@ func strategicPatchObject(
 // applyPatchToObject applies a strategic merge patch of <patchMap> to
 // <originalMap> and stores the result in <objToUpdate>, though it operates
 // on versioned map[string]interface{} representations.
-func applyPatchToObject(
+func applyPatchToObjectInPlace(
 	codec runtime.Codec,
 	originalMap map[string]interface{},
 	patchMap map[string]interface{},
 	objToUpdate runtime.Object,
 	versionedObj runtime.Object,
 ) error {
-	patchedObjMap, err := strategicpatch.StrategicMergeMapPatch(originalMap, patchMap, versionedObj)
+	patchedObjMap, err := strategicpatch.StrategicMergeMapPatchInPlace(originalMap, patchMap, versionedObj)
 	if err != nil {
 		return err
 	}

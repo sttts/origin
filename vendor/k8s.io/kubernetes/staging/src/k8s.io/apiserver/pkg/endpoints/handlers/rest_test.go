@@ -29,6 +29,7 @@ import (
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/conversion/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -73,7 +74,11 @@ func TestPatchAnonymousField(t *testing.T) {
 	}
 
 	actual := &testPatchType{}
-	_, _, err := strategicPatchObject(codec, original, []byte(patch), actual, &testPatchType{})
+	originalMap := make(map[string]interface{})
+	if err := unstructured.DefaultConverter.ToUnstructured(original, &originalMap); err != nil {
+		t.Fatal(err)
+	}
+	_, err := strategicPatchObjectInPlace(codec, originalMap, []byte(patch), actual, &testPatchType{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -305,7 +310,11 @@ func TestNumberConversion(t *testing.T) {
 
 	patchJS := []byte(`{"spec":{"ports":[{"port":80,"nodePort":31789}]}}`)
 
-	_, _, err := strategicPatchObject(codec, currentVersionedObject, patchJS, versionedObjToUpdate, versionedObj)
+	currentVersionedObjectMap := make(map[string]interface{})
+	if err := unstructured.DefaultConverter.ToUnstructured(currentVersionedObject, &currentVersionedObjectMap); err != nil {
+		t.Fatal(err)
+	}
+	_, err := strategicPatchObjectInPlace(codec, currentVersionedObjectMap, patchJS, versionedObjToUpdate, versionedObj)
 	if err != nil {
 		t.Fatal(err)
 	}
