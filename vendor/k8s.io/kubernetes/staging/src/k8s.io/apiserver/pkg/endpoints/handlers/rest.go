@@ -565,6 +565,7 @@ func patchResource(
 	namespace := request.NamespaceValue(ctx)
 
 	var (
+		originalObj             runtime.Object
 		originalObjJS           []byte
 		originalPatchedObjJS    []byte
 		originalObjMap          map[string]interface{}
@@ -589,7 +590,7 @@ func patchResource(
 		}
 
 		switch {
-		case originalObjJS == nil && originalObjMap == nil:
+		case originalObj == nil && originalObjJS == nil && originalObjMap == nil:
 			// first time through,
 			// 1. apply the patch
 			// 2. save the original and patched to detect whether there were conflicting changes on retries
@@ -611,7 +612,8 @@ func patchResource(
 			case types.StrategicMergePatchType:
 				// Since the patch is applied on versioned objects, we need to convert the
 				// current object to versioned representation first.
-				currentVersionedObject, err := unsafeConvertor.ConvertToVersion(currentObject, kind.GroupVersion())
+				var err error
+				originalObj, err = unsafeConvertor.ConvertToVersion(currentObject, kind.GroupVersion())
 				if err != nil {
 					return nil, err
 				}
@@ -619,7 +621,14 @@ func patchResource(
 				if err != nil {
 					return nil, err
 				}
-				originalMap, patchMap, err := strategicPatchObject(codec, currentVersionedObject, patchJS, versionedObjToUpdate, versionedObj)
+				temporaryOriginalObjMap := make(map[string]interface{})
+				if err := unstructured.DefaultConverter.ToUnstructured(originalObj, &temporaryOriginalObjMap); err != nil {
+					return nil, err
+				}
+				// this call mutates temporaryOriginalObjMap. Because it is the main code path (in contrast to the retries),
+				// we optimize strategicPatchObjectInPlace by allowing mutation. Though we have to pay
+				// back our debt by recreating originalObjMap again later-on from originalObj in the retry branch.
+				patchMap, err := strategicPatchObjectInPlace(codec, temporaryOriginalObjMap, patchJS, versionedObjToUpdate, versionedObj)
 				if err != nil {
 					return nil, err
 				}
@@ -631,7 +640,7 @@ func patchResource(
 				}
 				objToUpdate = unversionedObjToUpdate
 				// Store unstructured representations for possible retries.
-				originalObjMap, originalPatchMap = originalMap, patchMap
+				originalPatchMap = patchMap
 			}
 			if err := checkName(objToUpdate, name, namespace, namer); err != nil {
 				return nil, err
@@ -660,7 +669,17 @@ func patchResource(
 			}
 
 			var currentPatchMap map[string]interface{}
-			if originalObjMap != nil {
+			if originalObj != nil || originalObjMap != nil {
+				if originalObjMap == nil {
+					// we had a temporaryOriginalObjMap, but it was mutated by strategicPatchObjectInPlace. Hence,
+					// have to recreate it here. Once for the whole retry loop is enough, because the retry code
+					// path does not mutate anymore.
+					originalObjMap = make(map[string]interface{})
+					if err := unstructured.DefaultConverter.ToUnstructured(originalObj, &originalObjMap); err != nil {
+						return nil, err
+					}
+				}
+
 				var err error
 				currentPatchMap, err = strategicpatch.CreateTwoWayMergeMapPatch(originalObjMap, currentObjMap, versionedObj)
 				if err != nil {
@@ -716,7 +735,7 @@ func patchResource(
 			if err != nil {
 				return nil, err
 			}
-			if err := applyPatchToObject(codec, currentObjMap, originalPatchMap, versionedObjToUpdate, versionedObj); err != nil {
+			if err := applyPatchToObjectInPlace(codec, currentObjMap, originalPatchMap, versionedObjToUpdate, versionedObj); err != nil {
 				return nil, err
 			}
 			// Convert the object back to unversioned.
