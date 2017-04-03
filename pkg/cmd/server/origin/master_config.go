@@ -71,6 +71,7 @@ import (
 	"github.com/openshift/origin/pkg/cmd/util/plug"
 	"github.com/openshift/origin/pkg/cmd/util/pluginconfig"
 	"github.com/openshift/origin/pkg/cmd/util/variable"
+	"github.com/openshift/origin/pkg/controller"
 	"github.com/openshift/origin/pkg/controller/shared"
 	imageadmission "github.com/openshift/origin/pkg/image/admission"
 	imagepolicy "github.com/openshift/origin/pkg/image/admission/imagepolicy/api"
@@ -741,7 +742,7 @@ func newClusterPolicyLW(optsGetter restoptions.Getter) (cache.ListerWatcher, err
 	}
 	registry := clusterpolicyregistry.NewRegistry(storage)
 
-	return &cache.ListWatch{
+	return &controller.InternalListWatch{
 		ListFunc: func(options metainternal.ListOptions) (runtime.Object, error) {
 			return registry.ListClusterPolicies(ctx, &options)
 		},
@@ -760,7 +761,7 @@ func newClusterPolicyBindingLW(optsGetter restoptions.Getter) (cache.ListerWatch
 	}
 	registry := clusterpolicybindingregistry.NewRegistry(storage)
 
-	return &cache.ListWatch{
+	return &controller.InternalListWatch{
 		ListFunc: func(options metainternal.ListOptions) (runtime.Object, error) {
 			return registry.ListClusterPolicyBindings(ctx, &options)
 		},
@@ -779,7 +780,7 @@ func newPolicyLW(optsGetter restoptions.Getter) (cache.ListerWatcher, error) {
 	}
 	registry := policyregistry.NewRegistry(storage)
 
-	return &cache.ListWatch{
+	return &controller.InternalListWatch{
 		ListFunc: func(options metainternal.ListOptions) (runtime.Object, error) {
 			return registry.ListPolicies(ctx, &options)
 		},
@@ -798,7 +799,7 @@ func newPolicyBindingLW(optsGetter restoptions.Getter) (cache.ListerWatcher, err
 	}
 	registry := policybindingregistry.NewRegistry(storage)
 
-	return &cache.ListWatch{
+	return &controller.InternalListWatch{
 		ListFunc: func(options metainternal.ListOptions) (runtime.Object, error) {
 			return registry.ListPolicyBindings(ctx, &options)
 		},
