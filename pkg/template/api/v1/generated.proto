@@ -19,7 +19,7 @@ option go_package = "v1";
 // a TemplateInstance.  BrokerTemplateInstance is part of an experimental API.
 message BrokerTemplateInstance {
   // Standard object metadata.
-  optional k8s.io.kubernetes.pkg.api.v1.ObjectMeta metadata = 1;
+  optional k8s.io.apimachinery.pkg.apis.meta.v1.ObjectMeta metadata = 1;
 
   // spec describes the state of this BrokerTemplateInstance.
   optional BrokerTemplateInstanceSpec spec = 2;
@@ -28,7 +28,7 @@ message BrokerTemplateInstance {
 // BrokerTemplateInstanceList is a list of BrokerTemplateInstance objects.
 message BrokerTemplateInstanceList {
   // Standard object metadata.
-  optional k8s.io.kubernetes.pkg.api.unversioned.ListMeta metadata = 1;
+  optional k8s.io.apimachinery.pkg.apis.meta.v1.ListMeta metadata = 1;
 
   // items is a list of BrokerTemplateInstances
   repeated BrokerTemplateInstance items = 2;
@@ -127,7 +127,7 @@ message Template {
 // TemplateInstance is part of an experimental API.
 message TemplateInstance {
   // Standard object metadata.
-  optional k8s.io.kubernetes.pkg.api.v1.ObjectMeta metadata = 1;
+  optional k8s.io.apimachinery.pkg.apis.meta.v1.ObjectMeta metadata = 1;
 
   // spec describes the desired state of this TemplateInstance.
   optional TemplateInstanceSpec spec = 2;
@@ -147,7 +147,7 @@ message TemplateInstanceCondition {
 
   // LastTransitionTime is the last time a condition status transitioned from
   // one state to another.
-  optional k8s.io.kubernetes.pkg.api.unversioned.Time lastTransitionTime = 3;
+  optional k8s.io.apimachinery.pkg.apis.meta.v1.Time lastTransitionTime = 3;
 
   // Reason is a brief machine readable explanation for the condition's last
   // transition.
@@ -161,7 +161,7 @@ message TemplateInstanceCondition {
 // TemplateInstanceList is a list of TemplateInstance objects.
 message TemplateInstanceList {
   // Standard object metadata.
-  optional k8s.io.kubernetes.pkg.api.unversioned.ListMeta metadata = 1;
+  optional k8s.io.apimachinery.pkg.apis.meta.v1.ListMeta metadata = 1;
 
   // items is a list of Templateinstances
   repeated TemplateInstance items = 2;
