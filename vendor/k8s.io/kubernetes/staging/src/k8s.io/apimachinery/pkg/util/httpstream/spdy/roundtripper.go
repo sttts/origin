@@ -36,6 +36,10 @@ import (
 	"k8s.io/apimachinery/third_party/forked/golang/netutil"
 )
 
+type Dialer interface {
+	Dial(network, address string) (net.Conn, error)
+}
+
 // SpdyRoundTripper knows how to upgrade an HTTP request to one that supports
 // multiplexed streams. After RoundTrip() is invoked, Conn will be set
 // and usable. SpdyRoundTripper implements the UpgradeRoundTripper interface.
@@ -54,7 +58,7 @@ type SpdyRoundTripper struct {
 	conn net.Conn
 
 	// Dialer is the dialer used to connect.  Used if non-nil.
-	Dialer *net.Dialer
+	Dialer Dialer
 
 	// proxier knows which proxy to use given a request, defaults to http.ProxyFromEnvironment
 	// Used primarily for mocking the proxy discovery in tests.
@@ -176,7 +180,11 @@ func (s *SpdyRoundTripper) dialWithoutProxy(url *url.URL) (net.Conn, error) {
 	if s.Dialer == nil {
 		conn, err = tls.Dial("tcp", dialAddr, s.tlsConfig)
 	} else {
-		conn, err = tls.DialWithDialer(s.Dialer, "tcp", dialAddr, s.tlsConfig)
+		netDialer, ok := s.Dialer.(*net.Dialer)
+		if !ok {
+			return nil, fmt.Errorf("invalid SPDY round tripper dialer")
+		}
+		conn, err = tls.DialWithDialer(netDialer, "tcp", dialAddr, s.tlsConfig)
 	}
 	if err != nil {
 		return nil, err
