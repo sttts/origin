@@ -3,11 +3,13 @@ package buildconfiginstantiate
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
-	"reflect"
+	"net/url"
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/hydrogen18/memlistener"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -15,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/httpstream/spdy"
 	"k8s.io/apimachinery/pkg/util/wait"
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
+	genericrest "k8s.io/apiserver/pkg/registry/generic/rest"
 	"k8s.io/apiserver/pkg/registry/rest"
 	kapi "k8s.io/kubernetes/pkg/api"
 	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
@@ -232,12 +235,17 @@ func (h *binaryInstantiateHandler) handle(r io.Reader) (runtime.Object, error) {
 		}
 		return nil, errors.NewBadRequest(err.Error())
 	}
-	rawTransport, ok := transport.(*http.Transport)
-	if !ok {
-		return nil, errors.NewInternalError(fmt.Errorf("unable to connect to node, unrecognized type: %v", reflect.TypeOf(transport)))
-	}
-	upgrader := spdy.NewRoundTripper(rawTransport.TLSClientConfig)
-	exec, err := remotecommand.NewStreamExecutor(upgrader, nil, "POST", location)
+
+	// create in-memory server out of proxy
+	proxyHandler := genericrest.NewUpgradeAwareProxyHandler(location, transport, false, true, h.responder)
+	proxyHandler.InterceptRedirects = true
+	proxyServer := memlistener.NewInMemoryServer(proxyHandler)
+	proxyTransport := proxyServer.NewTransport()
+
+	upgrader := spdy.NewSpdyRoundTripper(nil)
+	upgrader.Dialer = DialerFunc(proxyTransport.Dial)
+	fakeLocation, _ := url.Parse("http://fake")
+	exec, err := remotecommand.NewStreamExecutor(upgrader, nil, "POST", fakeLocation)
 	if err != nil {
 		return nil, errors.NewInternalError(fmt.Errorf("unable to connect to server: %v", err))
 	}
@@ -250,6 +258,12 @@ func (h *binaryInstantiateHandler) handle(r io.Reader) (runtime.Object, error) {
 	}
 	cancel = false
 	return latest, nil
+}
+
+type DialerFunc func(network, addr string) (net.Conn, error)
+
+func (f DialerFunc) Dial(network, addr string) (net.Conn, error) {
+	return f(network, addr)
 }
 
 // cancelBuild will mark a build for cancellation unless
