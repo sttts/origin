@@ -8825,6 +8825,10 @@
 		{
 			"ImportPath": "vbom.ml/util/sortorder",
 			"Rev": "db5cfe13f5cc80a4990d98e2e1b0707a4d1a5394"
+		},
+		{
+			"ImportPath": "github.com/hydrogen18/memlistener",
+			"Rev": "54553eb933fb8c2d6103afed4c7173d807d26c0a"
 		}
 	]
 }
