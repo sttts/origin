@@ -81,7 +81,7 @@ var (
 		APIGroupApps:              {"v1beta1"},
 		APIGroupAuthentication:    {"v1", "v1beta1"},
 		APIGroupAuthorization:     {"v1", "v1beta1"},
-		APIGroupAuthorizationRbac: {"v1alpha1", "v1beta1"},
+		APIGroupAuthorizationRbac: {"v1beta1"},
 		APIGroupAutoscaling:       {"v1", "v2alpha1"},
 		APIGroupBatch:             {"v1", "v2alpha1"},
 		APIGroupCertificates:      {"v1beta1"},
