@@ -511,6 +511,11 @@ func StartAPI(oc *origin.MasterConfig, kc *kubernetes.MasterConfig) error {
 
 	oc.Run(kc, embeddedAssetConfig)
 
+	// start DNS before the informers are started because it adds a ClusterIP index.
+	if oc.Options.DNSConfig != nil {
+		oc.RunDNSServer()
+	}
+
 	// start up the informers that we're trying to use in the API server
 	oc.Informers.InternalKubernetesInformers().Start(utilwait.NeverStop)
 	oc.Informers.Start(utilwait.NeverStop)
@@ -518,10 +523,6 @@ func StartAPI(oc *origin.MasterConfig, kc *kubernetes.MasterConfig) error {
 
 	if standaloneAssetConfig != nil {
 		standaloneAssetConfig.Run()
-	}
-
-	if oc.Options.DNSConfig != nil {
-		oc.RunDNSServer()
 	}
 
 	oc.RunProjectAuthorizationCache()
@@ -681,12 +682,18 @@ func startControllers(oc *origin.MasterConfig, kc *kubernetes.MasterConfig) erro
 			glog.Fatalf("Could not get client for endpoint controller: %v", err)
 		}
 
+		garbageCollectorControllerConfig, garbageCollectorControllerClient, _, _, err := oc.GetServiceAccountClients(bootstrappolicy.InfraGarbageCollectorControllerServiceAccountName)
+		if err != nil {
+			glog.Fatalf("Could not get client for garbage collector controller: %v", err)
+		}
+
 		// no special order
 		kc.RunNodeController()
 		kc.RunScheduler()
 		kc.RunReplicationController(rcClient)
 		kc.RunReplicaSetController(rsClient)
 		kc.RunDeploymentController(deploymentClient)
+		kc.RunGarbageCollectorController(garbageCollectorControllerClient, garbageCollectorControllerConfig)
 
 		extensionsEnabled := len(configapi.GetEnabledAPIVersionsForGroup(kc.Options, extensions.GroupName)) > 0
 

@@ -2904,6 +2904,7 @@ items:
     verbs:
     - create
     - delete
+    - patch
   - apiGroups:
     - ""
     attributeRestrictions: null
@@ -2955,6 +2956,7 @@ items:
     - delete
     - get
     - list
+    - patch
     - update
     - watch
   - apiGroups:
@@ -3113,6 +3115,26 @@ items:
     - endpoints/restricted
     verbs:
     - create
+- apiVersion: v1
+  kind: ClusterRole
+  metadata:
+    annotations:
+      authorization.openshift.io/system-only: "true"
+    creationTimestamp: null
+    name: system:garbage-collector-controller
+  rules:
+  - apiGroups:
+    - '*'
+    attributeRestrictions: null
+    resources:
+    - '*'
+    verbs:
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
 - apiVersion: v1
   kind: ClusterRole
   metadata:
@@ -3908,6 +3930,7 @@ items:
     - create
     - delete
     - get
+    - patch
     - update
   - apiGroups:
     - ""

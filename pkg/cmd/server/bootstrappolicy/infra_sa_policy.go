@@ -87,6 +87,9 @@ const (
 
 	InfraNodeBootstrapServiceAccountName = "node-bootstrapper"
 	NodeBootstrapRoleName                = "system:node-bootstrapper"
+
+	InfraGarbageCollectorControllerServiceAccountName = "garbage-collector-controller"
+	GarbageCollectorControllerRoleName                = "system:garbage-collector-controller"
 )
 
 type InfraServiceAccounts struct {
@@ -239,7 +242,7 @@ func init() {
 				},
 				{
 					APIGroups: []string{extensions.GroupName},
-					Verbs:     sets.NewString("list", "watch", "get", "create", "update", "delete"),
+					Verbs:     sets.NewString("list", "watch", "get", "create", "update", "patch", "delete"),
 					Resources: sets.NewString("replicasets"),
 				},
 				{
@@ -703,7 +706,7 @@ func init() {
 				},
 				// DaemonSetsController.podControl (RealPodControl)
 				{
-					Verbs:     sets.NewString("create", "delete"),
+					Verbs:     sets.NewString("create", "delete", "patch"),
 					Resources: sets.NewString("pods"),
 				},
 				{
@@ -909,10 +912,10 @@ func init() {
 					Verbs:     sets.NewString("update"),
 					Resources: sets.NewString("statefulsets/status"),
 				},
-				// StatefulSetController.podClient
+				// StatefulSetController.podControl
 				{
 					APIGroups: []string{kapi.GroupName},
-					Verbs:     sets.NewString("get", "create", "delete", "update"),
+					Verbs:     sets.NewString("get", "create", "delete", "update", "patch"),
 					Resources: sets.NewString("pods"),
 				},
 				// StatefulSetController.petClient (PVC)
@@ -1112,6 +1115,26 @@ func init() {
 					APIGroups: []string{certificates.GroupName},
 					Verbs:     sets.NewString("create", "get"),
 					Resources: sets.NewString("certificatesigningrequests"),
+				},
+			},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	err = InfraSAs.addServiceAccount(
+		InfraGarbageCollectorControllerServiceAccountName,
+		authorizationapi.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: GarbageCollectorControllerRoleName,
+			},
+			Rules: []authorizationapi.PolicyRule{
+				// Ability to delete resources and remove ownerRefs
+				{
+					APIGroups: []string{"*"},
+					Verbs:     sets.NewString("get", "list", "watch", "patch", "update", "delete"),
+					Resources: sets.NewString("*"),
 				},
 			},
 		},
