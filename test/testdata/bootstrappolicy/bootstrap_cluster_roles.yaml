@@ -2904,6 +2904,7 @@ items:
     verbs:
     - create
     - delete
+    - patch
   - apiGroups:
     - ""
     attributeRestrictions: null
