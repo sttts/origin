@@ -242,7 +242,7 @@ func init() {
 				},
 				{
 					APIGroups: []string{extensions.GroupName},
-					Verbs:     sets.NewString("list", "watch", "get", "create", "update", "delete"),
+					Verbs:     sets.NewString("list", "watch", "get", "create", "update", "patch", "delete"),
 					Resources: sets.NewString("replicasets"),
 				},
 				{
