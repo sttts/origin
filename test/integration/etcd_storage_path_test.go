@@ -820,20 +820,15 @@ func TestEtcd2StoragePath(t *testing.T) {
 // It will start failing when a new type is added to ensure that all future types are added to this test.
 // It will also fail when a type gets moved to a different location. Be very careful in this situation because
 // it essentially means that you will be break old clusters unless you create some migration path for the old data.
-//
-// TODO: disabled for now because the etcd3 test cluster defaults to unix:// and some parts of
-// OpenShift don't seem to work with that right now.
-/*
 func TestEtcd3StoragePath(t *testing.T) {
-	etcdServer, _ := testutil.RequireEtcd3(t)
-	defer testutil.DumpEtcdOnFailure(t)
+	etcdServer := testutil.RequireEtcd3(t)
+	defer testutil.DumpEtcd3OnFailure(t)
 
 	getter := &etcd3Getter{
 		kv: etcdServer.V3Client,
 	}
 	testEtcdStoragePath(t, etcdServer, getter)
 }
-*/
 
 func testEtcdStoragePath(t *testing.T, etcdServer *etcdtest.EtcdTestServer, getter etcdGetter) {
 	masterConfig, err := testserver.DefaultMasterOptions()
@@ -842,8 +837,14 @@ func testEtcdStoragePath(t *testing.T, etcdServer *etcdtest.EtcdTestServer, gett
 	}
 	masterConfig.AdmissionConfig.PluginOrderOverride = []string{"PodNodeSelector"} // remove most admission checks to make testing easier
 	masterConfig.EnableTemplateServiceBroker = true
+	if masterConfig.KubernetesMasterConfig.APIServerArguments == nil {
+		masterConfig.KubernetesMasterConfig.APIServerArguments = serverapi.ExtendedArguments{}
+	}
+	masterConfig.KubernetesMasterConfig.APIServerArguments["storage-media-type"] = []string{runtime.ContentTypeJSON} // always use JSON for now
 	if etcdServer.V3Client == nil {
-		masterConfig.KubernetesMasterConfig.APIServerArguments = serverapi.ExtendedArguments{"storage-backend": []string{"etcd2"}}
+		masterConfig.KubernetesMasterConfig.APIServerArguments["storage-backend"] = []string{"etcd2"}
+	} else {
+		masterConfig.KubernetesMasterConfig.APIServerArguments["storage-backend"] = []string{"etcd3"}
 	}
 	masterConfig.EtcdClientInfo.URLs[0] = testutil.GetEtcdURL()
 
@@ -1252,17 +1253,14 @@ type etcd3Getter struct {
 }
 
 func (e *etcd3Getter) getFromEtcd(path string) (*metaObject, error) {
-	response, err := e.kv.Get(context.Background(), path, etcdv3.WithSerializable())
+	response, err := e.kv.Get(context.Background(), "/"+path) // TODO(enj/post-1.6.1-rebase): change all paths to have a leading slash
 	if err != nil {
 		return nil, err
 	}
-
-	into := &metaObject{}
-	if _, _, err := kapi.Codecs.UniversalDeserializer().Decode(response.Kvs[0].Value, nil, into); err != nil {
-		return nil, err
+	if response.More || response.Count != 1 || len(response.Kvs) != 1 {
+		return nil, fmt.Errorf("Invalid etcd response (not found == %v): %#v", response.Count == 0, response)
 	}
-
-	return into, nil
+	return jsonToMetaObject(string(response.Kvs[0].Value))
 }
 
 func diffMaps(a, b interface{}) ([]string, []string) {
