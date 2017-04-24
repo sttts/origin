@@ -3929,6 +3929,7 @@ items:
     - create
     - delete
     - get
+    - patch
     - update
   - apiGroups:
     - ""
