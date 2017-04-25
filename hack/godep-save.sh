@@ -106,7 +106,7 @@ godep-save () {
   # godep fails to copy all package in staging because it gets confused with the symlinks. Moreover,
   # godep fails to copy dependencies of tests. Hence, we copy over manually until we have proper staging
   # repo tooling and we have replaced godep with something sane.
-  rsync -ax --exclude='vendor/' --include='*.go' --include='*/' --exclude='*' $GOPATH/src/k8s.io/kubernetes/ vendor/k8s.io/kubernetes/
+  rsync -ax --exclude='vendor/' --exclude '*_test.go' --include='*.go' --include='*/' --exclude='*' $GOPATH/src/k8s.io/kubernetes/ vendor/k8s.io/kubernetes/
 
   # recreate symlinks
   re=""
