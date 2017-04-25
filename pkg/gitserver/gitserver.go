@@ -18,10 +18,10 @@ import (
 	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apiserver/pkg/server/healthz"
+	"k8s.io/client-go/tools/clientcmd"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
-	"k8s.io/kubernetes/pkg/healthz"
 
 	authapi "github.com/openshift/origin/pkg/authorization/api"
 	"github.com/openshift/origin/pkg/client"
@@ -238,7 +238,7 @@ func NewEnvironmentConfig() (*Config, error) {
 				return true, nil
 			}
 			req := &authapi.LocalSubjectAccessReview{
-				Action: authapi.AuthorizationAttributes{
+				Action: authapi.Action{
 					Verb:     "get",
 					Group:    kapi.GroupName,
 					Resource: "pods",

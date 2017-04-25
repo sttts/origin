@@ -7,54 +7,56 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kerrors "k8s.io/kubernetes/pkg/api/errors"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
-	kubectl "k8s.io/kubernetes/pkg/kubectl"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
-	"k8s.io/kubernetes/pkg/runtime"
+	kprinters "k8s.io/kubernetes/pkg/printers"
 
-	latest "github.com/openshift/origin/pkg/api/latest"
 	"github.com/openshift/origin/pkg/client"
 	describe "github.com/openshift/origin/pkg/cmd/cli/describe"
+	"github.com/openshift/origin/pkg/cmd/templates"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	deployutil "github.com/openshift/origin/pkg/deploy/util"
 )
 
-const (
-	rollbackLong = `
-Revert an application back to a previous deployment
+var (
+	rollbackLong = templates.LongDesc(`
+		Revert an application back to a previous deployment
 
-When you run this command your deployment configuration will be updated to
-match a previous deployment. By default only the pod and container
-configuration will be changed and scaling or trigger settings will be left as-
-is. Note that environment variables and volumes are included in rollbacks, so
-if you've recently updated security credentials in your environment your
-previous deployment may not have the correct values.
+		When you run this command your deployment configuration will be updated to
+		match a previous deployment. By default only the pod and container
+		configuration will be changed and scaling or trigger settings will be left as-
+		is. Note that environment variables and volumes are included in rollbacks, so
+		if you've recently updated security credentials in your environment your
+		previous deployment may not have the correct values.
 
-Any image triggers present in the rolled back configuration will be disabled
-with a warning. This is to help prevent your rolled back deployment from being
-replaced by a triggered deployment soon after your rollback. To re-enable the
-triggers, use the 'deploy' command.
+		Any image triggers present in the rolled back configuration will be disabled
+		with a warning. This is to help prevent your rolled back deployment from being
+		replaced by a triggered deployment soon after your rollback. To re-enable the
+		triggers, use the 'deploy' command.
 
-If you would like to review the outcome of the rollback, pass '--dry-run' to print
-a human-readable representation of the updated deployment configuration instead of
-executing the rollback. This is useful if you're not quite sure what the outcome
-will be.`
+		If you would like to review the outcome of the rollback, pass '--dry-run' to print
+		a human-readable representation of the updated deployment configuration instead of
+		executing the rollback. This is useful if you're not quite sure what the outcome
+		will be.`)
 
-	rollbackExample = `  # Perform a rollback to the last successfully completed deployment for a deploymentconfig
-  %[1]s rollback frontend
+	rollbackExample = templates.Examples(`
+		# Perform a rollback to the last successfully completed deployment for a deploymentconfig
+	  %[1]s rollback frontend
 
-  # See what a rollback to version 3 will look like, but don't perform the rollback
-  %[1]s rollback frontend --to-version=3 --dry-run
+	  # See what a rollback to version 3 will look like, but don't perform the rollback
+	  %[1]s rollback frontend --to-version=3 --dry-run
 
-  # Perform a rollback to a specific deployment
-  %[1]s rollback frontend-2
+	  # Perform a rollback to a specific deployment
+	  %[1]s rollback frontend-2
 
-  # Perform the rollback manually by piping the JSON of the new config back to %[1]s
-  %[1]s rollback frontend -o json | %[1]s replace dc/frontend -f -`
+	  # Perform the rollback manually by piping the JSON of the new config back to %[1]s
+	  %[1]s rollback frontend -o json | %[1]s replace dc/frontend -f -`)
 )
 
 // NewCmdRollback creates a CLI rollback command.
@@ -66,7 +68,7 @@ func NewCmdRollback(fullName string, f *clientcmd.Factory, out io.Writer) *cobra
 		Long:    rollbackLong,
 		Example: fmt.Sprintf(rollbackExample, fullName),
 		Run: func(cmd *cobra.Command, args []string) {
-			if err := opts.Complete(f, args, out); err != nil {
+			if err := opts.Complete(f, cmd, args, out); err != nil {
 				kcmdutil.CheckErr(kcmdutil.UsageError(cmd, err.Error()))
 			}
 
@@ -80,9 +82,9 @@ func NewCmdRollback(fullName string, f *clientcmd.Factory, out io.Writer) *cobra
 		},
 	}
 
-	cmd.Flags().BoolVar(&opts.IncludeTriggers, "change-triggers", false, "Include the previous deployment's triggers in the rollback")
-	cmd.Flags().BoolVar(&opts.IncludeStrategy, "change-strategy", false, "Include the previous deployment's strategy in the rollback")
-	cmd.Flags().BoolVar(&opts.IncludeScalingSettings, "change-scaling-settings", false, "Include the previous deployment's replicationController replica count and selector in the rollback")
+	cmd.Flags().BoolVar(&opts.IncludeTriggers, "change-triggers", false, "If true, include the previous deployment's triggers in the rollback")
+	cmd.Flags().BoolVar(&opts.IncludeStrategy, "change-strategy", false, "If true, include the previous deployment's strategy in the rollback")
+	cmd.Flags().BoolVar(&opts.IncludeScalingSettings, "change-scaling-settings", false, "If true, include the previous deployment's replicationController replica count and selector in the rollback")
 	cmd.Flags().BoolVarP(&opts.DryRun, "dry-run", "d", false, "Instead of performing the rollback, describe what the rollback will look like in human-readable form")
 	cmd.Flags().StringVarP(&opts.Format, "output", "o", "", "Instead of performing the rollback, print the updated deployment configuration in the specified format (json|yaml|name|template|templatefile)")
 	cmd.Flags().StringVarP(&opts.Template, "template", "t", "", "Template string or path to template file to use when -o=template or -o=templatefile.")
@@ -109,16 +111,18 @@ type RollbackOptions struct {
 	// oc is an openshift client.
 	oc client.Interface
 	// kc is a kube client.
-	kc kclient.Interface
+	kc kclientset.Interface
 	// getBuilder returns a new builder each time it is called. A
 	// resource.Builder is stateful and isn't safe to reuse (e.g. across
 	// resource types).
 	getBuilder func() *resource.Builder
+	// printer is used for output
+	printer kprinters.ResourcePrinter
 }
 
 // Complete turns a partially defined RollbackActions into a solvent structure
 // which can be validated and used for a rollback.
-func (o *RollbackOptions) Complete(f *clientcmd.Factory, args []string, out io.Writer) error {
+func (o *RollbackOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, args []string, out io.Writer) error {
 	// Extract basic flags.
 	if len(args) == 1 {
 		o.TargetName = args[0]
@@ -130,7 +134,7 @@ func (o *RollbackOptions) Complete(f *clientcmd.Factory, args []string, out io.W
 	o.Namespace = namespace
 
 	// Set up client based support.
-	mapper, typer := f.Object(false)
+	mapper, typer := f.Object()
 	o.getBuilder = func() *resource.Builder {
 		return resource.NewBuilder(mapper, typer, resource.ClientMapperFunc(f.ClientForMapping), kapi.Codecs.UniversalDecoder())
 	}
@@ -143,6 +147,14 @@ func (o *RollbackOptions) Complete(f *clientcmd.Factory, args []string, out io.W
 	o.kc = kClient
 
 	o.out = out
+
+	if len(o.Format) > 0 {
+		o.printer, _, err = f.PrinterForCommand(cmd)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -172,6 +184,9 @@ func (o *RollbackOptions) Validate() error {
 			return fmt.Errorf("getBuilder must return a resource.Builder")
 		}
 	}
+	if len(o.Format) > 0 && o.printer == nil {
+		return fmt.Errorf("printer must not be nil when output is set")
+	}
 	return nil
 }
 
@@ -190,7 +205,7 @@ func (o *RollbackOptions) Run() error {
 	switch r := obj.(type) {
 	case *kapi.ReplicationController:
 		dcName := deployutil.DeploymentConfigNameFor(r)
-		dc, err := o.oc.DeploymentConfigs(r.Namespace).Get(dcName)
+		dc, err := o.oc.DeploymentConfigs(r.Namespace).Get(dcName, metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
@@ -234,7 +249,7 @@ func (o *RollbackOptions) Run() error {
 		},
 	}
 	newConfig, err := o.oc.DeploymentConfigs(o.Namespace).Rollback(rollback)
-	if kerrors.IsNotFound(err) {
+	if kerrors.IsNotFound(err) || kerrors.IsForbidden(err) {
 		// Fallback to the old path for new clients talking to old servers.
 		newConfig, err = o.oc.DeploymentConfigs(o.Namespace).RollbackDeprecated(rollback)
 	}
@@ -245,22 +260,18 @@ func (o *RollbackOptions) Run() error {
 	// If this is a dry run, print and exit.
 	if o.DryRun {
 		describer := describe.NewDeploymentConfigDescriber(o.oc, o.kc, newConfig)
-		description, err := describer.Describe(newConfig.Namespace, newConfig.Name, kubectl.DescriberSettings{})
+		description, err := describer.Describe(newConfig.Namespace, newConfig.Name, kprinters.DescriberSettings{})
 		if err != nil {
 			return err
 		}
 		o.out.Write([]byte(description))
+		fmt.Fprintf(o.out, "%s\n", "(dry run)")
 		return nil
 	}
 
 	// If an output format is specified, print and exit.
 	if len(o.Format) > 0 {
-		printer, _, err := kubectl.GetPrinter(o.Format, o.Template)
-		if err != nil {
-			return err
-		}
-		versionedPrinter := kubectl.NewVersionedPrinter(printer, kapi.Scheme, latest.Version)
-		versionedPrinter.PrintObj(newConfig, o.out)
+		o.printer.PrintObj(newConfig, o.out)
 		return nil
 	}
 
@@ -278,7 +289,7 @@ func (o *RollbackOptions) Run() error {
 			disabled = append(disabled, trigger.ImageChangeParams.From.Name)
 		}
 		if len(disabled) > 0 {
-			reenable := fmt.Sprintf("oc deploy %s --enable-triggers -n %s", rolledback.Name, o.Namespace)
+			reenable := fmt.Sprintf("oc set triggers dc/%s --auto", rolledback.Name)
 			fmt.Fprintf(o.out, "Warning: the following images triggers were disabled: %s\n  You can re-enable them with: %s\n", strings.Join(disabled, ","), reenable)
 		}
 	}
@@ -331,26 +342,30 @@ func (o *RollbackOptions) findResource(targetName string) (runtime.Object, error
 // version will be returned.
 func (o *RollbackOptions) findTargetDeployment(config *deployapi.DeploymentConfig, desiredVersion int64) (*kapi.ReplicationController, error) {
 	// Find deployments for the config sorted by version descending.
-	deployments, err := o.kc.ReplicationControllers(config.Namespace).List(kapi.ListOptions{LabelSelector: deployutil.ConfigSelector(config.Name)})
+	deploymentList, err := o.kc.Core().ReplicationControllers(config.Namespace).List(metav1.ListOptions{LabelSelector: deployutil.ConfigSelector(config.Name).String()})
 	if err != nil {
 		return nil, err
 	}
-	sort.Sort(deployutil.ByLatestVersionDesc(deployments.Items))
+	deployments := make([]*kapi.ReplicationController, 0, len(deploymentList.Items))
+	for i := range deploymentList.Items {
+		deployments = append(deployments, &deploymentList.Items[i])
+	}
+	sort.Sort(deployutil.ByLatestVersionDesc(deployments))
 
 	// Find the target deployment for rollback. If a version was specified,
 	// use the version for a search. Otherwise, use the last completed
 	// deployment.
 	var target *kapi.ReplicationController
-	for _, deployment := range deployments.Items {
-		version := deployutil.DeploymentVersionFor(&deployment)
+	for _, deployment := range deployments {
+		version := deployutil.DeploymentVersionFor(deployment)
 		if desiredVersion > 0 {
 			if version == desiredVersion {
-				target = &deployment
+				target = deployment
 				break
 			}
 		} else {
-			if version < config.Status.LatestVersion && deployutil.DeploymentStatusFor(&deployment) == deployapi.DeploymentStatusComplete {
-				target = &deployment
+			if version < config.Status.LatestVersion && deployutil.IsCompleteDeployment(deployment) {
+				target = deployment
 				break
 			}
 		}

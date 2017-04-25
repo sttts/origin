@@ -1,7 +1,7 @@
 // +build linux
 
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,20 +23,24 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math/rand"
+	"net"
 	"os"
 	"path"
 	"testing"
 	"text/template"
 
-	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-
-	"k8s.io/kubernetes/pkg/api"
+	cnitypes "github.com/containernetworking/cni/pkg/types"
+	"github.com/stretchr/testify/mock"
+	utiltesting "k8s.io/client-go/util/testing"
+	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/apis/componentconfig"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	containertest "k8s.io/kubernetes/pkg/kubelet/container/testing"
 	"k8s.io/kubernetes/pkg/kubelet/network"
+	"k8s.io/kubernetes/pkg/kubelet/network/cni/testing"
+	networktest "k8s.io/kubernetes/pkg/kubelet/network/testing"
 	utilexec "k8s.io/kubernetes/pkg/util/exec"
-	utiltesting "k8s.io/kubernetes/pkg/util/testing"
 )
 
 func installPluginUnderTest(t *testing.T, testVendorCNIDirPrefix, testNetworkConfigPath, vendorName string, plugName string) {
@@ -108,6 +112,7 @@ func tearDownPlugin(tmpDir string) {
 }
 
 type fakeNetworkHost struct {
+	networktest.FakePortMappingGetter
 	kubeClient clientset.Interface
 	runtime    kubecontainer.Runtime
 }
@@ -122,7 +127,7 @@ func NewFakeHost(kubeClient clientset.Interface, pods []*containertest.FakePod) 
 	return host
 }
 
-func (fnh *fakeNetworkHost) GetPodByName(name, namespace string) (*api.Pod, bool) {
+func (fnh *fakeNetworkHost) GetPodByName(name, namespace string) (*v1.Pod, bool) {
 	return nil, false
 }
 
@@ -132,6 +137,14 @@ func (fnh *fakeNetworkHost) GetKubeClient() clientset.Interface {
 
 func (fnh *fakeNetworkHost) GetRuntime() kubecontainer.Runtime {
 	return fnh.runtime
+}
+
+func (fnh *fakeNetworkHost) GetNetNS(containerID string) (string, error) {
+	return fnh.GetRuntime().GetNetNS(kubecontainer.ContainerID{Type: "test", ID: containerID})
+}
+
+func (fnh *fakeNetworkHost) SupportsLegacyFeatures() bool {
+	return true
 }
 
 func TestCNIPlugin(t *testing.T) {
@@ -160,6 +173,9 @@ func TestCNIPlugin(t *testing.T) {
 		},
 	}
 
+	mockLoCNI := &mock_cni.MockCNI{}
+	// TODO mock for the test plugin too
+
 	tmpDir := utiltesting.MkTmpdirOrDie("cni-test")
 	testNetworkConfigPath := path.Join(tmpDir, "plugins", "net", "cni")
 	testVendorCNIDirPrefix := tmpDir
@@ -176,7 +192,7 @@ func TestCNIPlugin(t *testing.T) {
 		NetnsPath: "/proc/12345/ns/net",
 	}}
 
-	plugins := probeNetworkPluginsWithVendorCNIDirPrefix(path.Join(testNetworkConfigPath, pluginName), testVendorCNIDirPrefix)
+	plugins := probeNetworkPluginsWithVendorCNIDirPrefix(path.Join(testNetworkConfigPath, pluginName), "", testVendorCNIDirPrefix)
 	if len(plugins) != 1 {
 		t.Fatalf("Expected only one network plugin, got %d", len(plugins))
 	}
@@ -189,14 +205,17 @@ func TestCNIPlugin(t *testing.T) {
 		t.Fatalf("Not a CNI network plugin!")
 	}
 	cniPlugin.execer = fexec
+	cniPlugin.loNetwork.CNIConfig = mockLoCNI
 
-	plug, err := network.InitNetworkPlugin(plugins, "cni", NewFakeHost(nil, pods), componentconfig.HairpinNone, "10.0.0.0/8")
+	mockLoCNI.On("AddNetwork", cniPlugin.loNetwork.NetworkConfig, mock.AnythingOfType("*libcni.RuntimeConf")).Return(&cnitypes.Result{IP4: &cnitypes.IPConfig{IP: net.IPNet{IP: []byte{127, 0, 0, 1}}}}, nil)
+
+	plug, err := network.InitNetworkPlugin(plugins, "cni", NewFakeHost(nil, pods), componentconfig.HairpinNone, "10.0.0.0/8", network.UseDefaultMTU)
 	if err != nil {
 		t.Fatalf("Failed to select the desired plugin: %v", err)
 	}
 
 	// Set up the pod
-	err = plug.SetUpPod("podNamespace", "podName", containerID)
+	err = plug.SetUpPod("podNamespace", "podName", containerID, map[string]string{})
 	if err != nil {
 		t.Errorf("Expected nil: %v", err)
 	}
@@ -230,5 +249,13 @@ func TestCNIPlugin(t *testing.T) {
 	expectedOutput = "DEL /proc/12345/ns/net podNamespace podName test_infra_container"
 	if string(output) != expectedOutput {
 		t.Errorf("Mismatch in expected output for setup hook. Expected '%s', got '%s'", expectedOutput, string(output))
+	}
+
+	mockLoCNI.AssertExpectations(t)
+}
+
+func TestLoNetNonNil(t *testing.T) {
+	if conf := getLoNetwork("", ""); conf == nil {
+		t.Error("Expected non-nil lo network")
 	}
 }

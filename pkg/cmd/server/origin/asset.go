@@ -10,8 +10,15 @@ import (
 	"time"
 
 	"github.com/elazarl/go-bindata-assetfs"
-	"github.com/emicklei/go-restful"
 	"github.com/golang/glog"
+
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
+	utilwait "k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apiserver/pkg/server"
+	kapi "k8s.io/kubernetes/pkg/api"
+	kversion "k8s.io/kubernetes/pkg/version"
 
 	"github.com/openshift/origin/pkg/api"
 	"github.com/openshift/origin/pkg/api/latest"
@@ -21,51 +28,24 @@ import (
 	"github.com/openshift/origin/pkg/cmd/server/crypto"
 	cmdutil "github.com/openshift/origin/pkg/cmd/util"
 	oversion "github.com/openshift/origin/pkg/version"
-
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/apimachinery/registered"
-	"k8s.io/kubernetes/pkg/util/sets"
-	utilwait "k8s.io/kubernetes/pkg/util/wait"
-	kversion "k8s.io/kubernetes/pkg/version"
 )
 
-// InstallAPI adds handlers for serving static assets into the provided mux,
-// then returns an array of strings indicating what endpoints were started
-// (these are format strings that will expect to be sent a single string value).
-func (c *AssetConfig) InstallAPI(container *restful.Container) ([]string, error) {
-	publicURL, err := url.Parse(c.Options.PublicURL)
-	if err != nil {
-		return nil, err
+// WithAssets decorates a handler by serving static assets for the subpath of
+// the public URL and passing through all other requests to the given handler.
+func (c *AssetConfig) WithAssets(handler http.Handler) (http.Handler, error) {
+	if c == nil {
+		return handler, nil
 	}
 
-	err = c.addHandlers(container.ServeMux)
-	if err != nil {
-		return nil, err
-	}
-
-	return []string{fmt.Sprintf("Started Web Console %%s%s", publicURL.Path)}, nil
+	return c.addHandlers(handler)
 }
 
 // Run starts an http server for the static assets listening on the configured
 // bind address
 func (c *AssetConfig) Run() {
-	publicURL, err := url.Parse(c.Options.PublicURL)
+	mux, err := c.addHandlers(nil)
 	if err != nil {
 		glog.Fatal(err)
-	}
-
-	mux := http.NewServeMux()
-	err = c.addHandlers(mux)
-	if err != nil {
-		glog.Fatal(err)
-	}
-
-	if publicURL.Path != "/" {
-		mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
-			http.Redirect(w, req, publicURL.Path, http.StatusFound)
-		})
 	}
 
 	timeout := c.Options.ServingInfo.RequestTimeoutSeconds
@@ -92,6 +72,8 @@ func (c *AssetConfig) Run() {
 			server.TLSConfig = crypto.SecureTLSConfig(&tls.Config{
 				// Set SNI certificate func
 				GetCertificate: cmdutil.GetCertificateFunc(extraCerts),
+				MinVersion:     crypto.TLSVersionOrDie(c.Options.ServingInfo.MinTLSVersion),
+				CipherSuites:   crypto.CipherSuitesOrDie(c.Options.ServingInfo.CipherSuites),
 			})
 			glog.Infof("Web console listening at https://%s", c.Options.ServingInfo.BindAddress)
 			glog.Fatal(cmdutil.ListenAndServeTLS(server, c.Options.ServingInfo.BindNetwork, c.Options.ServingInfo.ServerCert.CertFile, c.Options.ServingInfo.ServerCert.KeyFile))
@@ -135,6 +117,8 @@ func (c *AssetConfig) buildAssetHandler() (http.Handler, error) {
 	// any asset related routing (HTML5ModeHandler and FileServer)
 	handler = assets.CacheControlHandler(oversion.Get().GitCommit, handler)
 
+	handler = assets.SecurityHeadersHandler(handler)
+
 	// Gzip first so that inner handlers can react to the addition of the Vary header
 	handler = assets.GzipHandler(handler)
 
@@ -154,20 +138,34 @@ func extensionPropertyArray(extensionProperties map[string]string) []assets.WebC
 	return extensionPropsArray
 }
 
-func (c *AssetConfig) addHandlers(mux *http.ServeMux) error {
-	assetHandler, err := c.buildAssetHandler()
-	if err != nil {
-		return err
-	}
-
+func (c *AssetConfig) addHandlers(handler http.Handler) (http.Handler, error) {
 	publicURL, err := url.Parse(c.Options.PublicURL)
 	if err != nil {
-		return err
+		return nil, err
+	}
+
+	mux := http.NewServeMux()
+	if handler != nil {
+		// colocated with other routes, so pass any unrecognized routes through to
+		// handler
+		mux.Handle("/", handler)
+	} else {
+		// standalone mode, so redirect any unrecognized routes to the console
+		if publicURL.Path != "/" {
+			mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+				http.Redirect(w, req, publicURL.Path, http.StatusFound)
+			})
+		}
+	}
+
+	assetHandler, err := c.buildAssetHandler()
+	if err != nil {
+		return nil, err
 	}
 
 	masterURL, err := url.Parse(c.Options.MasterPublicURL)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Web console assets
@@ -176,9 +174,9 @@ func (c *AssetConfig) addHandlers(mux *http.ServeMux) error {
 	originResources := sets.NewString()
 	k8sResources := sets.NewString()
 
-	versions := []unversioned.GroupVersion{}
-	versions = append(versions, registered.GroupOrDie(api.GroupName).GroupVersions...)
-	versions = append(versions, registered.GroupOrDie(kapi.GroupName).GroupVersions...)
+	versions := []schema.GroupVersion{}
+	versions = append(versions, kapi.Registry.GroupOrDie(api.GroupName).GroupVersions...)
+	versions = append(versions, kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions...)
 	deadOriginVersions := sets.NewString(configapi.DeadOpenShiftAPILevels...)
 	deadKubernetesVersions := sets.NewString(configapi.DeadKubernetesAPILevels...)
 	for _, version := range versions {
@@ -206,20 +204,21 @@ func (c *AssetConfig) addHandlers(mux *http.ServeMux) error {
 		}
 	}
 	if commonResources.Len() > 0 {
-		return fmt.Errorf("Resources for kubernetes and origin types intersect: %v", commonResources.List())
+		return nil, fmt.Errorf("Resources for kubernetes and origin types intersect: %v", commonResources.List())
 	}
 
 	// Generated web console config and server version
 	config := assets.WebConsoleConfig{
 		APIGroupAddr:          masterURL.Host,
-		APIGroupPrefix:        KubernetesAPIGroupPrefix,
+		APIGroupPrefix:        server.APIGroupPrefix,
 		MasterAddr:            masterURL.Host,
-		MasterPrefix:          OpenShiftAPIPrefix,
+		MasterPrefix:          api.Prefix,
 		MasterResources:       originResources.List(),
 		KubernetesAddr:        masterURL.Host,
-		KubernetesPrefix:      KubernetesAPIPrefix,
+		KubernetesPrefix:      server.DefaultLegacyAPIPrefix,
 		KubernetesResources:   k8sResources.List(),
 		OAuthAuthorizeURI:     OpenShiftOAuthAuthorizeURL(masterURL.String()),
+		OAuthTokenURI:         OpenShiftOAuthTokenURL(masterURL.String()),
 		OAuthRedirectBase:     c.Options.PublicURL,
 		OAuthClientID:         OpenShiftWebConsoleClientID,
 		LogoutURI:             c.Options.LogoutURL,
@@ -239,33 +238,37 @@ func (c *AssetConfig) addHandlers(mux *http.ServeMux) error {
 	}
 	configPath := path.Join(publicURL.Path, "config.js")
 	configHandler, err := assets.GeneratedConfigHandler(config, versionInfo, extensionProps)
+	configHandler = assets.SecurityHeadersHandler(configHandler)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	mux.Handle(configPath, assets.GzipHandler(configHandler))
 
 	// Extension scripts
 	extScriptsPath := path.Join(publicURL.Path, "scripts/extensions.js")
 	extScriptsHandler, err := assets.ExtensionScriptsHandler(c.Options.ExtensionScripts, c.Options.ExtensionDevelopment)
+	extScriptsHandler = assets.SecurityHeadersHandler(extScriptsHandler)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	mux.Handle(extScriptsPath, assets.GzipHandler(extScriptsHandler))
 
 	// Extension stylesheets
 	extStylesheetsPath := path.Join(publicURL.Path, "styles/extensions.css")
 	extStylesheetsHandler, err := assets.ExtensionStylesheetsHandler(c.Options.ExtensionStylesheets, c.Options.ExtensionDevelopment)
+	extStylesheetsHandler = assets.SecurityHeadersHandler(extStylesheetsHandler)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	mux.Handle(extStylesheetsPath, assets.GzipHandler(extStylesheetsHandler))
 
 	// Extension files
 	for _, extConfig := range c.Options.Extensions {
-		extPath := path.Join(publicURL.Path, "extensions", extConfig.Name) + "/"
+		extBasePath := path.Join(publicURL.Path, "extensions", extConfig.Name)
+		extPath := extBasePath + "/"
 		extHandler := assets.AssetExtensionHandler(extConfig.SourceDirectory, extPath, extConfig.HTML5Mode)
-		mux.Handle(extPath, http.StripPrefix(extPath, extHandler))
+		mux.Handle(extPath, http.StripPrefix(extBasePath, extHandler))
 	}
 
-	return nil
+	return mux, nil
 }

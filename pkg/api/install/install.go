@@ -1,20 +1,30 @@
 package install
 
 import (
+	"k8s.io/apimachinery/pkg/conversion"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/conversion"
+	kv1 "k8s.io/kubernetes/pkg/api/v1"
 
 	// we have a strong dependency on kube objects for deployments and scale
 	_ "k8s.io/kubernetes/pkg/api/install"
+	_ "k8s.io/kubernetes/pkg/apis/apps/install"
+	_ "k8s.io/kubernetes/pkg/apis/authentication/install"
+	_ "k8s.io/kubernetes/pkg/apis/authorization/install"
 	_ "k8s.io/kubernetes/pkg/apis/autoscaling/install"
 	_ "k8s.io/kubernetes/pkg/apis/batch/install"
+	_ "k8s.io/kubernetes/pkg/apis/certificates/install"
 	_ "k8s.io/kubernetes/pkg/apis/extensions/install"
+	_ "k8s.io/kubernetes/pkg/apis/policy/install"
+	_ "k8s.io/kubernetes/pkg/apis/rbac/install"
+	_ "k8s.io/kubernetes/pkg/apis/settings/install"
+	_ "k8s.io/kubernetes/pkg/apis/storage/install"
 
 	_ "github.com/openshift/origin/pkg/authorization/api/install"
 	_ "github.com/openshift/origin/pkg/build/api/install"
 	_ "github.com/openshift/origin/pkg/cmd/server/api/install"
 	_ "github.com/openshift/origin/pkg/deploy/api/install"
 	_ "github.com/openshift/origin/pkg/image/api/install"
+	_ "github.com/openshift/origin/pkg/kubecompat/apis/extensions/v1beta1"
 	_ "github.com/openshift/origin/pkg/oauth/api/install"
 	_ "github.com/openshift/origin/pkg/project/api/install"
 	_ "github.com/openshift/origin/pkg/quota/api/install"
@@ -24,10 +34,9 @@ import (
 	_ "github.com/openshift/origin/pkg/template/api/install"
 	_ "github.com/openshift/origin/pkg/user/api/install"
 
-	kv1 "k8s.io/kubernetes/pkg/api/v1"
-
-	watchapi "k8s.io/kubernetes/pkg/watch"
-	watchv1 "k8s.io/kubernetes/pkg/watch/versioned"
+	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	watchapi "k8s.io/apimachinery/pkg/watch"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	buildapi "github.com/openshift/origin/pkg/build/api"
@@ -56,34 +65,33 @@ func init() {
 	// TODO: generate one of these for every external API group - this is to prove the impact
 	kapi.Scheme.AddGenericConversionFunc(func(objA, objB interface{}, s conversion.Scope) (bool, error) {
 		switch a := objA.(type) {
-
-		case *watchv1.Event:
+		case *metav1.WatchEvent:
 			switch b := objB.(type) {
-			case *watchv1.InternalEvent:
-				return true, watchv1.Convert_versioned_Event_to_versioned_InternalEvent(a, b, s)
+			case *metav1.InternalEvent:
+				return true, metav1.Convert_versioned_Event_to_versioned_InternalEvent(a, b, s)
 			case *watchapi.Event:
-				return true, watchv1.Convert_versioned_Event_to_watch_Event(a, b, s)
+				return true, metav1.Convert_versioned_Event_to_watch_Event(a, b, s)
 			}
-		case *watchv1.InternalEvent:
+		case *metav1.InternalEvent:
 			switch b := objB.(type) {
-			case *watchv1.Event:
-				return true, watchv1.Convert_versioned_InternalEvent_to_versioned_Event(a, b, s)
+			case *metav1.WatchEvent:
+				return true, metav1.Convert_versioned_InternalEvent_to_versioned_Event(a, b, s)
 			}
 		case *watchapi.Event:
 			switch b := objB.(type) {
-			case *watchv1.Event:
-				return true, watchv1.Convert_watch_Event_to_versioned_Event(a, b, s)
+			case *metav1.WatchEvent:
+				return true, metav1.Convert_watch_Event_to_versioned_Event(a, b, s)
 			}
 
-		case *kapi.ListOptions:
+		case *metainternal.ListOptions:
 			switch b := objB.(type) {
-			case *kv1.ListOptions:
-				return true, kv1.Convert_api_ListOptions_To_v1_ListOptions(a, b, s)
+			case *metav1.ListOptions:
+				return true, metainternal.Convert_internalversion_ListOptions_To_v1_ListOptions(a, b, s)
 			}
-		case *kv1.ListOptions:
+		case *metav1.ListOptions:
 			switch b := objB.(type) {
-			case *kapi.ListOptions:
-				return true, kv1.Convert_v1_ListOptions_To_api_ListOptions(a, b, s)
+			case *metainternal.ListOptions:
+				return true, metainternal.Convert_v1_ListOptions_To_internalversion_ListOptions(a, b, s)
 			}
 
 		case *kv1.ServiceAccount:
@@ -250,6 +258,50 @@ func init() {
 				return true, templatev1.Convert_api_TemplateList_To_v1_TemplateList(a, b, s)
 			}
 
+		case *templatev1.TemplateInstance:
+			switch b := objB.(type) {
+			case *templateapi.TemplateInstance:
+				return true, templatev1.Convert_v1_TemplateInstance_To_api_TemplateInstance(a, b, s)
+			}
+		case *templateapi.TemplateInstance:
+			switch b := objB.(type) {
+			case *templatev1.TemplateInstance:
+				return true, templatev1.Convert_api_TemplateInstance_To_v1_TemplateInstance(a, b, s)
+			}
+
+		case *templatev1.TemplateInstanceList:
+			switch b := objB.(type) {
+			case *templateapi.TemplateInstanceList:
+				return true, templatev1.Convert_v1_TemplateInstanceList_To_api_TemplateInstanceList(a, b, s)
+			}
+		case *templateapi.TemplateInstanceList:
+			switch b := objB.(type) {
+			case *templatev1.TemplateInstanceList:
+				return true, templatev1.Convert_api_TemplateInstanceList_To_v1_TemplateInstanceList(a, b, s)
+			}
+
+		case *templatev1.BrokerTemplateInstance:
+			switch b := objB.(type) {
+			case *templateapi.BrokerTemplateInstance:
+				return true, templatev1.Convert_v1_BrokerTemplateInstance_To_api_BrokerTemplateInstance(a, b, s)
+			}
+		case *templateapi.BrokerTemplateInstance:
+			switch b := objB.(type) {
+			case *templatev1.BrokerTemplateInstance:
+				return true, templatev1.Convert_api_BrokerTemplateInstance_To_v1_BrokerTemplateInstance(a, b, s)
+			}
+
+		case *templatev1.BrokerTemplateInstanceList:
+			switch b := objB.(type) {
+			case *templateapi.BrokerTemplateInstanceList:
+				return true, templatev1.Convert_v1_BrokerTemplateInstanceList_To_api_BrokerTemplateInstanceList(a, b, s)
+			}
+		case *templateapi.BrokerTemplateInstanceList:
+			switch b := objB.(type) {
+			case *templatev1.BrokerTemplateInstanceList:
+				return true, templatev1.Convert_api_BrokerTemplateInstanceList_To_v1_BrokerTemplateInstanceList(a, b, s)
+			}
+
 		case *deployv1.DeploymentConfig:
 			switch b := objB.(type) {
 			case *deployapi.DeploymentConfig:
@@ -281,6 +333,17 @@ func init() {
 			switch b := objB.(type) {
 			case *imagev1.Image:
 				return true, imagev1.Convert_api_Image_To_v1_Image(a, b, s)
+			}
+
+		case *imagev1.ImageSignature:
+			switch b := objB.(type) {
+			case *imageapi.ImageSignature:
+				return true, imagev1.Convert_v1_ImageSignature_To_api_ImageSignature(a, b, s)
+			}
+		case *imageapi.ImageSignature:
+			switch b := objB.(type) {
+			case *imagev1.ImageSignature:
+				return true, imagev1.Convert_api_ImageSignature_To_v1_ImageSignature(a, b, s)
 			}
 
 		case *imagev1.ImageStreamImport:
@@ -435,6 +498,17 @@ func init() {
 			switch b := objB.(type) {
 			case *authorizationv1.IsPersonalSubjectAccessReview:
 				return true, authorizationv1.Convert_api_IsPersonalSubjectAccessReview_To_v1_IsPersonalSubjectAccessReview(a, b, s)
+			}
+
+		case *authorizationv1.RoleBindingRestriction:
+			switch b := objB.(type) {
+			case *authorizationapi.RoleBindingRestriction:
+				return true, authorizationv1.Convert_v1_RoleBindingRestriction_To_api_RoleBindingRestriction(a, b, s)
+			}
+		case *authorizationapi.RoleBindingRestriction:
+			switch b := objB.(type) {
+			case *authorizationv1.RoleBindingRestriction:
+				return true, authorizationv1.Convert_api_RoleBindingRestriction_To_v1_RoleBindingRestriction(a, b, s)
 			}
 
 		case *userv1.User:

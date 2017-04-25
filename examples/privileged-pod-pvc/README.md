@@ -4,7 +4,7 @@
 
 ##Purpose
 
-This example gives a basic template for attaching a persistent storage volume to a pod. It provides an end to end setup that begins with the _cluster-admin_ making the persistent volume availble and a _basic-user_ requesting storage from a **privileged** pod.
+This example gives a basic template for attaching a persistent storage volume to a pod. It provides an end to end setup that begins with the _cluster-admin_ making the persistent volume available and a _basic-user_ requesting storage from a **privileged** pod.
 
 _If the pod is not run as privileged, skip the **Edit Privileged scc** section_
 
@@ -56,7 +56,7 @@ _**As admin:**_
 
 ```bash
 $ oc create -f gluster-endpoints.yaml
-$ oc create -f gluster-service.yaml
+$ oc create -f gluster-endpoints-service.yaml
 $ oc create -f gluster-pv.yaml
 ```
 ###Make the volume available within the user project
@@ -68,7 +68,7 @@ Create the PersistentVolumeClaim
 
 Create the privileged pod
 
-`$ oc create -f gluster-priv-pod.yaml`
+`$ oc create -f gluster-nginx-priv-pod.yaml`
 
 
 ##Confirm the Setup was Successful
@@ -109,10 +109,10 @@ Examine the output for the gluster volume.
 
 **That's it!**
 
-##Relevent Origin Docs
+##Relevant Origin Docs
 
 For more info on:
 
 * Setting pv/pvc's for other volume providers see [Configuring Persistent Storage](https://docs.openshift.org/latest/install_config/persistent_storage/index.html)
-* SCC's, see [Manageing Security Context Contraints]()
+* SCC's, see [Managing Security Context Contraints](https://docs.openshift.org/latest/admin_guide/manage_scc.html)
 

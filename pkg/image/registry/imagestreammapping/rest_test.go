@@ -7,19 +7,21 @@ import (
 	"strings"
 	"testing"
 
+	etcd "github.com/coreos/etcd/clientv3"
 	"golang.org/x/net/context"
 
-	etcd "github.com/coreos/etcd/client"
-
+	"k8s.io/apimachinery/pkg/api/errors"
+	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apiserver/pkg/authentication/user"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/storage/etcd/etcdtest"
+	etcdtesting "k8s.io/apiserver/pkg/storage/etcd/testing"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/registry/registrytest"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/storage/etcd/etcdtest"
-	etcdtesting "k8s.io/kubernetes/pkg/storage/etcd/testing"
-	"k8s.io/kubernetes/pkg/watch"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	"github.com/openshift/origin/pkg/authorization/registry/subjectaccessreview"
@@ -34,21 +36,22 @@ import (
 	_ "github.com/openshift/origin/pkg/api/install"
 )
 
-var testDefaultRegistry = api.DefaultRegistryFunc(func() (string, bool) { return "defaultregistry:5000", true })
+const testDefaultRegistryURL = "defaultregistry:5000"
+
+var testDefaultRegistry = api.DefaultRegistryFunc(func() (string, bool) { return testDefaultRegistryURL, true })
 
 type fakeSubjectAccessReviewRegistry struct {
 }
 
 var _ subjectaccessreview.Registry = &fakeSubjectAccessReviewRegistry{}
 
-func (f *fakeSubjectAccessReviewRegistry) CreateSubjectAccessReview(ctx kapi.Context, subjectAccessReview *authorizationapi.SubjectAccessReview) (*authorizationapi.SubjectAccessReviewResponse, error) {
+func (f *fakeSubjectAccessReviewRegistry) CreateSubjectAccessReview(ctx apirequest.Context, subjectAccessReview *authorizationapi.SubjectAccessReview) (*authorizationapi.SubjectAccessReviewResponse, error) {
 	return nil, nil
 }
 
-func setup(t *testing.T) (etcd.KeysAPI, *etcdtesting.EtcdTestServer, *REST) {
-
+func setup(t *testing.T) (etcd.KV, *etcdtesting.EtcdTestServer, *REST) {
 	etcdStorage, server := registrytest.NewEtcdStorage(t, "")
-	etcdClient := etcd.NewKeysAPI(server.Client)
+	etcdClient := etcd.NewKV(server.V3Client)
 
 	imageStorage, err := imageetcd.NewREST(restoptions.NewSimpleGetter(etcdStorage))
 	if err != nil {
@@ -69,23 +72,26 @@ func setup(t *testing.T) (etcd.KeysAPI, *etcdtesting.EtcdTestServer, *REST) {
 
 func validImageStream() *api.ImageStream {
 	return &api.ImageStream{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: "test",
 		},
 	}
 }
 
+const testImageID = "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
+
 func validNewMappingWithName() *api.ImageStreamMapping {
 	return &api.ImageStreamMapping{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "default",
 			Name:      "somerepo",
 		},
 		Image: api.Image{
-			ObjectMeta: kapi.ObjectMeta{
-				Name: "imageID1",
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        testImageID,
+				Annotations: map[string]string{api.ManagedByOpenShiftAnnotation: "true"},
 			},
-			DockerImageReference: "localhost:5000/default/somerepo:imageID1",
+			DockerImageReference: "localhost:5000/default/somerepo@" + testImageID,
 			DockerImageMetadata: api.DockerImage{
 				Config: &api.DockerConfig{
 					Cmd:          []string{"ls", "/"},
@@ -108,7 +114,7 @@ func TestCreateConflictingNamespace(t *testing.T) {
 	mapping := validNewMappingWithName()
 	mapping.Namespace = "some-value"
 
-	ch, err := storage.Create(kapi.WithNamespace(kapi.NewContext(), "legal-name"), mapping)
+	ch, err := storage.Create(apirequest.WithNamespace(apirequest.NewContext(), "legal-name"), mapping)
 	if ch != nil {
 		t.Error("Expected a nil obj, but we got a value")
 	}
@@ -125,7 +131,7 @@ func TestCreateImageStreamNotFoundWithName(t *testing.T) {
 	_, server, storage := setup(t)
 	defer server.Terminate(t)
 
-	obj, err := storage.Create(kapi.NewDefaultContext(), validNewMappingWithName())
+	obj, err := storage.Create(apirequest.NewDefaultContext(), validNewMappingWithName())
 	if obj != nil {
 		t.Errorf("Unexpected non-nil obj %#v", obj)
 	}
@@ -152,10 +158,10 @@ func TestCreateSuccessWithName(t *testing.T) {
 	defer server.Terminate(t)
 
 	initialRepo := &api.ImageStream{
-		ObjectMeta: kapi.ObjectMeta{Namespace: "default", Name: "somerepo"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "somerepo"},
 	}
 
-	_, err := client.Create(
+	_, err := client.Put(
 		context.TODO(),
 		etcdtest.AddPrefix("/imagestreams/default/somerepo"),
 		runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), initialRepo),
@@ -164,15 +170,17 @@ func TestCreateSuccessWithName(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
+	ctx := apirequest.WithUser(apirequest.NewDefaultContext(), &user.DefaultInfo{})
+
 	mapping := validNewMappingWithName()
-	_, err = storage.Create(kapi.NewDefaultContext(), mapping)
+	_, err = storage.Create(ctx, mapping)
 	if err != nil {
 		t.Fatalf("Unexpected error creating mapping: %#v", err)
 	}
 
-	image, err := storage.imageRegistry.GetImage(kapi.NewDefaultContext(), "imageID1")
+	image, err := storage.imageRegistry.GetImage(ctx, testImageID, &metav1.GetOptions{})
 	if err != nil {
-		t.Errorf("Unexpected error retrieving image: %#v", err)
+		t.Fatalf("Unexpected error retrieving image: %#v", err)
 	}
 	if e, a := mapping.Image.DockerImageReference, image.DockerImageReference; e != a {
 		t.Errorf("Expected %s, got %s", e, a)
@@ -181,47 +189,37 @@ func TestCreateSuccessWithName(t *testing.T) {
 		t.Errorf("Expected %#v, got %#v", mapping.Image, image)
 	}
 
-	repo, err := storage.imageStreamRegistry.GetImageStream(kapi.NewDefaultContext(), "somerepo")
+	repo, err := storage.imageStreamRegistry.GetImageStream(ctx, "somerepo", &metav1.GetOptions{})
 	if err != nil {
 		t.Errorf("Unexpected non-nil err: %#v", err)
 	}
-	if e, a := "imageID1", repo.Status.Tags["latest"].Items[0].Image; e != a {
+	if e, a := testImageID, repo.Status.Tags["latest"].Items[0].Image; e != a {
 		t.Errorf("Expected %s, got %s", e, a)
 	}
 }
 
 func TestAddExistingImageWithNewTag(t *testing.T) {
-	imageID := "8d812da98d6dd61620343f1a5bf6585b34ad6ed16e5c5f7c7216a525d6aeb772"
+	imageID := "sha256:8d812da98d6dd61620343f1a5bf6585b34ad6ed16e5c5f7c7216a525d6aeb772"
 	existingRepo := &api.ImageStream{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      "somerepo",
 			Namespace: "default",
 		},
 		Spec: api.ImageStreamSpec{
-			DockerImageRepository: "localhost:5000/someproject/somerepo",
-			/*
-				Tags: map[string]api.TagReference{
-					"existingTag": {
-						From: &kapi.ObjectReference{
-							Kind: "ImageStreamTag",
-
-						Tag: "existingTag", Reference: imageID},
-				},
-			*/
+			DockerImageRepository: "localhost:5000/default/somerepo",
 		},
 		Status: api.ImageStreamStatus{
 			Tags: map[string]api.TagEventList{
-				"existingTag": {Items: []api.TagEvent{{DockerImageReference: "localhost:5000/someproject/somerepo:" + imageID}}},
+				"existingTag": {Items: []api.TagEvent{{DockerImageReference: "localhost:5000/somens/somerepo@" + imageID}}},
 			},
 		},
 	}
 
 	existingImage := &api.Image{
-		ObjectMeta: kapi.ObjectMeta{
-			Name:      imageID,
-			Namespace: "default",
+		ObjectMeta: metav1.ObjectMeta{
+			Name: imageID,
 		},
-		DockerImageReference: "localhost:5000/someproject/somerepo:" + imageID,
+		DockerImageReference: "localhost:5000/somens/somerepo@" + imageID,
 		DockerImageMetadata: api.DockerImage{
 			Config: &api.DockerConfig{
 				Cmd:          []string{"ls", "/"},
@@ -237,7 +235,7 @@ func TestAddExistingImageWithNewTag(t *testing.T) {
 	client, server, storage := setup(t)
 	defer server.Terminate(t)
 
-	_, err := client.Create(
+	_, err := client.Put(
 		context.TODO(),
 		etcdtest.AddPrefix("/imagestreams/default/somerepo"),
 		runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), existingRepo),
@@ -246,27 +244,161 @@ func TestAddExistingImageWithNewTag(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	_, err = client.Create(
+	_, err = client.Put(
 		context.TODO(),
-		etcdtest.AddPrefix("/images/default/"+imageID), runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), existingImage),
+		etcdtest.AddPrefix("/images/"+imageID), runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), existingImage),
 	)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
 	mapping := api.ImageStreamMapping{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "somerepo",
+		},
 		Image: *existingImage,
 		Tag:   "latest",
 	}
-	_, err = storage.Create(kapi.NewDefaultContext(), &mapping)
-	if !errors.IsInvalid(err) {
-		t.Fatalf("Unexpected non-error creating mapping: %#v", err)
+	ctx := apirequest.NewDefaultContext()
+	_, err = storage.Create(ctx, &mapping)
+	if err != nil {
+		t.Errorf("Unexpected error creating image stream mapping%v", err)
+	}
+
+	image, err := storage.imageRegistry.GetImage(ctx, imageID, &metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("Unexpected error retrieving image: %#v", err)
+	}
+	if e, a := mapping.Image.DockerImageReference, image.DockerImageReference; e != a {
+		t.Errorf("Expected %s, got %s", e, a)
+	}
+	if !reflect.DeepEqual(mapping.Image.DockerImageMetadata, image.DockerImageMetadata) {
+		t.Errorf("Expected %#v, got %#v", mapping.Image, image)
+	}
+
+	repo, err := storage.imageStreamRegistry.GetImageStream(ctx, "somerepo", &metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Unexpected non-nil err: %#v", err)
+	}
+	if e, a := imageID, repo.Status.Tags["latest"].Items[0].Image; e != a {
+		t.Errorf("Expected %s, got %s", e, a)
+	}
+	tagEvent := api.LatestTaggedImage(repo, "latest")
+	if e, a := image.DockerImageReference, tagEvent.DockerImageReference; e != a {
+		t.Errorf("Unexpected tracking dockerImageReference: %q != %q", a, e)
+	}
+
+	pullSpec, ok := api.ResolveLatestTaggedImage(repo, "latest")
+	if !ok {
+		t.Fatalf("Failed to resolv latest tagged image")
+	}
+	if e, a := image.DockerImageReference, pullSpec; e != a {
+		t.Errorf("Expected %s, got %s", e, a)
+	}
+}
+
+func TestAddExistingImageOverridingDockerImageReference(t *testing.T) {
+	imageID := "sha256:8d812da98d6dd61620343f1a5bf6585b34ad6ed16e5c5f7c7216a525d6aeb772"
+	newRepo := &api.ImageStream{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "newrepo",
+		},
+		Spec: api.ImageStreamSpec{
+			DockerImageRepository: "localhost:5000/default/newrepo",
+		},
+		Status: api.ImageStreamStatus{
+			DockerImageRepository: "localhost:5000/default/newrepo",
+		},
+	}
+	existingImage := &api.Image{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        imageID,
+			Annotations: map[string]string{api.ManagedByOpenShiftAnnotation: "true"},
+		},
+		DockerImageReference: "localhost:5000/someproject/somerepo@" + imageID,
+		DockerImageMetadata: api.DockerImage{
+			Config: &api.DockerConfig{
+				Cmd:          []string{"ls", "/"},
+				Env:          []string{"a=1"},
+				ExposedPorts: map[string]struct{}{"1234/tcp": {}},
+				Memory:       1234,
+				CPUShares:    99,
+				WorkingDir:   "/workingDir",
+			},
+		},
+	}
+
+	client, server, storage := setup(t)
+	defer server.Terminate(t)
+
+	_, err := client.Put(
+		context.TODO(),
+		etcdtest.AddPrefix("/imagestreams/default/newrepo"),
+		runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), newRepo),
+	)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	_, err = client.Put(
+		context.TODO(),
+		etcdtest.AddPrefix("/images/"+imageID), runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), existingImage),
+	)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	mapping := api.ImageStreamMapping{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "newrepo",
+		},
+		Image: *existingImage,
+		Tag:   "latest",
+	}
+	ctx := apirequest.NewDefaultContext()
+	_, err = storage.Create(ctx, &mapping)
+	if err != nil {
+		t.Fatalf("Unexpected error creating mapping: %#v", err)
+	}
+
+	image, err := storage.imageRegistry.GetImage(ctx, imageID, &metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("Unexpected error retrieving image: %#v", err)
+	}
+	if e, a := mapping.Image.DockerImageReference, image.DockerImageReference; e != a {
+		t.Errorf("Expected %s, got %s", e, a)
+	}
+	if !reflect.DeepEqual(mapping.Image.DockerImageMetadata, image.DockerImageMetadata) {
+		t.Errorf("Expected %#v, got %#v", mapping.Image, image)
+	}
+
+	repo, err := storage.imageStreamRegistry.GetImageStream(ctx, "newrepo", &metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Unexpected non-nil err: %#v", err)
+	}
+	if e, a := imageID, repo.Status.Tags["latest"].Items[0].Image; e != a {
+		t.Errorf("Expected %s, got %s", e, a)
+	}
+	tagEvent := api.LatestTaggedImage(repo, "latest")
+	if e, a := testDefaultRegistryURL+"/default/newrepo@"+imageID, tagEvent.DockerImageReference; e != a {
+		t.Errorf("Expected %s, got %s", e, a)
+	}
+	if tagEvent.DockerImageReference == image.DockerImageReference {
+		t.Errorf("Expected image stream to have dockerImageReference other than %q", image.DockerImageReference)
+	}
+
+	pullSpec, ok := api.ResolveLatestTaggedImage(repo, "latest")
+	if !ok {
+		t.Fatalf("Failed to resolv latest tagged image")
+	}
+	if e, a := testDefaultRegistryURL+"/default/newrepo@"+imageID, pullSpec; e != a {
+		t.Errorf("Expected %s, got %s", e, a)
 	}
 }
 
 func TestAddExistingImageAndTag(t *testing.T) {
 	existingRepo := &api.ImageStream{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      "somerepo",
 			Namespace: "default",
 		},
@@ -286,11 +418,11 @@ func TestAddExistingImageAndTag(t *testing.T) {
 	}
 
 	existingImage := &api.Image{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      "existingImage",
 			Namespace: "default",
 		},
-		DockerImageReference: "localhost:5000/someproject/somerepo:imageID1",
+		DockerImageReference: "localhost:5000/someproject/somerepo@" + testImageID,
 		DockerImageMetadata: api.DockerImage{
 			Config: &api.DockerConfig{
 				Cmd:          []string{"ls", "/"},
@@ -306,7 +438,7 @@ func TestAddExistingImageAndTag(t *testing.T) {
 	client, server, storage := setup(t)
 	defer server.Terminate(t)
 
-	_, err := client.Create(
+	_, err := client.Put(
 		context.TODO(),
 		etcdtest.AddPrefix("/imagestreams/default/somerepo"),
 		runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), existingRepo),
@@ -315,7 +447,7 @@ func TestAddExistingImageAndTag(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	_, err = client.Create(
+	_, err = client.Put(
 		context.TODO(),
 		etcdtest.AddPrefix("/images/default/existingImage"),
 		runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), existingImage),
@@ -328,7 +460,7 @@ func TestAddExistingImageAndTag(t *testing.T) {
 		Image: *existingImage,
 		Tag:   "existingTag",
 	}
-	_, err = storage.Create(kapi.NewDefaultContext(), &mapping)
+	_, err = storage.Create(apirequest.NewDefaultContext(), &mapping)
 	if !errors.IsInvalid(err) {
 		t.Fatalf("Unexpected non-error creating mapping: %#v", err)
 	}
@@ -339,7 +471,7 @@ func TestTrackingTags(t *testing.T) {
 	defer server.Terminate(t)
 
 	stream := &api.ImageStream{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "default",
 			Name:      "stream",
 		},
@@ -389,7 +521,7 @@ func TestTrackingTags(t *testing.T) {
 		},
 	}
 
-	_, err := client.Create(
+	_, err := client.Put(
 		context.TODO(),
 		etcdtest.AddPrefix("/imagestreams/default/stream"),
 		runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), stream),
@@ -399,14 +531,14 @@ func TestTrackingTags(t *testing.T) {
 	}
 
 	image := &api.Image{
-		ObjectMeta: kapi.ObjectMeta{
-			Name: "5678",
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "sha256:503c75e8121369581e5e5abe57b5a3f12db859052b217a8ea16eb86f4b5561a1",
 		},
-		DockerImageReference: "foo/bar@sha256:5678",
+		DockerImageReference: "foo/bar@sha256:503c75e8121369581e5e5abe57b5a3f12db859052b217a8ea16eb86f4b5561a1",
 	}
 
 	mapping := api.ImageStreamMapping{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "default",
 			Name:      "stream",
 		},
@@ -414,12 +546,14 @@ func TestTrackingTags(t *testing.T) {
 		Tag:   "2.0",
 	}
 
-	_, err = storage.Create(kapi.NewDefaultContext(), &mapping)
+	ctx := apirequest.WithUser(apirequest.NewDefaultContext(), &user.DefaultInfo{})
+
+	_, err = storage.Create(ctx, &mapping)
 	if err != nil {
 		t.Fatalf("Unexpected error creating mapping: %v", err)
 	}
 
-	stream, err = storage.imageStreamRegistry.GetImageStream(kapi.NewDefaultContext(), "stream")
+	stream, err = storage.imageStreamRegistry.GetImageStream(apirequest.NewDefaultContext(), "stream", &metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("error extracting updated stream: %v", err)
 	}
@@ -457,24 +591,24 @@ func TestCreateRetryUnrecoverable(t *testing.T) {
 	rest := &REST{
 		strategy: NewStrategy(testDefaultRegistry),
 		imageRegistry: &fakeImageRegistry{
-			createImage: func(ctx kapi.Context, image *api.Image) error {
+			createImage: func(ctx apirequest.Context, image *api.Image) error {
 				return nil
 			},
 		},
 		imageStreamRegistry: &fakeImageStreamRegistry{
-			getImageStream: func(ctx kapi.Context, id string) (*api.ImageStream, error) {
+			getImageStream: func(ctx apirequest.Context, id string, options *metav1.GetOptions) (*api.ImageStream, error) {
 				return validImageStream(), nil
 			},
-			listImageStreams: func(ctx kapi.Context, options *kapi.ListOptions) (*api.ImageStreamList, error) {
+			listImageStreams: func(ctx apirequest.Context, options *metainternal.ListOptions) (*api.ImageStreamList, error) {
 				s := validImageStream()
 				return &api.ImageStreamList{Items: []api.ImageStream{*s}}, nil
 			},
-			updateImageStreamStatus: func(ctx kapi.Context, repo *api.ImageStream) (*api.ImageStream, error) {
+			updateImageStreamStatus: func(ctx apirequest.Context, repo *api.ImageStream) (*api.ImageStream, error) {
 				return nil, errors.NewServiceUnavailable("unrecoverable error")
 			},
 		},
 	}
-	obj, err := rest.Create(kapi.NewDefaultContext(), validNewMappingWithName())
+	obj, err := rest.Create(apirequest.NewDefaultContext(), validNewMappingWithName())
 	if err == nil {
 		t.Errorf("expected an error")
 	}
@@ -491,12 +625,12 @@ func TestCreateRetryConflictNoTagDiff(t *testing.T) {
 	rest := &REST{
 		strategy: NewStrategy(testDefaultRegistry),
 		imageRegistry: &fakeImageRegistry{
-			createImage: func(ctx kapi.Context, image *api.Image) error {
+			createImage: func(ctx apirequest.Context, image *api.Image) error {
 				return nil
 			},
 		},
 		imageStreamRegistry: &fakeImageStreamRegistry{
-			getImageStream: func(ctx kapi.Context, id string) (*api.ImageStream, error) {
+			getImageStream: func(ctx apirequest.Context, id string, options *metav1.GetOptions) (*api.ImageStream, error) {
 				stream := validImageStream()
 				stream.Status = api.ImageStreamStatus{
 					Tags: map[string]api.TagEventList{
@@ -505,7 +639,7 @@ func TestCreateRetryConflictNoTagDiff(t *testing.T) {
 				}
 				return stream, nil
 			},
-			updateImageStreamStatus: func(ctx kapi.Context, repo *api.ImageStream) (*api.ImageStream, error) {
+			updateImageStreamStatus: func(ctx apirequest.Context, repo *api.ImageStream) (*api.ImageStream, error) {
 				// For the first update call, return a conflict to cause a retry of an
 				// image stream whose tags haven't changed.
 				if firstUpdate {
@@ -516,7 +650,7 @@ func TestCreateRetryConflictNoTagDiff(t *testing.T) {
 			},
 		},
 	}
-	obj, err := rest.Create(kapi.NewDefaultContext(), validNewMappingWithName())
+	obj, err := rest.Create(apirequest.NewDefaultContext(), validNewMappingWithName())
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -534,12 +668,12 @@ func TestCreateRetryConflictTagDiff(t *testing.T) {
 	rest := &REST{
 		strategy: NewStrategy(testDefaultRegistry),
 		imageRegistry: &fakeImageRegistry{
-			createImage: func(ctx kapi.Context, image *api.Image) error {
+			createImage: func(ctx apirequest.Context, image *api.Image) error {
 				return nil
 			},
 		},
 		imageStreamRegistry: &fakeImageStreamRegistry{
-			getImageStream: func(ctx kapi.Context, id string) (*api.ImageStream, error) {
+			getImageStream: func(ctx apirequest.Context, id string, options *metav1.GetOptions) (*api.ImageStream, error) {
 				// For the first get, return a stream with a latest tag pointing to "original"
 				if firstGet {
 					firstGet = false
@@ -560,7 +694,7 @@ func TestCreateRetryConflictTagDiff(t *testing.T) {
 				}
 				return stream, nil
 			},
-			updateImageStreamStatus: func(ctx kapi.Context, repo *api.ImageStream) (*api.ImageStream, error) {
+			updateImageStreamStatus: func(ctx apirequest.Context, repo *api.ImageStream) (*api.ImageStream, error) {
 				// For the first update, return a conflict so that the stream
 				// get/compare is retried.
 				if firstUpdate {
@@ -571,7 +705,7 @@ func TestCreateRetryConflictTagDiff(t *testing.T) {
 			},
 		},
 	}
-	obj, err := rest.Create(kapi.NewDefaultContext(), validNewMappingWithName())
+	obj, err := rest.Create(apirequest.NewDefaultContext(), validNewMappingWithName())
 	if err == nil {
 		t.Fatalf("expected an error")
 	}
@@ -584,61 +718,65 @@ func TestCreateRetryConflictTagDiff(t *testing.T) {
 }
 
 type fakeImageRegistry struct {
-	listImages  func(ctx kapi.Context, options *kapi.ListOptions) (*api.ImageList, error)
-	getImage    func(ctx kapi.Context, id string) (*api.Image, error)
-	createImage func(ctx kapi.Context, image *api.Image) error
-	deleteImage func(ctx kapi.Context, id string) error
-	watchImages func(ctx kapi.Context, options *kapi.ListOptions) (watch.Interface, error)
+	listImages  func(ctx apirequest.Context, options *metainternal.ListOptions) (*api.ImageList, error)
+	getImage    func(ctx apirequest.Context, id string, options *metav1.GetOptions) (*api.Image, error)
+	createImage func(ctx apirequest.Context, image *api.Image) error
+	deleteImage func(ctx apirequest.Context, id string) error
+	watchImages func(ctx apirequest.Context, options *metainternal.ListOptions) (watch.Interface, error)
+	updateImage func(ctx apirequest.Context, image *api.Image) (*api.Image, error)
 }
 
-func (f *fakeImageRegistry) ListImages(ctx kapi.Context, options *kapi.ListOptions) (*api.ImageList, error) {
+func (f *fakeImageRegistry) ListImages(ctx apirequest.Context, options *metainternal.ListOptions) (*api.ImageList, error) {
 	return f.listImages(ctx, options)
 }
-func (f *fakeImageRegistry) GetImage(ctx kapi.Context, id string) (*api.Image, error) {
-	return f.getImage(ctx, id)
+func (f *fakeImageRegistry) GetImage(ctx apirequest.Context, id string, options *metav1.GetOptions) (*api.Image, error) {
+	return f.getImage(ctx, id, options)
 }
-func (f *fakeImageRegistry) CreateImage(ctx kapi.Context, image *api.Image) error {
+func (f *fakeImageRegistry) CreateImage(ctx apirequest.Context, image *api.Image) error {
 	return f.createImage(ctx, image)
 }
-func (f *fakeImageRegistry) DeleteImage(ctx kapi.Context, id string) error {
+func (f *fakeImageRegistry) DeleteImage(ctx apirequest.Context, id string) error {
 	return f.deleteImage(ctx, id)
 }
-func (f *fakeImageRegistry) WatchImages(ctx kapi.Context, options *kapi.ListOptions) (watch.Interface, error) {
+func (f *fakeImageRegistry) WatchImages(ctx apirequest.Context, options *metainternal.ListOptions) (watch.Interface, error) {
 	return f.watchImages(ctx, options)
+}
+func (f *fakeImageRegistry) UpdateImage(ctx apirequest.Context, image *api.Image) (*api.Image, error) {
+	return f.updateImage(ctx, image)
 }
 
 type fakeImageStreamRegistry struct {
-	listImageStreams        func(ctx kapi.Context, options *kapi.ListOptions) (*api.ImageStreamList, error)
-	getImageStream          func(ctx kapi.Context, id string) (*api.ImageStream, error)
-	createImageStream       func(ctx kapi.Context, repo *api.ImageStream) (*api.ImageStream, error)
-	updateImageStream       func(ctx kapi.Context, repo *api.ImageStream) (*api.ImageStream, error)
-	updateImageStreamSpec   func(ctx kapi.Context, repo *api.ImageStream) (*api.ImageStream, error)
-	updateImageStreamStatus func(ctx kapi.Context, repo *api.ImageStream) (*api.ImageStream, error)
-	deleteImageStream       func(ctx kapi.Context, id string) (*unversioned.Status, error)
-	watchImageStreams       func(ctx kapi.Context, options *kapi.ListOptions) (watch.Interface, error)
+	listImageStreams        func(ctx apirequest.Context, options *metainternal.ListOptions) (*api.ImageStreamList, error)
+	getImageStream          func(ctx apirequest.Context, id string, options *metav1.GetOptions) (*api.ImageStream, error)
+	createImageStream       func(ctx apirequest.Context, repo *api.ImageStream) (*api.ImageStream, error)
+	updateImageStream       func(ctx apirequest.Context, repo *api.ImageStream) (*api.ImageStream, error)
+	updateImageStreamSpec   func(ctx apirequest.Context, repo *api.ImageStream) (*api.ImageStream, error)
+	updateImageStreamStatus func(ctx apirequest.Context, repo *api.ImageStream) (*api.ImageStream, error)
+	deleteImageStream       func(ctx apirequest.Context, id string) (*metav1.Status, error)
+	watchImageStreams       func(ctx apirequest.Context, options *metainternal.ListOptions) (watch.Interface, error)
 }
 
-func (f *fakeImageStreamRegistry) ListImageStreams(ctx kapi.Context, options *kapi.ListOptions) (*api.ImageStreamList, error) {
+func (f *fakeImageStreamRegistry) ListImageStreams(ctx apirequest.Context, options *metainternal.ListOptions) (*api.ImageStreamList, error) {
 	return f.listImageStreams(ctx, options)
 }
-func (f *fakeImageStreamRegistry) GetImageStream(ctx kapi.Context, id string) (*api.ImageStream, error) {
-	return f.getImageStream(ctx, id)
+func (f *fakeImageStreamRegistry) GetImageStream(ctx apirequest.Context, id string, options *metav1.GetOptions) (*api.ImageStream, error) {
+	return f.getImageStream(ctx, id, options)
 }
-func (f *fakeImageStreamRegistry) CreateImageStream(ctx kapi.Context, repo *api.ImageStream) (*api.ImageStream, error) {
+func (f *fakeImageStreamRegistry) CreateImageStream(ctx apirequest.Context, repo *api.ImageStream) (*api.ImageStream, error) {
 	return f.createImageStream(ctx, repo)
 }
-func (f *fakeImageStreamRegistry) UpdateImageStream(ctx kapi.Context, repo *api.ImageStream) (*api.ImageStream, error) {
+func (f *fakeImageStreamRegistry) UpdateImageStream(ctx apirequest.Context, repo *api.ImageStream) (*api.ImageStream, error) {
 	return f.updateImageStream(ctx, repo)
 }
-func (f *fakeImageStreamRegistry) UpdateImageStreamSpec(ctx kapi.Context, repo *api.ImageStream) (*api.ImageStream, error) {
+func (f *fakeImageStreamRegistry) UpdateImageStreamSpec(ctx apirequest.Context, repo *api.ImageStream) (*api.ImageStream, error) {
 	return f.updateImageStreamSpec(ctx, repo)
 }
-func (f *fakeImageStreamRegistry) UpdateImageStreamStatus(ctx kapi.Context, repo *api.ImageStream) (*api.ImageStream, error) {
+func (f *fakeImageStreamRegistry) UpdateImageStreamStatus(ctx apirequest.Context, repo *api.ImageStream) (*api.ImageStream, error) {
 	return f.updateImageStreamStatus(ctx, repo)
 }
-func (f *fakeImageStreamRegistry) DeleteImageStream(ctx kapi.Context, id string) (*unversioned.Status, error) {
+func (f *fakeImageStreamRegistry) DeleteImageStream(ctx apirequest.Context, id string) (*metav1.Status, error) {
 	return f.deleteImageStream(ctx, id)
 }
-func (f *fakeImageStreamRegistry) WatchImageStreams(ctx kapi.Context, options *kapi.ListOptions) (watch.Interface, error) {
+func (f *fakeImageStreamRegistry) WatchImageStreams(ctx apirequest.Context, options *metainternal.ListOptions) (watch.Interface, error) {
 	return f.watchImageStreams(ctx, options)
 }

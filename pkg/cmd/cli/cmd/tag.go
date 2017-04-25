@@ -9,14 +9,16 @@ import (
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kerrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
+	"k8s.io/kubernetes/pkg/client/retry"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
-	"k8s.io/kubernetes/pkg/util/sets"
 
 	"github.com/openshift/origin/pkg/client"
+	"github.com/openshift/origin/pkg/cmd/templates"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 	imageapi "github.com/openshift/origin/pkg/image/api"
 )
@@ -33,39 +35,50 @@ type TagOptions struct {
 	referenceTag bool
 	namespace    string
 
+	referencePolicy string
+
 	ref            imageapi.DockerImageReference
 	sourceKind     string
 	destNamespace  []string
 	destNameAndTag []string
 }
 
+var (
+	tagLong = templates.LongDesc(`
+		Tag existing images into image streams
+
+		The tag command allows you to take an existing tag or image from an image
+		stream, or a Docker image pull spec, and set it as the most recent image for a
+		tag in 1 or more other image streams. It is similar to the 'docker tag'
+		command, but it operates on image streams instead.
+
+		Pass the --insecure flag if your external registry does not have a valid HTTPS
+		certificate, or is only served over HTTP. Pass --scheduled to have the server
+		regularly check the tag for updates and import the latest version (which can
+		then trigger builds and deployments). Note that --scheduled is only allowed for
+		Docker images.`)
+
+	tagExample = templates.Examples(`
+		# Tag the current image for the image stream 'openshift/ruby' and tag '2.0' into the image stream 'yourproject/ruby with tag 'tip'.
+	  %[1]s tag openshift/ruby:2.0 yourproject/ruby:tip
+
+	  # Tag a specific image.
+	  %[1]s tag openshift/ruby@sha256:6b646fa6bf5e5e4c7fa41056c27910e679c03ebe7f93e361e6515a9da7e258cc yourproject/ruby:tip
+
+	  # Tag an external Docker image.
+	  %[1]s tag --source=docker openshift/origin:latest yourproject/ruby:tip
+
+	  # Tag an external Docker image and request pullthrough for it.
+	  %[1]s tag --source=docker openshift/origin:latest yourproject/ruby:tip --reference-policy=local
+
+
+	  # Remove the specified spec tag from an image stream.
+	  %[1]s tag openshift/origin:latest -d`)
+)
+
 const (
-	tagLong = `
-Tag existing images into image streams
-
-The tag command allows you to take an existing tag or image from an image
-stream, or a Docker image pull spec, and set it as the most recent image for a
-tag in 1 or more other image streams. It is similar to the 'docker tag'
-command, but it operates on image streams instead.
-
-Pass the --insecure flag if your external registry does not have a valid HTTPS
-certificate, or is only served over HTTP. Pass --scheduled to have the server
-regularly check the tag for updates and import the latest version (which can
-then trigger builds and deployments). Note that --scheduled is only allowed for
-Docker images.
-`
-
-	tagExample = `  # Tag the current image for the image stream 'openshift/ruby' and tag '2.0' into the image stream 'yourproject/ruby with tag 'tip'.
-  %[1]s tag openshift/ruby:2.0 yourproject/ruby:tip
-
-  # Tag a specific image.
-  %[1]s tag openshift/ruby@sha256:6b646fa6bf5e5e4c7fa41056c27910e679c03ebe7f93e361e6515a9da7e258cc yourproject/ruby:tip
-
-  # Tag an external Docker image.
-  %[1]s tag --source=docker openshift/origin:latest yourproject/ruby:tip
-
-  # Remove the specified spec tag from an image stream.
-  %[1]s tag openshift/origin:latest -d`
+	sourceReferencePolicy = "source"
+	localReferencePolicy  = "local"
 )
 
 // NewCmdTag implements the OpenShift cli tag command.
@@ -80,16 +93,17 @@ func NewCmdTag(fullName string, f *clientcmd.Factory, out io.Writer) *cobra.Comm
 		Run: func(cmd *cobra.Command, args []string) {
 			kcmdutil.CheckErr(opts.Complete(f, cmd, args, out))
 			kcmdutil.CheckErr(opts.Validate())
-			kcmdutil.CheckErr(opts.RunTag())
+			kcmdutil.CheckErr(opts.Run())
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.sourceKind, "source", opts.sourceKind, "Optional hint for the source type; valid values are 'imagestreamtag', 'istag', 'imagestreamimage', 'isimage', and 'docker'")
-	cmd.Flags().BoolVarP(&opts.deleteTag, "delete", "d", opts.deleteTag, "Delete the provided spec tags")
-	cmd.Flags().BoolVar(&opts.aliasTag, "alias", false, "Should the destination tag be updated whenever the source tag changes. Defaults to false.")
+	cmd.Flags().StringVar(&opts.sourceKind, "source", opts.sourceKind, "Optional hint for the source type; valid values are 'imagestreamtag', 'istag', 'imagestreamimage', 'isimage', and 'docker'.")
+	cmd.Flags().BoolVarP(&opts.deleteTag, "delete", "d", opts.deleteTag, "Delete the provided spec tags.")
+	cmd.Flags().BoolVar(&opts.aliasTag, "alias", false, "Should the destination tag be updated whenever the source tag changes. Applies only to a single image stream. Defaults to false.")
 	cmd.Flags().BoolVar(&opts.referenceTag, "reference", false, "Should the destination tag continue to pull from the source namespace. Defaults to false.")
-	cmd.Flags().BoolVar(&opts.scheduleTag, "scheduled", false, "Set a Docker image to be periodically imported from a remote repository.")
-	cmd.Flags().BoolVar(&opts.insecureTag, "insecure", false, "Set to true if importing the specified Docker image requires HTTP or has a self-signed certificate.")
+	cmd.Flags().BoolVar(&opts.scheduleTag, "scheduled", false, "Set a Docker image to be periodically imported from a remote repository. Defaults to false.")
+	cmd.Flags().BoolVar(&opts.insecureTag, "insecure", false, "Set to true if importing the specified Docker image requires HTTP or has a self-signed certificate. Defaults to false.")
+	cmd.Flags().StringVar(&opts.referencePolicy, "reference-policy", sourceReferencePolicy, "Allow to request pullthrough for external image when set to 'local'. Defaults to 'source'.")
 
 	return cmd
 }
@@ -118,8 +132,8 @@ func parseStreamName(defaultNamespace, name string) (string, string, error) {
 }
 
 func determineSourceKind(f *clientcmd.Factory, input string) string {
-	mapper, _ := f.Object(false)
-	gvks, err := mapper.KindsFor(unversioned.GroupVersionResource{Group: imageapi.GroupName, Resource: input})
+	mapper, _ := f.Object()
+	gvks, err := mapper.KindsFor(schema.GroupVersionResource{Group: imageapi.GroupName, Resource: input})
 	if err == nil {
 		return gvks[0].Kind
 	}
@@ -216,7 +230,7 @@ func (o *TagOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, args []s
 			if len(srcNamespace) == 0 {
 				srcNamespace = o.namespace
 			}
-			is, err := o.osClient.ImageStreams(srcNamespace).Get(ref.Name)
+			is, err := o.osClient.ImageStreams(srcNamespace).Get(ref.Name, metav1.GetOptions{})
 			if err != nil {
 				return err
 			}
@@ -258,6 +272,25 @@ func (o *TagOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, args []s
 	return nil
 }
 
+// isCrossImageStream verifies if destination is the same image stream as source. Returns true
+// if any of the destination image stream is different and error from parsing
+// image stream tag.
+func isCrossImageStream(namespace string, srcRef imageapi.DockerImageReference, destNamespace []string, destNameAndTag []string) (bool, error) {
+	for i, ns := range destNamespace {
+		if namespace != ns {
+			return true, nil
+		}
+		name, _, ok := imageapi.SplitImageStreamTag(destNameAndTag[i])
+		if !ok {
+			return false, fmt.Errorf("%q must be of the form <stream_name>:<tag>", destNameAndTag[i])
+		}
+		if srcRef.Name != name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Validate validates all the required options for the tag command.
 func (o TagOptions) Validate() error {
 	// Validate client and writer
@@ -270,6 +303,10 @@ func (o TagOptions) Validate() error {
 
 	if o.deleteTag && o.aliasTag {
 		return errors.New("--alias and --delete may not be both specified")
+	}
+
+	if o.referencePolicy != sourceReferencePolicy && o.referencePolicy != localReferencePolicy {
+		return errors.New("reference policy must be set to 'source' or 'local'")
 	}
 
 	// Validate source tag based on --delete usage.
@@ -302,111 +339,192 @@ func (o TagOptions) Validate() error {
 	if o.sourceKind != "DockerImage" && (o.scheduleTag || o.insecureTag) {
 		return errors.New("only Docker images can have importing flags set")
 	}
-	if o.aliasTag && (o.scheduleTag || o.insecureTag) {
-		return errors.New("cannot set a Docker image tag as an alias and also set import flags")
+	if o.aliasTag {
+		if o.scheduleTag || o.insecureTag {
+			return errors.New("cannot set a Docker image tag as an alias and also set import flags")
+		}
+		cross, err := isCrossImageStream(o.namespace, o.ref, o.destNamespace, o.destNameAndTag)
+		if err != nil {
+			return err
+		}
+		if cross {
+			return errors.New("cannot set alias across different Image Streams")
+		}
 	}
 
 	return nil
 }
 
-// RunTag contains all the necessary functionality for the OpenShift cli tag command.
-func (o TagOptions) RunTag() error {
+// Run contains all the necessary functionality for the OpenShift cli tag command.
+func (o TagOptions) Run() error {
+	var tagReferencePolicy imageapi.TagReferencePolicyType
+	switch o.referencePolicy {
+	case sourceReferencePolicy:
+		tagReferencePolicy = imageapi.SourceTagReferencePolicy
+	case localReferencePolicy:
+		tagReferencePolicy = imageapi.LocalTagReferencePolicy
+	}
 	for i, destNameAndTag := range o.destNameAndTag {
 		destName, destTag, ok := imageapi.SplitImageStreamTag(destNameAndTag)
 		if !ok {
 			return fmt.Errorf("%q must be of the form <stream_name>:<tag>", destNameAndTag)
 		}
 
-		err := kclient.RetryOnConflict(kclient.DefaultRetry, func() error {
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 			isc := o.osClient.ImageStreams(o.destNamespace[i])
-			target, err := isc.Get(destName)
-			if err != nil {
-				if !kerrors.IsNotFound(err) {
+
+			if o.deleteTag {
+				// new server support
+				err := o.osClient.ImageStreamTags(o.destNamespace[i]).Delete(destName, destTag)
+				switch {
+				case err == nil:
+					fmt.Fprintf(o.out, "Deleted tag %s/%s.\n", o.destNamespace[i], destNameAndTag)
+					return nil
+
+				case kerrors.IsMethodNotSupported(err), kerrors.IsForbidden(err):
+					// fall back to legacy behavior
+				default:
+					//  error that isn't whitelisted: fail
 					return err
 				}
 
-				if o.deleteTag {
+				// try the old way
+				target, err := isc.Get(destName, metav1.GetOptions{})
+				if err != nil {
+					if !kerrors.IsNotFound(err) {
+						return err
+					}
+
 					// Nothing to do here, continue to the next dest tag
 					// if there is any.
 					fmt.Fprintf(o.out, "Image stream %q does not exist.\n", destName)
 					return nil
 				}
 
-				// try to create the target if it doesn't exist
+				// The user wants to delete a spec tag.
+				if _, ok := target.Spec.Tags[destTag]; !ok {
+					return fmt.Errorf("destination tag %s/%s does not exist.\n", o.destNamespace[i], destNameAndTag)
+				}
+				delete(target.Spec.Tags, destTag)
+
+				if _, err = isc.Update(target); err != nil {
+					return err
+				}
+
+				fmt.Fprintf(o.out, "Deleted tag %s/%s.\n", o.destNamespace[i], destNameAndTag)
+				return nil
+			}
+
+			// The user wants to symlink a tag.
+			istag := &imageapi.ImageStreamTag{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      destNameAndTag,
+					Namespace: o.destNamespace[i],
+				},
+				Tag: &imageapi.TagReference{
+					Reference: o.referenceTag,
+					ImportPolicy: imageapi.TagImportPolicy{
+						Insecure:  o.insecureTag,
+						Scheduled: o.scheduleTag,
+					},
+					ReferencePolicy: imageapi.TagReferencePolicy{
+						Type: tagReferencePolicy,
+					},
+					From: &kapi.ObjectReference{
+						Kind: o.sourceKind,
+					},
+				},
+			}
+			localRef := o.ref
+			switch o.sourceKind {
+			case "DockerImage":
+				istag.Tag.From.Name = localRef.Exact()
+				gen := int64(0)
+				istag.Tag.Generation = &gen
+
+			default:
+				istag.Tag.From.Name = localRef.NameString()
+				istag.Tag.From.Namespace = o.ref.Namespace
+				if len(o.ref.Namespace) == 0 && o.destNamespace[i] != o.namespace {
+					istag.Tag.From.Namespace = o.namespace
+				}
+			}
+
+			msg := ""
+			sameNamespace := o.namespace == o.destNamespace[i]
+			if o.aliasTag {
+				if sameNamespace {
+					msg = fmt.Sprintf("Tag %s set up to track %s.", destNameAndTag, o.ref.Exact())
+				} else {
+					msg = fmt.Sprintf("Tag %s/%s set up to track %s.", o.destNamespace[i], destNameAndTag, o.ref.Exact())
+				}
+			} else {
+				if istag.Tag.ImportPolicy.Scheduled {
+					if sameNamespace {
+						msg = fmt.Sprintf("Tag %s set to import %s periodically.", destNameAndTag, o.ref.Exact())
+					} else {
+						msg = fmt.Sprintf("Tag %s/%s set to %s periodically.", o.destNamespace[i], destNameAndTag, o.ref.Exact())
+					}
+				} else {
+					if sameNamespace {
+						msg = fmt.Sprintf("Tag %s set to %s.", destNameAndTag, o.ref.Exact())
+					} else {
+						msg = fmt.Sprintf("Tag %s/%s set to %s.", o.destNamespace[i], destNameAndTag, o.ref.Exact())
+					}
+				}
+			}
+
+			// supported by new servers.
+			_, err := o.osClient.ImageStreamTags(o.destNamespace[i]).Update(istag)
+			switch {
+			case err == nil:
+				fmt.Fprintln(o.out, msg)
+				return nil
+
+			case kerrors.IsMethodNotSupported(err), kerrors.IsForbidden(err), kerrors.IsNotFound(err):
+				// if we got one of these errors, it possible that a Create will do what we need.  Try that
+				_, err := o.osClient.ImageStreamTags(o.destNamespace[i]).Create(istag)
+				switch {
+				case err == nil:
+					fmt.Fprintln(o.out, msg)
+					return nil
+
+				case kerrors.IsMethodNotSupported(err), kerrors.IsForbidden(err):
+					// fall back to legacy behavior
+				default:
+					//  error that isn't whitelisted: fail
+					return err
+				}
+
+			default:
+				//  error that isn't whitelisted: fail
+				return err
+
+			}
+
+			target, err := isc.Get(destName, metav1.GetOptions{})
+			if kerrors.IsNotFound(err) {
 				target = &imageapi.ImageStream{
-					ObjectMeta: kapi.ObjectMeta{
+					ObjectMeta: metav1.ObjectMeta{
 						Name: destName,
 					},
 				}
+			} else if err != nil {
+				return err
 			}
 
 			if target.Spec.Tags == nil {
 				target.Spec.Tags = make(map[string]imageapi.TagReference)
 			}
 
-			msg := ""
-			if o.deleteTag {
-				// The user wants to delete a spec tag.
-				if _, ok := target.Spec.Tags[destTag]; !ok {
-					return fmt.Errorf("destination tag %s/%s does not exist.\n", o.destNamespace[i], destNameAndTag)
-				}
-				delete(target.Spec.Tags, destTag)
-				msg = fmt.Sprintf("Deleted tag %s/%s.", o.destNamespace[i], destNameAndTag)
-			} else {
-				// The user wants to symlink a tag.
-				targetRef, ok := target.Spec.Tags[destTag]
-				if !ok {
-					targetRef = imageapi.TagReference{}
-				}
-
-				targetRef.Reference = o.referenceTag
-				targetRef.ImportPolicy.Insecure = o.insecureTag
-				targetRef.ImportPolicy.Scheduled = o.scheduleTag
-				targetRef.From = &kapi.ObjectReference{
-					Kind: o.sourceKind,
-				}
-				localRef := o.ref
-				switch o.sourceKind {
-				case "DockerImage":
-					targetRef.From.Name = localRef.Exact()
-					if targetRef.Generation == nil {
-						// for servers that do not support tag generations, we need to force re-import to fetch its metadata
-						delete(target.Annotations, imageapi.DockerImageRepositoryCheckAnnotation)
-					} else {
-						// for newer servers we do not need to force re-import
-						gen := int64(0)
-						targetRef.Generation = &gen
-					}
-
-				default:
-					targetRef.From.Name = localRef.NameString()
-					targetRef.From.Namespace = o.ref.Namespace
-				}
-
-				sameNamespace := o.namespace == o.destNamespace[i]
-				target.Spec.Tags[destTag] = targetRef
-				if o.aliasTag {
-					if sameNamespace {
-						msg = fmt.Sprintf("Tag %s set up to track %s.", destNameAndTag, o.ref.Exact())
-					} else {
-						msg = fmt.Sprintf("Tag %s/%s set up to track %s.", o.destNamespace[i], destNameAndTag, o.ref.Exact())
-					}
-				} else {
-					if targetRef.ImportPolicy.Scheduled {
-						if sameNamespace {
-							msg = fmt.Sprintf("Tag %s set to import %s periodically.", destNameAndTag, o.ref.Exact())
-						} else {
-							msg = fmt.Sprintf("Tag %s/%s set to %s periodically.", o.destNamespace[i], destNameAndTag, o.ref.Exact())
-						}
-					} else {
-						if sameNamespace {
-							msg = fmt.Sprintf("Tag %s set to %s.", destNameAndTag, o.ref.Exact())
-						} else {
-							msg = fmt.Sprintf("Tag %s/%s set to %s.", o.destNamespace[i], destNameAndTag, o.ref.Exact())
-						}
-					}
+			if oldTargetTag, exists := target.Spec.Tags[destTag]; exists {
+				if oldTargetTag.Generation == nil {
+					// for servers that do not support tag generations, we need to force re-import to fetch its metadata
+					delete(target.Annotations, imageapi.DockerImageRepositoryCheckAnnotation)
+					istag.Tag.Generation = nil
 				}
 			}
+			target.Spec.Tags[destTag] = *istag.Tag
 
 			// Check the stream creation timestamp and make sure we will not
 			// create a new image stream while deleting.

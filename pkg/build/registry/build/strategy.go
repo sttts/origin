@@ -2,47 +2,31 @@ package build
 
 import (
 	"fmt"
+	"reflect"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
+	kstorage "k8s.io/apiserver/pkg/storage"
+	"k8s.io/apiserver/pkg/storage/names"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
-	"k8s.io/kubernetes/pkg/registry/generic"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/validation/field"
 
 	"github.com/openshift/origin/pkg/build/api"
 	"github.com/openshift/origin/pkg/build/api/validation"
+	buildutil "github.com/openshift/origin/pkg/build/util"
 )
 
 // strategy implements behavior for Build objects
 type strategy struct {
 	runtime.ObjectTyper
-	kapi.NameGenerator
-}
-
-// Decorator is used to compute duration of a build since its not stored in etcd yet
-var Decorator = func(obj runtime.Object) error {
-	build, ok := obj.(*api.Build)
-	if !ok {
-		return errors.NewBadRequest(fmt.Sprintf("not a build: %v", build))
-	}
-	if build.Status.StartTimestamp == nil {
-		build.Status.Duration = 0
-	} else {
-		completionTimestamp := build.Status.CompletionTimestamp
-		if completionTimestamp == nil {
-			dummy := unversioned.Now()
-			completionTimestamp = &dummy
-		}
-		build.Status.Duration = completionTimestamp.Rfc3339Copy().Time.Sub(build.Status.StartTimestamp.Rfc3339Copy().Time)
-	}
-	return nil
+	names.NameGenerator
 }
 
 // Strategy is the default logic that applies when creating and updating Build objects.
-var Strategy = strategy{kapi.Scheme, kapi.SimpleNameGenerator}
+var Strategy = strategy{kapi.Scheme, names.SimpleNameGenerator}
 
 func (strategy) NamespaceScoped() bool {
 	return true
@@ -58,7 +42,7 @@ func (strategy) AllowUnconditionalUpdate() bool {
 }
 
 // PrepareForCreate clears fields that are not allowed to be set by end users on creation.
-func (strategy) PrepareForCreate(obj runtime.Object) {
+func (strategy) PrepareForCreate(ctx apirequest.Context, obj runtime.Object) {
 	build := obj.(*api.Build)
 	if len(build.Status.Phase) == 0 {
 		build.Status.Phase = api.BuildPhaseNew
@@ -66,7 +50,7 @@ func (strategy) PrepareForCreate(obj runtime.Object) {
 }
 
 // PrepareForUpdate clears fields that are not allowed to be set by end users on update.
-func (strategy) PrepareForUpdate(obj, old runtime.Object) {
+func (strategy) PrepareForUpdate(ctx apirequest.Context, obj, old runtime.Object) {
 	_ = obj.(*api.Build)
 }
 
@@ -75,32 +59,35 @@ func (strategy) Canonicalize(obj runtime.Object) {
 }
 
 // Validate validates a new policy.
-func (strategy) Validate(ctx kapi.Context, obj runtime.Object) field.ErrorList {
+func (strategy) Validate(ctx apirequest.Context, obj runtime.Object) field.ErrorList {
 	return validation.ValidateBuild(obj.(*api.Build))
 }
 
 // ValidateUpdate is the default update validation for an end user.
-func (strategy) ValidateUpdate(ctx kapi.Context, obj, old runtime.Object) field.ErrorList {
+func (strategy) ValidateUpdate(ctx apirequest.Context, obj, old runtime.Object) field.ErrorList {
 	return validation.ValidateBuildUpdate(obj.(*api.Build), old.(*api.Build))
 }
 
 // CheckGracefulDelete allows a build to be gracefully deleted.
-func (strategy) CheckGracefulDelete(obj runtime.Object, options *kapi.DeleteOptions) bool {
+func (strategy) CheckGracefulDelete(obj runtime.Object, options *metav1.DeleteOptions) bool {
 	return false
 }
 
+// GetAttrs returns labels and fields of a given object for filtering purposes
+func GetAttrs(obj runtime.Object) (labels.Set, fields.Set, error) {
+	build, ok := obj.(*api.Build)
+	if !ok {
+		return nil, nil, fmt.Errorf("not a Build")
+	}
+	return labels.Set(build.ObjectMeta.Labels), api.BuildToSelectableFields(build), nil
+}
+
 // Matcher returns a generic matcher for a given label and field selector.
-func Matcher(label labels.Selector, field fields.Selector) generic.Matcher {
-	return &generic.SelectionPredicate{
-		Label: label,
-		Field: field,
-		GetAttrs: func(obj runtime.Object) (labels.Set, fields.Set, error) {
-			build, ok := obj.(*api.Build)
-			if !ok {
-				return nil, nil, fmt.Errorf("not a build")
-			}
-			return labels.Set(build.ObjectMeta.Labels), api.BuildToSelectableFields(build), nil
-		},
+func Matcher(label labels.Selector, field fields.Selector) kstorage.SelectionPredicate {
+	return kstorage.SelectionPredicate{
+		Label:    label,
+		Field:    field,
+		GetAttrs: GetAttrs,
 	}
 }
 
@@ -109,26 +96,44 @@ type detailsStrategy struct {
 }
 
 // Prepares a build for update by only allowing an update to build details.
-// For now, this is the Spec.Revision field
-func (detailsStrategy) PrepareForUpdate(obj, old runtime.Object) {
+// Build details currently consists of: Spec.Revision, Status.Reason, and
+// Status.Message, all of which are updated from within the build pod
+func (detailsStrategy) PrepareForUpdate(ctx apirequest.Context, obj, old runtime.Object) {
 	newBuild := obj.(*api.Build)
 	oldBuild := old.(*api.Build)
+
+	// ignore phase updates unless the caller is updating the build to
+	// a completed phase.
+	phase := oldBuild.Status.Phase
+	if buildutil.IsBuildComplete(newBuild) {
+		phase = newBuild.Status.Phase
+	}
 	revision := newBuild.Spec.Revision
+	message := newBuild.Status.Message
+	reason := newBuild.Status.Reason
+	outputTo := newBuild.Status.Output.To
 	*newBuild = *oldBuild
+	newBuild.Status.Phase = phase
 	newBuild.Spec.Revision = revision
+	newBuild.Status.Reason = reason
+	newBuild.Status.Message = message
+	newBuild.Status.Output.To = outputTo
 }
 
 // Validates that an update is valid by ensuring that no Revision exists and that it's not getting updated to blank
-func (detailsStrategy) ValidateUpdate(ctx kapi.Context, obj, old runtime.Object) field.ErrorList {
+func (detailsStrategy) ValidateUpdate(ctx apirequest.Context, obj, old runtime.Object) field.ErrorList {
 	newBuild := obj.(*api.Build)
 	oldBuild := old.(*api.Build)
+	oldRevision := oldBuild.Spec.Revision
+	newRevision := newBuild.Spec.Revision
 	errors := field.ErrorList{}
-	if oldBuild.Spec.Revision != nil {
-		// If there was already a revision, then return an error
-		errors = append(errors, field.Duplicate(field.NewPath("status", "revision"), oldBuild.Spec.Revision))
+
+	if newRevision == nil && oldRevision != nil {
+		errors = append(errors, field.Invalid(field.NewPath("spec", "revision"), nil, "cannot set an empty revision in build spec"))
 	}
-	if newBuild.Spec.Revision == nil {
-		errors = append(errors, field.Invalid(field.NewPath("status", "revision"), nil, "cannot set an empty revision in build status"))
+	if !reflect.DeepEqual(oldRevision, newRevision) && oldRevision != nil {
+		// If there was already a revision, then return an error
+		errors = append(errors, field.Duplicate(field.NewPath("spec", "revision"), oldBuild.Spec.Revision))
 	}
 	return errors
 }

@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,14 +19,14 @@ package validation
 import (
 	"fmt"
 
-	utilerrors "k8s.io/kubernetes/pkg/util/errors"
+	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	schedulerapi "k8s.io/kubernetes/plugin/pkg/scheduler/api"
 )
 
-// Validate checks for errors in the Config
+// ValidatePolicy checks for errors in the Config
 // It does not return early so that it can find as many errors as possible
 func ValidatePolicy(policy schedulerapi.Policy) error {
-	validationErrors := make([]error, 0)
+	var validationErrors []error
 
 	for _, priority := range policy.Priorities {
 		if priority.Weight <= 0 {

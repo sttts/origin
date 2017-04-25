@@ -2,18 +2,13 @@
 
 # This script tests the high level end-to-end functionality demonstrated
 # as part of the examples/sample-app
-
-set -o errexit
-set -o nounset
-set -o pipefail
-
 STARTTIME=$(date +%s)
-OS_ROOT=$(dirname "${BASH_SOURCE}")/..
+source "$(dirname "${BASH_SOURCE}")/lib/init.sh"
 
 readonly JQSETPULLPOLICY='(.items[] | select(.kind == "DeploymentConfig") | .spec.template.spec.containers[0].imagePullPolicy) |= "IfNotPresent"'
 
 if [[ "${TEST_END_TO_END:-}" != "direct" ]]; then
-	if docker version >/dev/null 2>&1; then
+	if os::util::ensure::system_binary_exists 'docker'; then
 		echo "++ Docker is installed, running hack/test-end-to-end-docker.sh instead."
 		"${OS_ROOT}/hack/test-end-to-end-docker.sh"
 		exit $?
@@ -21,12 +16,9 @@ if [[ "${TEST_END_TO_END:-}" != "direct" ]]; then
 	echo "++ Docker is not installed, running end-to-end against local binaries"
 fi
 
-source "${OS_ROOT}/hack/lib/init.sh"
-os::log::stacktrace::install
+os::util::ensure::iptables_privileges_exist
 
-ensure_iptables_or_die
-
-echo "[INFO] Starting end-to-end test"
+os::log::info "Starting end-to-end test"
 
 function cleanup()
 {
@@ -35,12 +27,13 @@ function cleanup()
 	if [ $out -ne 0 ]; then
 		echo "[FAIL] !!!!! Test Failed !!!!"
 	else
-		echo "[INFO] Test Succeeded"
+		os::log::info "Test Succeeded"
 	fi
 	echo
 
 	cleanup_openshift
-	echo "[INFO] Exiting"
+	os::test::junit::generate_oscmd_report
+	os::log::info "Exiting"
 	ENDTIME=$(date +%s); echo "$0 took $(($ENDTIME - $STARTTIME)) seconds"
 	exit $out
 }
@@ -50,14 +43,19 @@ trap "cleanup" EXIT
 
 
 # Start All-in-one server and wait for health
-os::util::environment::setup_all_server_vars "test-end-to-end/"
 os::util::environment::use_sudo
-reset_tmp_dir
+os::cleanup::tmpdir
+os::util::environment::setup_all_server_vars
 
-os::log::start_system_logger
+# Allow setting $JUNIT_REPORT to toggle output behavior
+if [[ -n "${JUNIT_REPORT:-}" ]]; then
+	export JUNIT_REPORT_OUTPUT="${LOG_DIR}/raw_test_output.log"
+fi
 
-configure_os_server
-start_os_server
+os::log::system::start
+
+os::start::configure_server
+os::start::server
 
 # set our default KUBECONFIG location
 export KUBECONFIG="${ADMIN_KUBECONFIG}"

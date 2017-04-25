@@ -1,20 +1,22 @@
 package deploylog
 
 import (
-	"net/http"
 	"net/url"
 	"reflect"
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/watch"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
+	genericrest "k8s.io/apiserver/pkg/registry/generic/rest"
+	clientgotesting "k8s.io/client-go/testing"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
-	genericrest "k8s.io/kubernetes/pkg/registry/generic/rest"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/watch"
 
 	"github.com/openshift/origin/pkg/client/testclient"
 	"github.com/openshift/origin/pkg/deploy/api"
@@ -29,7 +31,7 @@ var testSelector = map[string]string{"test": "rest"}
 
 func makeDeployment(version int64) kapi.ReplicationController {
 	deployment, _ := deployutil.MakeDeployment(deploytest.OkDeploymentConfig(version), kapi.Codecs.LegacyCodec(api.SchemeGroupVersion))
-	deployment.Namespace = kapi.NamespaceDefault
+	deployment.Namespace = metav1.NamespaceDefault
 	deployment.Spec.Selector = testSelector
 	return *deployment
 }
@@ -46,10 +48,10 @@ var (
 	fakePodList = &kapi.PodList{
 		Items: []kapi.Pod{
 			{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name:              "config-5-application-pod-1",
-					Namespace:         kapi.NamespaceDefault,
-					CreationTimestamp: unversioned.Date(2016, time.February, 1, 1, 0, 1, 0, time.UTC),
+					Namespace:         metav1.NamespaceDefault,
+					CreationTimestamp: metav1.Date(2016, time.February, 1, 1, 0, 1, 0, time.UTC),
 					Labels:            testSelector,
 				},
 				Spec: kapi.PodSpec{
@@ -62,10 +64,10 @@ var (
 				},
 			},
 			{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name:              "config-5-application-pod-2",
-					Namespace:         kapi.NamespaceDefault,
-					CreationTimestamp: unversioned.Date(2016, time.February, 1, 1, 0, 3, 0, time.UTC),
+					Namespace:         metav1.NamespaceDefault,
+					CreationTimestamp: metav1.Date(2016, time.February, 1, 1, 0, 3, 0, time.UTC),
 					Labels:            testSelector,
 				},
 				Spec: kapi.PodSpec{
@@ -81,14 +83,22 @@ var (
 	}
 )
 
+type fakeConnectionInfoGetter struct{}
+
+func (*fakeConnectionInfoGetter) GetConnectionInfo(nodeName types.NodeName) (*kubeletclient.ConnectionInfo, error) {
+	return &kubeletclient.ConnectionInfo{
+		Scheme:   "https",
+		Hostname: "some-host",
+		Port:     "12345",
+	}, nil
+}
+
 // mockREST mocks a DeploymentLog REST
 func mockREST(version, desired int64, status api.DeploymentStatus) *REST {
-	connectionInfo := &kubeletclient.HTTPKubeletClient{Config: &kubeletclient.KubeletClientConfig{EnableHttps: true, Port: 12345}, Client: &http.Client{}}
-
 	// Fake deploymentConfig
 	config := deploytest.OkDeploymentConfig(version)
 	fakeDn := testclient.NewSimpleFake(config)
-	fakeDn.PrependReactor("get", "deploymentconfigs", func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
+	fakeDn.PrependReactor("get", "deploymentconfigs", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
 		return true, config, nil
 	})
 
@@ -96,41 +106,41 @@ func mockREST(version, desired int64, status api.DeploymentStatus) *REST {
 	if desired > version {
 		return &REST{
 			dn:       fakeDn,
-			connInfo: connectionInfo,
+			connInfo: &fakeConnectionInfoGetter{},
 			timeout:  defaultTimeout,
 		}
 	}
 
 	// Fake deployments
 	fakeDeployments := makeDeploymentList(version)
-	fakeRn := ktestclient.NewSimpleFake(fakeDeployments)
-	fakeRn.PrependReactor("get", "replicationcontrollers", func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
+	fakeRn := fake.NewSimpleClientset(fakeDeployments)
+	fakeRn.PrependReactor("get", "replicationcontrollers", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
 		return true, &fakeDeployments.Items[desired-1], nil
 	})
 
 	// Fake watcher for deployments
 	fakeWatch := watch.NewFake()
-	fakeRn.PrependWatchReactor("replicationcontrollers", ktestclient.DefaultWatchReactor(fakeWatch, nil))
+	fakeRn.PrependWatchReactor("replicationcontrollers", clientgotesting.DefaultWatchReactor(fakeWatch, nil))
 	obj := &fakeDeployments.Items[desired-1]
 	obj.Annotations[api.DeploymentStatusAnnotation] = string(status)
 	go fakeWatch.Add(obj)
 
-	fakePn := ktestclient.NewSimpleFake()
+	fakePn := fake.NewSimpleClientset()
 	if status == api.DeploymentStatusComplete {
 		// If the deployment is complete, we will try to get the logs from the oldest
 		// application pod...
-		fakePn.PrependReactor("list", "pods", func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
+		fakePn.PrependReactor("list", "pods", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
 			return true, fakePodList, nil
 		})
-		fakePn.PrependReactor("get", "pods", func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
+		fakePn.PrependReactor("get", "pods", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
 			return true, &fakePodList.Items[0], nil
 		})
 	} else {
 		// ...otherwise try to get the logs from the deployer pod.
 		fakeDeployer := &kapi.Pod{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name:      deployutil.DeployerPodNameForDeployment(obj.Name),
-				Namespace: kapi.NamespaceDefault,
+				Namespace: metav1.NamespaceDefault,
 			},
 			Spec: kapi.PodSpec{
 				Containers: []kapi.Container{
@@ -140,23 +150,26 @@ func mockREST(version, desired int64, status api.DeploymentStatus) *REST {
 				},
 				NodeName: "some-host",
 			},
+			Status: kapi.PodStatus{
+				Phase: kapi.PodRunning,
+			},
 		}
-		fakePn.PrependReactor("get", "pods", func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
+		fakePn.PrependReactor("get", "pods", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
 			return true, fakeDeployer, nil
 		})
 	}
 
 	return &REST{
 		dn:       fakeDn,
-		rn:       fakeRn,
-		pn:       fakePn,
-		connInfo: connectionInfo,
+		rn:       fakeRn.Core(),
+		pn:       fakePn.Core(),
+		connInfo: &fakeConnectionInfoGetter{},
 		timeout:  defaultTimeout,
 	}
 }
 
 func TestRESTGet(t *testing.T) {
-	ctx := kapi.NewDefaultContext()
+	ctx := apirequest.NewDefaultContext()
 
 	tests := []struct {
 		testName    string

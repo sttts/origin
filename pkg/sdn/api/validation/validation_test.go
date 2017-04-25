@@ -3,7 +3,7 @@ package validation
 import (
 	"testing"
 
-	kapi "k8s.io/kubernetes/pkg/api"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/openshift/origin/pkg/sdn/api"
 )
@@ -19,7 +19,7 @@ func TestValidateClusterNetwork(t *testing.T) {
 		{
 			name: "Good one",
 			cn: &api.ClusterNetwork{
-				ObjectMeta:       kapi.ObjectMeta{Name: "any"},
+				ObjectMeta:       metav1.ObjectMeta{Name: "any"},
 				Network:          "10.20.0.0/16",
 				HostSubnetLength: 8,
 				ServiceNetwork:   "172.30.0.0/16",
@@ -29,8 +29,18 @@ func TestValidateClusterNetwork(t *testing.T) {
 		{
 			name: "Bad network",
 			cn: &api.ClusterNetwork{
-				ObjectMeta:       kapi.ObjectMeta{Name: "any"},
+				ObjectMeta:       metav1.ObjectMeta{Name: "any"},
 				Network:          "10.20.0.0.0/16",
+				HostSubnetLength: 8,
+				ServiceNetwork:   "172.30.0.0/16",
+			},
+			expectedErrors: 1,
+		},
+		{
+			name: "Bad network CIDR",
+			cn: &api.ClusterNetwork{
+				ObjectMeta:       metav1.ObjectMeta{Name: "any"},
+				Network:          "10.20.0.1/16",
 				HostSubnetLength: 8,
 				ServiceNetwork:   "172.30.0.0/16",
 			},
@@ -39,7 +49,7 @@ func TestValidateClusterNetwork(t *testing.T) {
 		{
 			name: "Invalid subnet length",
 			cn: &api.ClusterNetwork{
-				ObjectMeta:       kapi.ObjectMeta{Name: "any"},
+				ObjectMeta:       metav1.ObjectMeta{Name: "any"},
 				Network:          "10.20.30.0/24",
 				HostSubnetLength: 16,
 				ServiceNetwork:   "172.30.0.0/16",
@@ -49,7 +59,7 @@ func TestValidateClusterNetwork(t *testing.T) {
 		{
 			name: "Bad service network",
 			cn: &api.ClusterNetwork{
-				ObjectMeta:       kapi.ObjectMeta{Name: "any"},
+				ObjectMeta:       metav1.ObjectMeta{Name: "any"},
 				Network:          "10.20.0.0/16",
 				HostSubnetLength: 8,
 				ServiceNetwork:   "1172.30.0.0/16",
@@ -57,9 +67,19 @@ func TestValidateClusterNetwork(t *testing.T) {
 			expectedErrors: 1,
 		},
 		{
+			name: "Bad service network CIDR",
+			cn: &api.ClusterNetwork{
+				ObjectMeta:       metav1.ObjectMeta{Name: "any"},
+				Network:          "10.20.0.0/16",
+				HostSubnetLength: 8,
+				ServiceNetwork:   "172.30.1.0/16",
+			},
+			expectedErrors: 1,
+		},
+		{
 			name: "Service network overlaps with cluster network",
 			cn: &api.ClusterNetwork{
-				ObjectMeta:       kapi.ObjectMeta{Name: "any"},
+				ObjectMeta:       metav1.ObjectMeta{Name: "any"},
 				Network:          "10.20.0.0/16",
 				HostSubnetLength: 8,
 				ServiceNetwork:   "10.20.1.0/24",
@@ -69,7 +89,7 @@ func TestValidateClusterNetwork(t *testing.T) {
 		{
 			name: "Cluster network overlaps with service network",
 			cn: &api.ClusterNetwork{
-				ObjectMeta:       kapi.ObjectMeta{Name: "any"},
+				ObjectMeta:       metav1.ObjectMeta{Name: "any"},
 				Network:          "10.20.0.0/16",
 				HostSubnetLength: 8,
 				ServiceNetwork:   "10.0.0.0/8",
@@ -96,7 +116,7 @@ func TestValidateHostSubnet(t *testing.T) {
 		{
 			name: "Good one",
 			hs: &api.HostSubnet{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "abc.def.com",
 				},
 				Host:   "abc.def.com",
@@ -108,7 +128,7 @@ func TestValidateHostSubnet(t *testing.T) {
 		{
 			name: "Malformed HostIP",
 			hs: &api.HostSubnet{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "abc.def.com",
 				},
 				Host:   "abc.def.com",
@@ -120,7 +140,7 @@ func TestValidateHostSubnet(t *testing.T) {
 		{
 			name: "Malformed subnet",
 			hs: &api.HostSubnet{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "abc.def.com",
 				},
 				Host:   "abc.def.com",
@@ -129,10 +149,221 @@ func TestValidateHostSubnet(t *testing.T) {
 			},
 			expectedErrors: 1,
 		},
+		{
+			name: "Malformed subnet CIDR",
+			hs: &api.HostSubnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "abc.def.com",
+				},
+				Host:   "abc.def.com",
+				HostIP: "10.20.30.40",
+				Subnet: "8.8.0.1/24",
+			},
+			expectedErrors: 1,
+		},
 	}
 
 	for _, tc := range tests {
 		errs := ValidateHostSubnet(tc.hs)
+
+		if len(errs) != tc.expectedErrors {
+			t.Errorf("Test case %s expected %d error(s), got %d. %v", tc.name, tc.expectedErrors, len(errs), errs)
+		}
+	}
+}
+
+func TestValidateEgressNetworkPolicy(t *testing.T) {
+	tests := []struct {
+		name           string
+		fw             *api.EgressNetworkPolicy
+		expectedErrors int
+	}{
+		{
+			name: "Empty",
+			fw: &api.EgressNetworkPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default",
+					Namespace: "testing",
+				},
+				Spec: api.EgressNetworkPolicySpec{
+					Egress: []api.EgressNetworkPolicyRule{},
+				},
+			},
+			expectedErrors: 0,
+		},
+		{
+			name: "Good one",
+			fw: &api.EgressNetworkPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default",
+					Namespace: "testing",
+				},
+				Spec: api.EgressNetworkPolicySpec{
+					Egress: []api.EgressNetworkPolicyRule{
+						{
+							Type: api.EgressNetworkPolicyRuleAllow,
+							To: api.EgressNetworkPolicyPeer{
+								CIDRSelector: "1.2.3.0/24",
+							},
+						},
+						{
+							Type: api.EgressNetworkPolicyRuleAllow,
+							To: api.EgressNetworkPolicyPeer{
+								DNSName: "www.example.com",
+							},
+						},
+						{
+							Type: api.EgressNetworkPolicyRuleDeny,
+							To: api.EgressNetworkPolicyPeer{
+								CIDRSelector: "1.2.3.4/32",
+							},
+						},
+						{
+							Type: api.EgressNetworkPolicyRuleDeny,
+							To: api.EgressNetworkPolicyPeer{
+								DNSName: "www.foo.com",
+							},
+						},
+					},
+				},
+			},
+			expectedErrors: 0,
+		},
+		{
+			name: "Bad policy",
+			fw: &api.EgressNetworkPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default",
+					Namespace: "testing",
+				},
+				Spec: api.EgressNetworkPolicySpec{
+					Egress: []api.EgressNetworkPolicyRule{
+						{
+							Type: api.EgressNetworkPolicyRuleType("Bob"),
+							To: api.EgressNetworkPolicyPeer{
+								CIDRSelector: "1.2.3.0/24",
+							},
+						},
+						{
+							Type: api.EgressNetworkPolicyRuleDeny,
+							To: api.EgressNetworkPolicyPeer{
+								CIDRSelector: "1.2.3.4/32",
+							},
+						},
+					},
+				},
+			},
+			expectedErrors: 1,
+		},
+		{
+			name: "Bad destination",
+			fw: &api.EgressNetworkPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default",
+					Namespace: "testing",
+				},
+				Spec: api.EgressNetworkPolicySpec{
+					Egress: []api.EgressNetworkPolicyRule{
+						{
+							Type: api.EgressNetworkPolicyRuleAllow,
+							To: api.EgressNetworkPolicyPeer{
+								CIDRSelector: "1.2.3.4",
+							},
+						},
+						{
+							Type: api.EgressNetworkPolicyRuleDeny,
+							To: api.EgressNetworkPolicyPeer{
+								CIDRSelector: "",
+							},
+						},
+					},
+				},
+			},
+			expectedErrors: 2,
+		},
+		{
+			name: "Policy rule with both CIDR and DNS",
+			fw: &api.EgressNetworkPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default",
+					Namespace: "testing",
+				},
+				Spec: api.EgressNetworkPolicySpec{
+					Egress: []api.EgressNetworkPolicyRule{
+						{
+							Type: api.EgressNetworkPolicyRuleAllow,
+							To: api.EgressNetworkPolicyPeer{
+								CIDRSelector: "1.2.3.4",
+								DNSName:      "www.example.com",
+							},
+						},
+					},
+				},
+			},
+			expectedErrors: 2,
+		},
+		{
+			name: "Policy rule without CIDR or DNS",
+			fw: &api.EgressNetworkPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default",
+					Namespace: "testing",
+				},
+				Spec: api.EgressNetworkPolicySpec{
+					Egress: []api.EgressNetworkPolicyRule{
+						{
+							Type: api.EgressNetworkPolicyRuleAllow,
+							To:   api.EgressNetworkPolicyPeer{},
+						},
+					},
+				},
+			},
+			expectedErrors: 1,
+		},
+		{
+			name: "Policy rule with invalid DNS",
+			fw: &api.EgressNetworkPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default",
+					Namespace: "testing",
+				},
+				Spec: api.EgressNetworkPolicySpec{
+					Egress: []api.EgressNetworkPolicyRule{
+						{
+							Type: api.EgressNetworkPolicyRuleAllow,
+							To: api.EgressNetworkPolicyPeer{
+								DNSName: "www.Example$.com",
+							},
+						},
+					},
+				},
+			},
+			expectedErrors: 1,
+		},
+		{
+			name: "Policy rule with wildcard DNS",
+			fw: &api.EgressNetworkPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default",
+					Namespace: "testing",
+				},
+				Spec: api.EgressNetworkPolicySpec{
+					Egress: []api.EgressNetworkPolicyRule{
+						{
+							Type: api.EgressNetworkPolicyRuleAllow,
+							To: api.EgressNetworkPolicyPeer{
+								DNSName: "*.example.com",
+							},
+						},
+					},
+				},
+			},
+			expectedErrors: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		errs := ValidateEgressNetworkPolicy(tc.fw)
 
 		if len(errs) != tc.expectedErrors {
 			t.Errorf("Test case %s expected %d error(s), got %d. %v", tc.name, tc.expectedErrors, len(errs), errs)

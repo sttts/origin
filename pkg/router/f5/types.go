@@ -41,7 +41,9 @@ type F5Error struct {
 // The F5 router uses it within f5Vserver to unmarshal the JSON response when
 // requesting a vserver from F5 BIG-IP.
 type f5VserverPolicy struct {
-	Name string `json:"name"`
+	Name      string `json:"name"`
+	Partition string `json:"partition"`
+	FullPath  string `json:"fullPath"`
 }
 
 // f5VserverPolicies represents the policies associated with an F5 BIG-IP LTM
@@ -77,6 +79,9 @@ type f5Pool struct {
 	// uses /Common/http.
 	Monitor string `json:"monitor"`
 
+	// Partition is the F5 partition to use for the pool.
+	Partition string `json:"partition"`
+
 	// Name is the name of the pool.  The F5 router uses names of the form
 	// openshift_<namespace>_<servicename>.
 	Name string `json:"name"`
@@ -100,11 +105,45 @@ type f5PoolMemberset struct {
 	Members []f5PoolMember `json:"items"`
 }
 
+// f5Ver12Policy represents an F5 BIG-IP LTM policy for versions 12.x
+// It describes the payload for a POST request by which the router creates a new policy.
+type f5Ver12Policy struct {
+	// Name is the name of the policy.
+	Name string `json:"name"`
+
+	// TmPartition is the partition name for the policy
+	TmPartition string `json:"tmPartition"`
+
+	// Controls is a list of F5 BIG-IP LTM features enabled for the pool.
+	// Typically we use just forwarding; other possible values are caching,
+	// classification, compression, request-adaption, response-adaption, and
+	// server-ssl.
+	Controls []string `json:"controls"`
+
+	// Requires is a list of available profile types.  Typically we use just http;
+	// other possible values are client-ssl, ssl-persistence, and tcp.
+	Requires []string `json:"requires"`
+
+	// Strategy is the strategy according to which rules are applied to incoming
+	// connections when more than one rule matches.  Typically we use best-match;
+	// other possible values are all-match and first-match.
+	Strategy string `json:"strategy"`
+
+	// Legacy is the boolean keyword by which ver12.1 can be programmed
+	// for creating a policy using this payload. Eventually we need to move
+	// to creating Draft policies and then associating them with the virtual servers
+	// Note that this keyword will only work with versions 12.1 and above
+	Legacy bool `json:"legacy"`
+}
+
 // f5Policy represents an F5 BIG-IP LTM policy.  It describes the payload for
 // a POST request by which the F5 router creates a new policy.
 type f5Policy struct {
 	// Name is the name of the policy.
 	Name string `json:"name"`
+
+	// Partition is the F5 partition to use for the policy.
+	Partition string `json:"partition"`
 
 	// Controls is a list of F5 BIG-IP LTM features enabled for the pool.
 	// Typically we use just forwarding; other possible values are caching,
@@ -234,6 +273,9 @@ type f5IRule struct {
 	// Name is the name of the iRule.
 	Name string `json:"name"`
 
+	// Partition is the F5 partition to use for the iRule.
+	Partition string `json:"partition"`
+
 	// Code is the TCL code of the iRule.
 	Code string `json:"apiAnonymous"`
 }
@@ -292,4 +334,47 @@ type f5VserverProfilePayload struct {
 type f5AddPartitionPathPayload struct {
 	// Name is the partition path to be added.
 	Name string `json:"name"`
+}
+
+// Method:POST URL:/mgmt/tm/net/tunnels/vxlan
+type f5CreateVxLANProfilePayload struct {
+	Name         string `json:"name"`         // <vxlan-profile-name> e.g. vxlan-ose
+	Partition    string `json:"partition"`    // /Common
+	FloodingType string `json:"floodingType"` // multipoint
+	Port         int    `json:"port"`         // 4789 (nothing else will work)
+}
+
+// Method:POST URL:/mgmt/tm/net/tunnels/tunnel
+type f5CreateVxLANTunnelPayload struct {
+	Name         string `json:"name"`         // vxlan5000
+	Partition    string `json:"partition"`    // /Common
+	Key          uint32 `json:"key"`          // 0
+	LocalAddress string `json:"localAddress"` // 172.30.1.5
+	Mode         string `json:"mode"`         // bidirectional
+	Mtu          string `json:"mtu"`          // 0
+	Profile      string `json:"profile"`      // <partition>/<vxlan-profile-name>
+	Tos          string `json:"tos"`          // preserve
+	Transparent  string `json:"transparent"`  // disabled
+	UsePmtu      string `json:"usePmtu"`      // enabled
+}
+
+// tmsh create net self <local-overlay-address>/<prefix> vlan vxlan5000
+// Method: POST URL: /mgmt/tm/net/self
+type f5CreateNetSelfPayload struct {
+	Name                  string `json:"name"`                  // “10.0.1.10/16",
+	Partition             string `json:"partition"`             // "Common",
+	Address               string `json:"address"`               // “10.0.1.10/16",
+	AddressSource         string `json:"addressSource"`         // "from-user",
+	Floating              string `json:"floating"`              // "disabled",
+	InheritedTrafficGroup string `json:"inheritedTrafficGroup"` // "false",
+	TrafficGroup          string `json:"trafficGroup"`          // "/Common/traffic-group-local-only",
+	Unit                  uint32 `json:"unit"`                  // 0,
+	Vlan                  string `json:"vlan"`                  // "/Common/vxlan5000",
+	AllowService          string `json:"allowService"`          // "all"
+}
+
+// POST /mgmt/tm/net/fdb/tunnel/~Common~vxlan5000/records
+type f5AddFDBRecordPayload struct {
+	Name     string `json:"name"`     // "02:50:56:c0:00:06",
+	Endpoint string `json:"endpoint"` // "10.139.1.1"
 }

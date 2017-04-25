@@ -5,10 +5,11 @@ import (
 
 	"github.com/ghodss/yaml"
 
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/runtime/serializer"
-	"k8s.io/kubernetes/pkg/util/diff"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/apimachinery/pkg/util/diff"
 
 	internal "github.com/openshift/origin/pkg/cmd/server/api"
 	"github.com/openshift/origin/pkg/cmd/server/api/latest"
@@ -31,18 +32,25 @@ authConfig:
   authenticationCacheTTL: ""
   authorizationCacheSize: 0
   authorizationCacheTTL: ""
+dnsBindAddress: ""
 dnsDomain: ""
 dnsIP: ""
+dnsNameservers: null
 dockerConfig:
+  dockerShimRootDirectory: ""
+  dockerShimSocket: ""
   execHandlerName: ""
+enableUnidling: false
 imageConfig:
   format: ""
   latest: false
 iptablesSyncPeriod: ""
 kind: NodeConfig
+masterClientConnectionOverrides: null
 masterKubeConfig: ""
 networkConfig:
   mtu: 0
+  networkPluginName: ""
 nodeIP: ""
 nodeName: ""
 podManifestConfig:
@@ -102,7 +110,13 @@ assetConfig:
     namedCertificates: null
     requestTimeoutSeconds: 0
 auditConfig:
+  auditFilePath: ""
   enabled: false
+  maximumFileRetentionDays: 0
+  maximumFileSizeMegabytes: 0
+  maximumRetainedFiles: 0
+authConfig:
+  requestHeader: null
 controllerConfig:
   serviceServingCert:
     signer: null
@@ -114,6 +128,7 @@ dnsConfig:
   allowRecursiveQueries: false
   bindAddress: ""
   bindNetwork: ""
+enableTemplateServiceBroker: false
 etcdClientInfo:
   ca: ""
   certFile: ""
@@ -151,7 +166,7 @@ imagePolicyConfig:
   maxScheduledImageImportsPerMinute: 0
   scheduledImageImportMinimumIntervalSeconds: 0
 jenkinsPipelineConfig:
-  enabled: null
+  autoProvisionEnabled: null
   parameters: null
   serviceName: ""
   templateName: ""
@@ -183,18 +198,22 @@ kubernetesMasterConfig:
   proxyClientInfo:
     certFile: ""
     keyFile: ""
+  schedulerArguments: null
   schedulerConfigFile: ""
   servicesNodePortRange: ""
   servicesSubnet: ""
   staticNodeNames: null
 masterClients:
+  externalKubernetesClientConnectionOverrides: null
   externalKubernetesKubeConfig: ""
+  openshiftLoopbackClientConnectionOverrides: null
   openshiftLoopbackKubeConfig: ""
 masterPublicURL: ""
 networkConfig:
   clusterNetworkCIDR: ""
   externalIPNetworkCIDRs: null
   hostSubnetLength: 0
+  ingressIPNetworkCIDR: ""
   networkPluginName: ""
   serviceNetworkCIDR: ""
 oauthConfig:
@@ -312,6 +331,7 @@ oauthConfig:
       clientSecret: ""
       kind: GitHubIdentityProvider
       organizations: null
+      teams: null
   - challenge: false
     login: false
     mappingMethod: ""
@@ -326,6 +346,7 @@ oauthConfig:
         value: ""
       kind: GitHubIdentityProvider
       organizations: null
+      teams: null
   - challenge: false
     login: false
     mappingMethod: ""
@@ -615,11 +636,11 @@ volumeConfig:
 }
 
 type AdmissionPluginTestConfig struct {
-	unversioned.TypeMeta
+	metav1.TypeMeta
 	Data string `json:"data"`
 }
 
-func (obj *AdmissionPluginTestConfig) GetObjectKind() unversioned.ObjectKind { return &obj.TypeMeta }
+func (obj *AdmissionPluginTestConfig) GetObjectKind() schema.ObjectKind { return &obj.TypeMeta }
 
 func TestMasterConfig(t *testing.T) {
 	internal.Scheme.AddKnownTypes(v1.SchemeGroupVersion, &AdmissionPluginTestConfig{})

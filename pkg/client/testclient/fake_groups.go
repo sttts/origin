@@ -1,9 +1,10 @@
 package testclient
 
 import (
-	kapi "k8s.io/kubernetes/pkg/api"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
-	"k8s.io/kubernetes/pkg/watch"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
+	clientgotesting "k8s.io/client-go/testing"
 
 	userapi "github.com/openshift/origin/pkg/user/api"
 )
@@ -14,8 +15,10 @@ type FakeGroups struct {
 	Fake *Fake
 }
 
-func (c *FakeGroups) Get(name string) (*userapi.Group, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootGetAction("groups", name), &userapi.Group{})
+var groupsResource = schema.GroupVersionResource{Group: "", Version: "", Resource: "groups"}
+
+func (c *FakeGroups) Get(name string, options metav1.GetOptions) (*userapi.Group, error) {
+	obj, err := c.Fake.Invokes(clientgotesting.NewRootGetAction(groupsResource, name), &userapi.Group{})
 	if obj == nil {
 		return nil, err
 	}
@@ -23,8 +26,8 @@ func (c *FakeGroups) Get(name string) (*userapi.Group, error) {
 	return obj.(*userapi.Group), err
 }
 
-func (c *FakeGroups) List(opts kapi.ListOptions) (*userapi.GroupList, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootListAction("groups", opts), &userapi.GroupList{})
+func (c *FakeGroups) List(opts metav1.ListOptions) (*userapi.GroupList, error) {
+	obj, err := c.Fake.Invokes(clientgotesting.NewRootListAction(groupsResource, opts), &userapi.GroupList{})
 	if obj == nil {
 		return nil, err
 	}
@@ -33,7 +36,7 @@ func (c *FakeGroups) List(opts kapi.ListOptions) (*userapi.GroupList, error) {
 }
 
 func (c *FakeGroups) Create(inObj *userapi.Group) (*userapi.Group, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootCreateAction("groups", inObj), inObj)
+	obj, err := c.Fake.Invokes(clientgotesting.NewRootCreateAction(groupsResource, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -42,7 +45,7 @@ func (c *FakeGroups) Create(inObj *userapi.Group) (*userapi.Group, error) {
 }
 
 func (c *FakeGroups) Update(inObj *userapi.Group) (*userapi.Group, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewRootUpdateAction("groups", inObj), inObj)
+	obj, err := c.Fake.Invokes(clientgotesting.NewRootUpdateAction(groupsResource, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -51,10 +54,10 @@ func (c *FakeGroups) Update(inObj *userapi.Group) (*userapi.Group, error) {
 }
 
 func (c *FakeGroups) Delete(name string) error {
-	_, err := c.Fake.Invokes(ktestclient.NewRootDeleteAction("groups", name), &userapi.Group{})
+	_, err := c.Fake.Invokes(clientgotesting.NewRootDeleteAction(groupsResource, name), &userapi.Group{})
 	return err
 }
 
-func (c *FakeGroups) Watch(opts kapi.ListOptions) (watch.Interface, error) {
-	return c.Fake.InvokesWatch(ktestclient.NewRootWatchAction("groups", opts))
+func (c *FakeGroups) Watch(opts metav1.ListOptions) (watch.Interface, error) {
+	return c.Fake.InvokesWatch(clientgotesting.NewRootWatchAction(groupsResource, opts))
 }

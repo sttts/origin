@@ -15,7 +15,7 @@ import (
 	docker "github.com/fsouza/go-dockerclient"
 	"github.com/openshift/origin/pkg/bootstrap/docker/errors"
 	"github.com/openshift/origin/pkg/bootstrap/docker/localcmd"
-	"k8s.io/kubernetes/pkg/util/net"
+	"k8s.io/apimachinery/pkg/util/net"
 )
 
 const (
@@ -207,11 +207,11 @@ func determineMachineMemory() int {
 // TODO: implement linux & windows
 func determineMachineProcessors() int {
 	if runtime.GOOS == "darwin" {
-		output, _, err := localcmd.New("sysctl").Args("-n", "hw.ncpus").Output()
+		output, _, err := localcmd.New("sysctl").Args("-n", "hw.logicalcpu").Output()
 		if err == nil {
-			ncpus, aerr := strconv.Atoi(strings.TrimSpace(output))
+			cpus, aerr := strconv.Atoi(strings.TrimSpace(output))
 			if aerr == nil {
-				return ncpus // use all cpus
+				return cpus // use all cpus
 			}
 		}
 	}

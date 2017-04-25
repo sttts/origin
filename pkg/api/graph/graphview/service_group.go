@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sort"
 
-	kapi "k8s.io/kubernetes/pkg/api"
-	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 
 	osgraph "github.com/openshift/origin/pkg/api/graph"
 	kubeedges "github.com/openshift/origin/pkg/api/kubegraph"
@@ -21,10 +21,13 @@ type ServiceGroup struct {
 
 	DeploymentConfigPipelines []DeploymentConfigPipeline
 	ReplicationControllers    []ReplicationController
+	StatefulSets              []StatefulSet
 
-	FulfillingDCs  []*deploygraph.DeploymentConfigNode
-	FulfillingRCs  []*kubegraph.ReplicationControllerNode
-	FulfillingPods []*kubegraph.PodNode
+	// TODO: this has to stop
+	FulfillingStatefulSets []*kubegraph.StatefulSetNode
+	FulfillingDCs          []*deploygraph.DeploymentConfigNode
+	FulfillingRCs          []*kubegraph.ReplicationControllerNode
+	FulfillingPods         []*kubegraph.PodNode
 
 	ExposingRoutes []*routegraph.RouteNode
 }
@@ -66,6 +69,8 @@ func NewServiceGroup(g osgraph.Graph, serviceNode *kubegraph.ServiceNode) (Servi
 			service.FulfillingRCs = append(service.FulfillingRCs, castContainer)
 		case *kubegraph.PodNode:
 			service.FulfillingPods = append(service.FulfillingPods, castContainer)
+		case *kubegraph.StatefulSetNode:
+			service.FulfillingStatefulSets = append(service.FulfillingStatefulSets, castContainer)
 		default:
 			utilruntime.HandleError(fmt.Errorf("unrecognized container: %v", castContainer))
 		}
@@ -97,6 +102,13 @@ func NewServiceGroup(g osgraph.Graph, serviceNode *kubegraph.ServiceNode) (Servi
 		service.ReplicationControllers = append(service.ReplicationControllers, rcView)
 	}
 
+	for _, fulfillingStatefulSet := range service.FulfillingStatefulSets {
+		view, covers := NewStatefulSet(g, fulfillingStatefulSet)
+
+		covered.Insert(covers.List()...)
+		service.StatefulSets = append(service.StatefulSets, view)
+	}
+
 	for _, fulfillingPod := range service.FulfillingPods {
 		_, podCovers := NewPod(g, fulfillingPod)
 		covered.Insert(podCovers.List()...)
@@ -114,7 +126,7 @@ func (m ServiceGroupByObjectMeta) Less(i, j int) bool {
 	return CompareObjectMeta(&a.Service.Service.ObjectMeta, &b.Service.Service.ObjectMeta)
 }
 
-func CompareObjectMeta(a, b *kapi.ObjectMeta) bool {
+func CompareObjectMeta(a, b *metav1.ObjectMeta) bool {
 	if a.Namespace == b.Namespace {
 		return a.Name < b.Name
 	}

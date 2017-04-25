@@ -6,68 +6,72 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"os"
 	"path"
 	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/apis/extensions"
-	"k8s.io/kubernetes/pkg/client/restclient"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
-	kclientcmd "k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
+	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/intstr"
 
 	authapi "github.com/openshift/origin/pkg/authorization/api"
+	"github.com/openshift/origin/pkg/cmd/templates"
 	cmdutil "github.com/openshift/origin/pkg/cmd/util"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 	"github.com/openshift/origin/pkg/cmd/util/variable"
+
 	configcmd "github.com/openshift/origin/pkg/config/cmd"
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	"github.com/openshift/origin/pkg/generate/app"
 )
 
-const (
-	registryLong = `
-Install or configure an integrated Docker registry
+var (
+	registryLong = templates.LongDesc(`
+		Install or configure an integrated Docker registry
 
-This command sets up a Docker registry integrated with your cluster to provide notifications when
-images are pushed. With no arguments, the command will check for the existing registry service
-called 'docker-registry' and try to create it. If you want to test whether the registry has
-been created add the --dry-run flag and the command will exit with 1 if the registry does not
-exist.
+		This command sets up a Docker registry integrated with your cluster to provide notifications when
+		images are pushed. With no arguments, the command will check for the existing registry service
+		called 'docker-registry' and try to create it. If you want to test whether the registry has
+		been created add the --dry-run flag and the command will exit with 1 if the registry does not
+		exist.
 
-To run a highly available registry, you should be using a remote storage mechanism like an
-object store (several are supported by the Docker registry). The default Docker registry image
-is configured to accept configuration as environment variables - refer to the configuration file in
-that image for more on setting up alternative storage. Once you've made those changes, you can
-pass --replicas=2 or higher to ensure you have failover protection. The default registry setup
-uses a local volume and the data will be lost if you delete the running pod.
+		To run a highly available registry, you should be using a remote storage mechanism like an
+		object store (several are supported by the Docker registry). The default Docker registry image
+		is configured to accept configuration as environment variables - refer to the configuration file in
+		that image for more on setting up alternative storage. Once you've made those changes, you can
+		pass --replicas=2 or higher to ensure you have failover protection. The default registry setup
+		uses a local volume and the data will be lost if you delete the running pod.
 
-If multiple ports are specified using the option --ports, the first specified port will be
-chosen for use as the REGISTRY_HTTP_ADDR and will be passed to Docker registry.
+		If multiple ports are specified using the option --ports, the first specified port will be
+		chosen for use as the REGISTRY_HTTP_ADDR and will be passed to Docker registry.
 
-NOTE: This command is intended to simplify the tasks of setting up a Docker registry in a new
-  installation. Some configuration beyond this command is still required to make
-  your registry persist data.`
+		NOTE: This command is intended to simplify the tasks of setting up a Docker registry in a new
+		installation. Some configuration beyond this command is still required to make
+		your registry persist data.`)
 
-	registryExample = `  # Check if default Docker registry ("docker-registry") has been created
-  %[1]s %[2]s --dry-run
+	registryExample = templates.Examples(`
+		# Check if default Docker registry ("docker-registry") has been created
+	  %[1]s %[2]s --dry-run
 
-  # See what the registry will look like if created
-  %[1]s %[2]s -o yaml
+	  # See what the registry will look like if created
+	  %[1]s %[2]s -o yaml
 
-  # Create a registry with two replicas if it does not exist
-  %[1]s %[2]s --replicas=2
+	  # Create a registry with two replicas if it does not exist
+	  %[1]s %[2]s --replicas=2
 
-  # Use a different registry image
-  %[1]s %[2]s --images=myrepo/docker-registry:mytag
+	  # Use a different registry image
+	  %[1]s %[2]s --images=myrepo/docker-registry:mytag
 
-  # Enforce quota and limits on images
-  %[1]s %[2]s --enforce-quota`
+	  # Enforce quota and limits on images
+	  %[1]s %[2]s --enforce-quota`)
 )
 
 // RegistryOptions contains the configuration for the registry as well as any other
@@ -83,7 +87,7 @@ type RegistryOptions struct {
 	nodeSelector  map[string]string
 	ports         []kapi.ContainerPort
 	namespace     string
-	serviceClient kclient.ServicesNamespacer
+	serviceClient kcoreclient.ServicesGetter
 	image         string
 }
 
@@ -100,14 +104,20 @@ type RegistryConfig struct {
 	Volume         string
 	HostMount      string
 	DryRun         bool
-	Credentials    string
 	Selector       string
 	ServiceAccount string
 	DaemonSet      bool
 	EnforceQuota   bool
 
+	// SupplementalGroups is list of int64, however cobra does not have appropriate func
+	// for that type list.
+	SupplementalGroups []string
+	FSGroup            string
+
 	ServingCertPath string
 	ServingKeyPath  string
+
+	ClusterIP string
 
 	// TODO: accept environment values.
 }
@@ -134,7 +144,7 @@ const (
 )
 
 // NewCmdRegistry implements the OpenShift cli registry command
-func NewCmdRegistry(f *clientcmd.Factory, parentName, name string, out io.Writer) *cobra.Command {
+func NewCmdRegistry(f *clientcmd.Factory, parentName, name string, out, errout io.Writer) *cobra.Command {
 	cfg := &RegistryConfig{
 		ImageTemplate:  variable.NewDefaultImageTemplate(),
 		Name:           "registry",
@@ -155,8 +165,12 @@ func NewCmdRegistry(f *clientcmd.Factory, parentName, name string, out io.Writer
 			opts := &RegistryOptions{
 				Config: cfg,
 			}
-			kcmdutil.CheckErr(opts.Complete(f, cmd, out, args))
-			kcmdutil.CheckErr(opts.RunCmdRegistry())
+			kcmdutil.CheckErr(opts.Complete(f, cmd, out, errout, args))
+			err := opts.RunCmdRegistry()
+			if err == cmdutil.ErrExit {
+				os.Exit(1)
+			}
+			kcmdutil.CheckErr(err)
 		},
 	}
 
@@ -169,19 +183,14 @@ func NewCmdRegistry(f *clientcmd.Factory, parentName, name string, out io.Writer
 	cmd.Flags().StringVar(&cfg.Volume, "volume", cfg.Volume, "The volume path to use for registry storage; defaults to /registry which is the default for origin-docker-registry.")
 	cmd.Flags().StringVar(&cfg.HostMount, "mount-host", cfg.HostMount, "If set, the registry volume will be created as a host-mount at this path.")
 	cmd.Flags().Bool("create", false, "deprecated; this is now the default behavior")
-	cmd.Flags().StringVar(&cfg.Credentials, "credentials", "", "Path to a .kubeconfig file that will contain the credentials the registry should use to contact the master.")
 	cmd.Flags().StringVar(&cfg.ServiceAccount, "service-account", cfg.ServiceAccount, "Name of the service account to use to run the registry pod.")
 	cmd.Flags().StringVar(&cfg.Selector, "selector", cfg.Selector, "Selector used to filter nodes on deployment. Used to run registries on a specific set of nodes.")
 	cmd.Flags().StringVar(&cfg.ServingCertPath, "tls-certificate", cfg.ServingCertPath, "An optional path to a PEM encoded certificate (which may contain the private key) for serving over TLS")
 	cmd.Flags().StringVar(&cfg.ServingKeyPath, "tls-key", cfg.ServingKeyPath, "An optional path to a PEM encoded private key for serving over TLS")
-	cmd.Flags().BoolVar(&cfg.DaemonSet, "daemonset", cfg.DaemonSet, "Use a daemonset instead of a deployment config.")
-	cmd.Flags().BoolVar(&cfg.EnforceQuota, "enforce-quota", cfg.EnforceQuota, "If set, the registry will refuse to write blobs if they exceed quota limits")
-
-	// autocompletion hints
-	cmd.MarkFlagFilename("credentials", "kubeconfig")
-
-	// Deprecate credentials
-	cmd.Flags().MarkDeprecated("credentials", "use --service-account to specify the service account the registry will use to make API calls")
+	cmd.Flags().StringSliceVar(&cfg.SupplementalGroups, "supplemental-groups", cfg.SupplementalGroups, "Specify supplemental groups which is an array of ID's that grants group access to registry shared storage")
+	cmd.Flags().StringVar(&cfg.FSGroup, "fs-group", "", "Specify fsGroup which is an ID that grants group access to registry block storage")
+	cmd.Flags().BoolVar(&cfg.DaemonSet, "daemonset", cfg.DaemonSet, "If true, use a daemonset instead of a deployment config.")
+	cmd.Flags().BoolVar(&cfg.EnforceQuota, "enforce-quota", cfg.EnforceQuota, "If true, the registry will refuse to write blobs if they exceed quota limits")
 
 	cfg.Action.BindForOutput(cmd.Flags())
 	cmd.Flags().String("output-version", "", "The preferred API versions of the output objects")
@@ -190,7 +199,7 @@ func NewCmdRegistry(f *clientcmd.Factory, parentName, name string, out io.Writer
 }
 
 // Complete completes any options that are required by validate or run steps.
-func (opts *RegistryOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, out io.Writer, args []string) error {
+func (opts *RegistryOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, out, errout io.Writer, args []string) error {
 	if len(args) > 0 {
 		return kcmdutil.UsageError(cmd, "No arguments are allowed to this command")
 	}
@@ -223,23 +232,41 @@ func (opts *RegistryOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, 
 		opts.nodeSelector = valid
 	}
 
+	if len(opts.Config.FSGroup) > 0 {
+		if _, err := strconv.ParseInt(opts.Config.FSGroup, 10, 64); err != nil {
+			return kcmdutil.UsageError(cmd, "invalid group ID %q specified for fsGroup (%v)", opts.Config.FSGroup, err)
+		}
+	}
+
+	if len(opts.Config.SupplementalGroups) > 0 {
+		for _, v := range opts.Config.SupplementalGroups {
+			if val, err := strconv.ParseInt(v, 10, 64); err != nil || val == 0 {
+				return kcmdutil.UsageError(cmd, "invalid group ID %q specified for supplemental group (%v)", v, err)
+			}
+		}
+	}
+	if len(opts.Config.SupplementalGroups) > 0 && len(opts.Config.FSGroup) > 0 {
+		return kcmdutil.UsageError(cmd, "fsGroup and supplemental groups cannot be specified both at the same time")
+	}
+
 	var portsErr error
 	if opts.ports, portsErr = app.ContainerPortsFromString(opts.Config.Ports); portsErr != nil {
 		return portsErr
 	}
 
 	var nsErr error
-	if opts.namespace, _, nsErr = f.OpenShiftClientConfig.Namespace(); nsErr != nil {
+	if opts.namespace, _, nsErr = f.DefaultNamespace(); nsErr != nil {
 		return fmt.Errorf("error getting namespace: %v", nsErr)
 	}
 
-	var kClientErr error
-	if _, opts.serviceClient, kClientErr = f.Clients(); kClientErr != nil {
+	_, kClient, kClientErr := f.Clients()
+	if kClientErr != nil {
 		return fmt.Errorf("error getting client: %v", kClientErr)
 	}
+	opts.serviceClient = kClient.Core()
 
 	opts.Config.Action.Bulk.Mapper = clientcmd.ResourceMapper(f)
-	opts.Config.Action.Out, opts.Config.Action.ErrOut = out, cmd.Out()
+	opts.Config.Action.Out, opts.Config.Action.ErrOut = out, errout
 	opts.Config.Action.Bulk.Op = configcmd.Create
 	opts.out = out
 	opts.cmd = cmd
@@ -256,19 +283,19 @@ func (opts *RegistryOptions) RunCmdRegistry() error {
 
 	output := opts.Config.Action.ShouldPrint()
 	generate := output
-	if !generate {
-		service, err := opts.serviceClient.Services(opts.namespace).Get(name)
-		if err != nil {
-			if !errors.IsNotFound(err) && !generate {
+	service, err := opts.serviceClient.Services(opts.namespace).Get(name, metav1.GetOptions{})
+	if err != nil {
+		if !generate {
+			if !errors.IsNotFound(err) {
 				return fmt.Errorf("can't check for existing docker-registry %q: %v", name, err)
 			}
-			if !output && opts.Config.Action.DryRun {
+			if opts.Config.Action.DryRun {
 				return fmt.Errorf("Docker registry %q service does not exist", name)
 			}
 			generate = true
-		} else {
-			clusterIP = service.Spec.ClusterIP
 		}
+	} else {
+		clusterIP = service.Spec.ClusterIP
 	}
 
 	if !generate {
@@ -276,43 +303,15 @@ func (opts *RegistryOptions) RunCmdRegistry() error {
 		return nil
 	}
 
-	// create new registry
-	secretEnv := app.Environment{}
-	switch {
-	case len(opts.Config.ServiceAccount) == 0 && len(opts.Config.Credentials) == 0:
-		return fmt.Errorf("registry could not be created; a service account or the path to a .kubeconfig file must be provided")
-	case len(opts.Config.Credentials) > 0:
-		clientConfigLoadingRules := &kclientcmd.ClientConfigLoadingRules{ExplicitPath: opts.Config.Credentials}
-		credentials, err := clientConfigLoadingRules.Load()
-		if err != nil {
-			return fmt.Errorf("registry does not exist; the provided credentials %q could not be loaded: %v", opts.Config.Credentials, err)
-		}
-		config, err := kclientcmd.NewDefaultClientConfig(*credentials, &kclientcmd.ConfigOverrides{}).ClientConfig()
-		if err != nil {
-			return fmt.Errorf("registry does not exist; the provided credentials %q could not be used: %v", opts.Config.Credentials, err)
-		}
-		if err := restclient.LoadTLSFiles(config); err != nil {
-			return fmt.Errorf("registry does not exist; the provided credentials %q could not load certificate info: %v", opts.Config.Credentials, err)
-		}
-		insecure := "false"
-		if config.Insecure {
-			insecure = "true"
-		} else {
-			if len(config.KeyData) == 0 || len(config.CertData) == 0 {
-				return fmt.Errorf("registry does not exist; the provided credentials %q are missing the client certificate and/or key", opts.Config.Credentials)
-			}
-		}
-
-		secretEnv = app.Environment{
-			"OPENSHIFT_MASTER":    config.Host,
-			"OPENSHIFT_CA_DATA":   string(config.CAData),
-			"OPENSHIFT_KEY_DATA":  string(config.KeyData),
-			"OPENSHIFT_CERT_DATA": string(config.CertData),
-			"OPENSHIFT_INSECURE":  insecure,
-		}
+	if len(opts.Config.ClusterIP) > 0 {
+		clusterIP = opts.Config.ClusterIP
 	}
 
-	needServiceAccountRole := len(opts.Config.ServiceAccount) > 0 && len(opts.Config.Credentials) == 0
+	// create new registry
+	secretEnv := app.Environment{}
+	if len(opts.Config.ServiceAccount) == 0 {
+		return fmt.Errorf("registry could not be created; a service account must be provided")
+	}
 
 	var servingCert, servingKey []byte
 	if len(opts.Config.ServingCertPath) > 0 {
@@ -327,7 +326,7 @@ func (opts *RegistryOptions) RunCmdRegistry() error {
 		if err != nil {
 			return fmt.Errorf("registry does not exist; could not load TLS private key file %q: %v", opts.Config.ServingKeyPath, err)
 		}
-		servingCert = data
+		servingKey = data
 	}
 
 	env := app.Environment{}
@@ -340,7 +339,7 @@ func (opts *RegistryOptions) RunCmdRegistry() error {
 		env["REGISTRY_HTTP_ADDR"] = fmt.Sprintf(":%d", healthzPort)
 		env["REGISTRY_HTTP_NET"] = "tcp"
 	}
-	secrets, volumes, mounts, extraEnv, tls, err := generateSecretsConfig(opts.Config, opts.namespace, servingCert, servingKey)
+	secrets, volumes, mounts, extraEnv, tls, err := generateSecretsConfig(opts.Config, servingCert, servingKey)
 	if err != nil {
 		return err
 	}
@@ -351,7 +350,7 @@ func (opts *RegistryOptions) RunCmdRegistry() error {
 
 	mountHost := len(opts.Config.HostMount) > 0
 	podTemplate := &kapi.PodTemplateSpec{
-		ObjectMeta: kapi.ObjectMeta{Labels: opts.label},
+		ObjectMeta: metav1.ObjectMeta{Labels: opts.label},
 		Spec: kapi.PodSpec{
 			NodeSelector: opts.nodeSelector,
 			Containers: []kapi.Container{
@@ -369,6 +368,12 @@ func (opts *RegistryOptions) RunCmdRegistry() error {
 					},
 					LivenessProbe:  livenessProbe,
 					ReadinessProbe: readinessProbe,
+					Resources: kapi.ResourceRequirements{
+						Requests: kapi.ResourceList{
+							kapi.ResourceCPU:    resource.MustParse("100m"),
+							kapi.ResourceMemory: resource.MustParse("256Mi"),
+						},
+					},
 				},
 			},
 			Volumes: append(volumes, kapi.Volume{
@@ -376,6 +381,7 @@ func (opts *RegistryOptions) RunCmdRegistry() error {
 				VolumeSource: kapi.VolumeSource{},
 			}),
 			ServiceAccountName: opts.Config.ServiceAccount,
+			SecurityContext:    generateSecurityContext(opts.Config),
 		},
 	}
 	if mountHost {
@@ -388,29 +394,28 @@ func (opts *RegistryOptions) RunCmdRegistry() error {
 	for _, s := range secrets {
 		objects = append(objects, s)
 	}
-	if needServiceAccountRole {
-		objects = append(objects,
-			&kapi.ServiceAccount{ObjectMeta: kapi.ObjectMeta{Name: opts.Config.ServiceAccount}},
-			&authapi.ClusterRoleBinding{
-				ObjectMeta: kapi.ObjectMeta{Name: fmt.Sprintf("registry-%s-role", opts.Config.Name)},
-				Subjects: []kapi.ObjectReference{
-					{
-						Kind:      "ServiceAccount",
-						Name:      opts.Config.ServiceAccount,
-						Namespace: opts.namespace,
-					},
-				},
-				RoleRef: kapi.ObjectReference{
-					Kind: "ClusterRole",
-					Name: "system:registry",
+
+	objects = append(objects,
+		&kapi.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: opts.Config.ServiceAccount}},
+		&authapi.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("registry-%s-role", opts.Config.Name)},
+			Subjects: []kapi.ObjectReference{
+				{
+					Kind:      "ServiceAccount",
+					Name:      opts.Config.ServiceAccount,
+					Namespace: opts.namespace,
 				},
 			},
-		)
-	}
+			RoleRef: kapi.ObjectReference{
+				Kind: "ClusterRole",
+				Name: "system:registry",
+			},
+		},
+	)
 
 	if opts.Config.DaemonSet {
 		objects = append(objects, &extensions.DaemonSet{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name:   name,
 				Labels: opts.label,
 			},
@@ -423,7 +428,7 @@ func (opts *RegistryOptions) RunCmdRegistry() error {
 		})
 	} else {
 		objects = append(objects, &deployapi.DeploymentConfig{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name:   name,
 				Labels: opts.label,
 			},
@@ -456,7 +461,8 @@ func (opts *RegistryOptions) RunCmdRegistry() error {
 	list := &kapi.List{Items: objects}
 
 	if opts.Config.Action.ShouldPrint() {
-		mapper, _ := opts.factory.Object(false)
+		mapper, _ := opts.factory.Object()
+		opts.cmd.Flag("output-version").Value.Set("extensions/v1beta1,v1")
 		fn := cmdutil.VersionedPrintObject(opts.factory.PrintObject, opts.cmd, mapper, opts.out)
 		if err := fn(list); err != nil {
 			return fmt.Errorf("unable to print object: %v", err)
@@ -471,24 +477,17 @@ func (opts *RegistryOptions) RunCmdRegistry() error {
 }
 
 func generateLivenessProbeConfig(port int, https bool) *kapi.Probe {
-	var scheme kapi.URIScheme
-	if https {
-		scheme = kapi.URISchemeHTTPS
-	}
-	return &kapi.Probe{
-		InitialDelaySeconds: 10,
-		TimeoutSeconds:      healthzRouteTimeoutSeconds,
-		Handler: kapi.Handler{
-			HTTPGet: &kapi.HTTPGetAction{
-				Scheme: scheme,
-				Path:   healthzRoute,
-				Port:   intstr.FromInt(port),
-			},
-		},
-	}
+	probeConfig := generateProbeConfig(port, https)
+	probeConfig.InitialDelaySeconds = 10
+
+	return probeConfig
 }
 
 func generateReadinessProbeConfig(port int, https bool) *kapi.Probe {
+	return generateProbeConfig(port, https)
+}
+
+func generateProbeConfig(port int, https bool) *kapi.Probe {
 	var scheme kapi.URIScheme
 	if https {
 		scheme = kapi.URISchemeHTTPS
@@ -509,7 +508,7 @@ func generateReadinessProbeConfig(port int, https bool) *kapi.Probe {
 // as the TLS serving cert that are necessary for the registry container.
 // Runs true if the registry should be served over TLS.
 func generateSecretsConfig(
-	cfg *RegistryConfig, namespace string, defaultCrt, defaultKey []byte,
+	cfg *RegistryConfig, defaultCrt, defaultKey []byte,
 ) ([]*kapi.Secret, []kapi.Volume, []kapi.VolumeMount, app.Environment, bool, error) {
 	var secrets []*kapi.Secret
 	var volumes []kapi.Volume
@@ -529,7 +528,7 @@ func generateSecretsConfig(
 
 	if len(defaultCrt) > 0 {
 		secret := &kapi.Secret{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: fmt.Sprintf("%s-certs", cfg.Name),
 			},
 			Type: kapi.SecretTypeTLS,
@@ -570,4 +569,23 @@ func generateSecretsConfig(
 	extraEnv["REGISTRY_HTTP_SECRET"] = httpSecretString
 
 	return secrets, volumes, mounts, extraEnv, len(defaultCrt) > 0, nil
+}
+
+func generateSecurityContext(conf *RegistryConfig) *kapi.PodSecurityContext {
+	result := &kapi.PodSecurityContext{}
+	if len(conf.SupplementalGroups) > 0 {
+		result.SupplementalGroups = []int64{}
+		for _, val := range conf.SupplementalGroups {
+			// The errors are handled by Complete()
+			if groupID, err := strconv.ParseInt(val, 10, 64); err == nil {
+				result.SupplementalGroups = append(result.SupplementalGroups, groupID)
+			}
+		}
+	}
+	if len(conf.FSGroup) > 0 {
+		if groupID, err := strconv.ParseInt(conf.FSGroup, 10, 64); err == nil {
+			result.FSGroup = &groupID
+		}
+	}
+	return result
 }

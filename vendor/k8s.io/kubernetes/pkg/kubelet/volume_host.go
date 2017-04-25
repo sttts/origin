@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,10 +20,11 @@ import (
 	"fmt"
 	"net"
 
-	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/kubernetes/pkg/api/v1"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	"k8s.io/kubernetes/pkg/cloudprovider"
-	"k8s.io/kubernetes/pkg/types"
+	"k8s.io/kubernetes/pkg/kubelet/secret"
 	"k8s.io/kubernetes/pkg/util/io"
 	"k8s.io/kubernetes/pkg/util/mount"
 	"k8s.io/kubernetes/pkg/volume"
@@ -37,10 +38,12 @@ import (
 // plugins - used to initialize volumePluginMgr
 func NewInitializedVolumePluginMgr(
 	kubelet *Kubelet,
+	secretManager secret.Manager,
 	plugins []volume.VolumePlugin) (*volume.VolumePluginMgr, error) {
 	kvh := &kubeletVolumeHost{
 		kubelet:         kubelet,
 		volumePluginMgr: volume.VolumePluginMgr{},
+		secretManager:   secretManager,
 	}
 
 	if err := kvh.volumePluginMgr.InitPlugins(plugins, kvh); err != nil {
@@ -62,6 +65,7 @@ func (kvh *kubeletVolumeHost) GetPluginDir(pluginName string) string {
 type kubeletVolumeHost struct {
 	kubelet         *Kubelet
 	volumePluginMgr volume.VolumePluginMgr
+	secretManager   secret.Manager
 }
 
 func (kvh *kubeletVolumeHost) GetPodVolumeDir(podUID types.UID, pluginName string, volumeName string) string {
@@ -72,14 +76,14 @@ func (kvh *kubeletVolumeHost) GetPodPluginDir(podUID types.UID, pluginName strin
 	return kvh.kubelet.getPodPluginDir(podUID, pluginName)
 }
 
-func (kvh *kubeletVolumeHost) GetKubeClient() internalclientset.Interface {
+func (kvh *kubeletVolumeHost) GetKubeClient() clientset.Interface {
 	return kvh.kubelet.kubeClient
 }
 
 func (kvh *kubeletVolumeHost) NewWrapperMounter(
 	volName string,
 	spec volume.Spec,
-	pod *api.Pod,
+	pod *v1.Pod,
 	opts volume.VolumeOptions) (volume.Mounter, error) {
 	// The name of wrapper volume is set to "wrapped_{wrapped_volume_name}"
 	wrapperVolumeName := "wrapped_" + volName
@@ -125,11 +129,14 @@ func (kvh *kubeletVolumeHost) GetHostIP() (net.IP, error) {
 	return kvh.kubelet.GetHostIP()
 }
 
-func (kvh *kubeletVolumeHost) GetRootContext() string {
-	rootContext, err := kvh.kubelet.getRootDirContext()
+func (kvh *kubeletVolumeHost) GetNodeAllocatable() (v1.ResourceList, error) {
+	node, err := kvh.kubelet.getNodeAnyWay()
 	if err != nil {
-		return ""
+		return nil, fmt.Errorf("error retrieving node: %v", err)
 	}
+	return node.Status.Allocatable, nil
+}
 
-	return rootContext
+func (kvh *kubeletVolumeHost) GetSecretFunc() func(namespace, name string) (*v1.Secret, error) {
+	return kvh.secretManager.GetSecret
 }

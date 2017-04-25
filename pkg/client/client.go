@@ -7,10 +7,10 @@ import (
 	"runtime"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/client-go/discovery"
+	restclient "k8s.io/client-go/rest"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/client/restclient"
-	"k8s.io/kubernetes/pkg/client/typed/discovery"
 
 	"github.com/openshift/origin/pkg/api/latest"
 	"github.com/openshift/origin/pkg/version"
@@ -22,6 +22,7 @@ type Interface interface {
 	BuildConfigsNamespacer
 	BuildLogsNamespacer
 	ImagesInterfacer
+	ImageSignaturesInterfacer
 	ImageStreamsNamespacer
 	ImageStreamMappingsNamespacer
 	ImageStreamTagsNamespacer
@@ -33,6 +34,7 @@ type Interface interface {
 	HostSubnetsInterface
 	NetNamespacesInterface
 	ClusterNetworkingInterface
+	EgressNetworkPoliciesNamespacer
 	IdentitiesInterface
 	UsersInterface
 	GroupsInterface
@@ -46,6 +48,7 @@ type Interface interface {
 	SubjectAccessReviews
 	LocalSubjectAccessReviewsNamespacer
 	SelfSubjectRulesReviewsNamespacer
+	SubjectRulesReviewsNamespacer
 	TemplatesNamespacer
 	TemplateConfigsNamespacer
 	OAuthClientsInterface
@@ -62,6 +65,7 @@ type Interface interface {
 	ClusterRoleBindingsInterface
 	ClusterResourceQuotasInterface
 	AppliedClusterResourceQuotasNamespacer
+	RoleBindingRestrictionsNamespacer
 }
 
 // Builds provides a REST client for Builds
@@ -82,6 +86,11 @@ func (c *Client) BuildLogs(namespace string) BuildLogsInterface {
 // Images provides a REST client for Images
 func (c *Client) Images() ImageInterface {
 	return newImages(c)
+}
+
+// ImageSignatures provides a REST client for ImageSignatures
+func (c *Client) ImageSignatures() ImageSignatureInterface {
+	return newImageSignatures(c)
 }
 
 // ImageStreamImages provides a REST client for retrieving image secrets in a namespace
@@ -137,6 +146,11 @@ func (c *Client) NetNamespaces() NetNamespaceInterface {
 // ClusterNetwork provides a REST client for ClusterNetworking
 func (c *Client) ClusterNetwork() ClusterNetworkInterface {
 	return newClusterNetwork(c)
+}
+
+// EgressNetworkPolicies provides a REST client for EgressNetworkPolicy
+func (c *Client) EgressNetworkPolicies(namespace string) EgressNetworkPolicyInterface {
+	return newEgressNetworkPolicy(c, namespace)
 }
 
 // Users provides a REST client for User
@@ -233,6 +247,10 @@ func (c *Client) SelfSubjectRulesReviews(namespace string) SelfSubjectRulesRevie
 	return newSelfSubjectRulesReviews(c, namespace)
 }
 
+func (c *Client) SubjectRulesReviews(namespace string) SubjectRulesReviewInterface {
+	return newSubjectRulesReviews(c, namespace)
+}
+
 func (c *Client) OAuthClients() OAuthClientInterface {
 	return newOAuthClients(c)
 }
@@ -273,6 +291,22 @@ func (c *Client) AppliedClusterResourceQuotas(namespace string) AppliedClusterRe
 	return newAppliedClusterResourceQuotas(c, namespace)
 }
 
+func (c *Client) RoleBindingRestrictions(namespace string) RoleBindingRestrictionInterface {
+	return newRoleBindingRestrictions(c, namespace)
+}
+
+func (c *Client) PodSecurityPolicyReviews(namespace string) PodSecurityPolicyReviewInterface {
+	return newPodSecurityPolicyReviews(c, namespace)
+}
+
+func (c *Client) PodSecurityPolicySelfSubjectReviews(namespace string) PodSecurityPolicySelfSubjectReviewInterface {
+	return newPodSecurityPolicySelfSubjectReviews(c, namespace)
+}
+
+func (c *Client) PodSecurityPolicySubjectReviews(namespace string) PodSecurityPolicySubjectReviewInterface {
+	return newPodSecurityPolicySubjectReviews(c, namespace)
+}
+
 // Client is an OpenShift client object
 type Client struct {
 	*restclient.RESTClient
@@ -311,21 +345,11 @@ func SetOpenShiftDefaults(config *restclient.Config) error {
 		groupVersionCopy := latest.Version
 		config.GroupVersion = &groupVersionCopy
 	}
-	if config.APIPath == "" {
+	if config.APIPath == "" || config.APIPath == "/api" {
 		config.APIPath = "/oapi"
 	}
-
-	// groupMeta, err := registered.Group(config.GroupVersion.Group)
-	// if err != nil {
-	// 	return fmt.Errorf("API group %q is not recognized (valid values: %v)", config.GroupVersion.Group, latest.Versions)
-	// }
 	if config.NegotiatedSerializer == nil {
 		config.NegotiatedSerializer = kapi.Codecs
-	}
-
-	if config.Codec == nil {
-		config.Codec = kapi.Codecs.LegacyCodec(*config.GroupVersion)
-		// config.Codec = kapi.Codecs.CodecForVersions(groupMeta.Codec, []unversioned.GroupVersion{*config.GroupVersion}, groupMeta.GroupVersions)
 	}
 	return nil
 }

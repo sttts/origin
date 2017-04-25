@@ -3,13 +3,14 @@ package controller
 import (
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/flowcontrol"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client/cache"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/flowcontrol"
-	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
-	"k8s.io/kubernetes/pkg/watch"
+	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
 
 	"github.com/openshift/origin/pkg/controller"
 	"github.com/openshift/origin/pkg/security/uidallocator"
@@ -19,7 +20,7 @@ import (
 type AllocationFactory struct {
 	UIDAllocator uidallocator.Interface
 	MCSAllocator MCSAllocationFunc
-	Client       kclient.NamespaceInterface
+	Client       kcoreclient.NamespaceInterface
 	// Queue may be a FIFO queue of namespaces. If nil, will be initialized using
 	// the client.
 	Queue controller.ReQueue
@@ -29,10 +30,10 @@ type AllocationFactory struct {
 func (f *AllocationFactory) Create() controller.RunnableController {
 	if f.Queue == nil {
 		lw := &cache.ListWatch{
-			ListFunc: func(options kapi.ListOptions) (runtime.Object, error) {
+			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 				return f.Client.List(options)
 			},
-			WatchFunc: func(options kapi.ListOptions) (watch.Interface, error) {
+			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
 				return f.Client.Watch(options)
 			},
 		}

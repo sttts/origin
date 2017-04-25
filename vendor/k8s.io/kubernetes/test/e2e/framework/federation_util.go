@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"regexp"
 
+	validationutil "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/kubernetes/pkg/api/validation"
-	validation_util "k8s.io/kubernetes/pkg/util/validation"
 )
 
 // GetValidDNSSubdomainName massages the given name to be a valid dns subdomain name.
@@ -30,7 +30,7 @@ import (
 func GetValidDNSSubdomainName(name string) (string, error) {
 	// "_" are not allowed. Replace them by "-".
 	name = regexp.MustCompile("_").ReplaceAllLiteralString(name, "-")
-	maxLength := validation_util.DNS1123SubdomainMaxLength
+	maxLength := validationutil.DNS1123SubdomainMaxLength
 	if len(name) > maxLength {
 		name = name[0 : maxLength-1]
 	}

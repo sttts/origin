@@ -14,8 +14,8 @@ os::provision::build-origin() {
 
   # This optimization is intended for devcluster use so hard-coding the
   # arch in the path should be ok.
-  if [[ -f "$(os::build::find-binary oc "${origin_root}")" &&
-          "${skip_build}" = "true" ]]; then
+  if OS_ROOT="${origin_root}" os::util::find::built_binary oc >/dev/null 2>&1 &&
+          [[ "${skip_build}" = "true" ]]; then
     echo "WARNING: Skipping openshift build due to OPENSHIFT_SKIP_BUILD=true"
   else
     echo "Building openshift"
@@ -49,7 +49,7 @@ os::provision::base-install() {
 
   echo "Installing openshift"
   os::provision::install-cmds "${origin_root}"
-  os::provision::install-sdn "${origin_root}"
+  os::provision::install-sdn "${origin_root}" "$(os::build::get-bin-output-path "${OS_ROOT}")"
   os::provision::set-os-env "${origin_root}" "${config_root}"
 }
 
@@ -187,10 +187,12 @@ os::provision::get-network-plugin() {
 
   local subnet_plugin="redhat/openshift-ovs-subnet"
   local multitenant_plugin="redhat/openshift-ovs-multitenant"
+  local networkpolicy_plugin="redhat/openshift-ovs-networkpolicy"
   local default_plugin="${subnet_plugin}"
 
   if [[ "${plugin}" != "${subnet_plugin}" &&
           "${plugin}" != "${multitenant_plugin}" &&
+          "${plugin}" != "${networkpolicy_plugin}" &&
           "${plugin}" != "cni" ]]; then
     # Disable output when being called from the dind management script
     # since it may be doing something other than launching a cluster.
@@ -209,9 +211,10 @@ os::provision::base-provision() {
   local origin_root=$1
   local is_master=${2:-false}
 
-  # Ensure that secrets can be correctly mounted for pods.
   if os::provision::in-container; then
+    # Ensure that secrets can be correctly mounted for pods.
     mount --make-shared /
+    os::provision::enable-overlay-storage
   fi
 
   # Add a convenience symlink to the gopath repo
@@ -377,13 +380,13 @@ os::provision::disable-node() {
   local config="$(os::provision::get-admin-config "${config_root}")"
 
   local msg="${node_name} to register with the master"
-  local oc="$(os::build::find-binary oc "${origin_root}")"
+  local oc="$(OS_ROOT="${origin_root}" os::util::find::built_binary oc)"
   local condition="os::provision::is-node-registered ${oc} ${config} \
       ${node_name}"
   os::provision::wait-for-condition "${msg}" "${condition}"
 
   echo "Disabling scheduling for node ${node_name}"
-  "$(os::build::find-binary osadm "${origin_root}")" --config="${config}" \
+  "$(OS_ROOT="${origin_root}" os::util::find::built_binary osadm)" --config="${config}" \
       manage-node "${node_name}" --schedulable=false > /dev/null
 }
 
@@ -398,4 +401,37 @@ os::provision::wait-for-node-config() {
 -f ${config_file}"
   os::provision::wait-for-condition "${msg}" "${condition}" \
     "${OS_WAIT_FOREVER}"
+}
+
+# Enable overlayfs for dind if it can be tested to work.
+os::provision::enable-overlay-storage() {
+  local storage_dir=${1:-/var/lib/docker}
+
+  local msg="WARNING: Unable to enable overlay storage for docker-in-docker"
+
+  if grep -q overlay /proc/filesystems; then
+    # Smoke test the overlay filesystem:
+
+    # 1. create smoke dir in the storage dir being mounted
+    local d="${storage_dir}/smoke"
+    mkdir -p "${d}/upper" "${d}/lower" "${d}/work" "${d}/mount"
+
+    # 2. try to mount an overlay fs on top of the smoke dir
+    local overlay_works=1
+    mount -t overlay overlay\
+          -o"lowerdir=${d}/lower,upperdir=${d}/upper,workdir=${d}/work"\
+          "${d}/mount" &&\
+    # 3. try to write a file in the overlay mount
+          echo foo > "${d}/mount/probe" || overlay_works=
+
+    umount -f "${d}/mount" || true
+    rm -rf "${d}" || true
+
+    if [[ -n "${overlay_works}" ]]; then
+      msg="Enabling overlay storage for docker-in-docker"
+      sed -i -e 's+vfs+overlay+' /etc/sysconfig/docker-storage
+    fi
+  fi
+
+  echo "${msg}"
 }

@@ -11,11 +11,11 @@ import (
 	docker "github.com/fsouza/go-dockerclient"
 	"github.com/golang/glog"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	restclient "k8s.io/client-go/rest"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/client/restclient"
-	"k8s.io/kubernetes/pkg/runtime"
 
 	s2iapi "github.com/openshift/source-to-image/pkg/api"
 
@@ -24,7 +24,6 @@ import (
 	bld "github.com/openshift/origin/pkg/build/builder"
 	"github.com/openshift/origin/pkg/build/builder/cmd/scmauth"
 	"github.com/openshift/origin/pkg/client"
-	dockerutil "github.com/openshift/origin/pkg/cmd/util/docker"
 	"github.com/openshift/origin/pkg/generate/git"
 	"github.com/openshift/origin/pkg/version"
 )
@@ -56,7 +55,7 @@ func newBuilderConfigFromEnvironment(out io.Writer) (*builderConfig, error) {
 		return nil, fmt.Errorf("unable to parse build: %v", err)
 	}
 	if errs := validation.ValidateBuild(cfg.build); len(errs) > 0 {
-		return nil, errors.NewInvalid(unversioned.GroupKind{Kind: "Build"}, cfg.build.Name, errs)
+		return nil, errors.NewInvalid(schema.GroupKind{Kind: "Build"}, cfg.build.Name, errs)
 	}
 	glog.V(4).Infof("Build: %#v", cfg.build)
 
@@ -73,7 +72,7 @@ func newBuilderConfigFromEnvironment(out io.Writer) (*builderConfig, error) {
 
 	// dockerClient and dockerEndpoint (DOCKER_HOST)
 	// usually not set, defaults to docker socket
-	cfg.dockerClient, cfg.dockerEndpoint, err = dockerutil.NewHelper().GetClient()
+	cfg.dockerClient, cfg.dockerEndpoint, err = bld.GetDockerClient()
 	if err != nil {
 		return nil, fmt.Errorf("no Docker configuration defined: %v", err)
 	}
@@ -92,11 +91,14 @@ func newBuilderConfigFromEnvironment(out io.Writer) (*builderConfig, error) {
 	return cfg, nil
 }
 
-func (c *builderConfig) setupGitEnvironment() ([]string, error) {
+func (c *builderConfig) setupGitEnvironment() (string, []string, error) {
+	var sourceSecretDir string
+	var errSecret error
+
 	// For now, we only handle git. If not specified, we're done
 	gitSource := c.build.Spec.Source.Git
 	if gitSource == nil {
-		return []string{}, nil
+		return "", []string{}, nil
 	}
 
 	sourceSecret := c.build.Spec.Source.SourceSecret
@@ -107,22 +109,20 @@ func (c *builderConfig) setupGitEnvironment() ([]string, error) {
 		//   it accepts
 		sourceURL, err := git.ParseRepository(gitSource.URI)
 		if err != nil {
-			return nil, fmt.Errorf("cannot parse build URL: %s", gitSource.URI)
+			return "", nil, fmt.Errorf("cannot parse build URL: %s", gitSource.URI)
 		}
 		scmAuths := scmauth.GitAuths(sourceURL)
 
 		// TODO: remove when not necessary to fix up the secret dir permission
-		sourceSecretDir, err := fixSecretPermissions(c.sourceSecretDir)
-		if err != nil {
-			return nil, fmt.Errorf("cannot fix source secret permissions: %v", err)
+		sourceSecretDir, errSecret = fixSecretPermissions(c.sourceSecretDir)
+		if errSecret != nil {
+			return sourceSecretDir, nil, fmt.Errorf("cannot fix source secret permissions: %v", errSecret)
 		}
-
 		secretsEnv, overrideURL, err := scmAuths.Setup(sourceSecretDir)
 		if err != nil {
-			return nil, fmt.Errorf("cannot setup source secret: %v", err)
+			return sourceSecretDir, nil, fmt.Errorf("cannot setup source secret: %v", err)
 		}
 		if overrideURL != nil {
-			c.build.Annotations[bld.OriginalSourceURLAnnotationKey] = gitSource.URI
 			gitSource.URI = overrideURL.String()
 		}
 		gitEnv = append(gitEnv, secretsEnv...)
@@ -135,15 +135,20 @@ func (c *builderConfig) setupGitEnvironment() ([]string, error) {
 		gitEnv = append(gitEnv, fmt.Sprintf("HTTPS_PROXY=%s", *gitSource.HTTPSProxy))
 		gitEnv = append(gitEnv, fmt.Sprintf("https_proxy=%s", *gitSource.HTTPSProxy))
 	}
-	return bld.MergeEnv(os.Environ(), gitEnv), nil
+	if gitSource.NoProxy != nil && len(*gitSource.NoProxy) > 0 {
+		gitEnv = append(gitEnv, fmt.Sprintf("NO_PROXY=%s", *gitSource.NoProxy))
+		gitEnv = append(gitEnv, fmt.Sprintf("no_proxy=%s", *gitSource.NoProxy))
+	}
+	return sourceSecretDir, bld.MergeEnv(os.Environ(), gitEnv), nil
 }
 
 // execute is responsible for running a build
 func (c *builderConfig) execute(b builder) error {
-	gitEnv, err := c.setupGitEnvironment()
+	secretTmpDir, gitEnv, err := c.setupGitEnvironment()
 	if err != nil {
 		return err
 	}
+
 	gitClient := git.NewRepositoryWithEnv(gitEnv)
 
 	cgLimits, err := bld.GetCGroupLimits()
@@ -160,6 +165,7 @@ func (c *builderConfig) execute(b builder) error {
 		fmt.Fprintf(c.out, "Build complete, no image push requested\n")
 	}
 
+	os.RemoveAll(secretTmpDir)
 	return nil
 }
 
@@ -215,7 +221,7 @@ func RunDockerBuild(out io.Writer) error {
 	return runBuild(out, dockerBuilder{})
 }
 
-// RunSTIBuild creates a STI builder and runs its build
-func RunSTIBuild(out io.Writer) error {
+// RunS2IBuild creates a S2I builder and runs its build
+func RunS2IBuild(out io.Writer) error {
 	return runBuild(out, s2iBuilder{})
 }

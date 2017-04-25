@@ -7,8 +7,9 @@ import (
 	"errors"
 
 	buildapi "github.com/openshift/origin/pkg/build/api"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kerrors "k8s.io/kubernetes/pkg/api/errors"
 )
 
 type fakeBuildClient struct {
@@ -20,7 +21,7 @@ func newTestClient(builds []buildapi.Build) *fakeBuildClient {
 	return &fakeBuildClient{builds: &buildapi.BuildList{Items: builds}}
 }
 
-func (f *fakeBuildClient) List(namespace string, opts kapi.ListOptions) (*buildapi.BuildList, error) {
+func (f *fakeBuildClient) List(namespace string, opts metav1.ListOptions) (*buildapi.BuildList, error) {
 	return f.builds, nil
 }
 
@@ -45,7 +46,7 @@ func addBuild(name, bcName string, phase buildapi.BuildPhase, policy buildapi.Bu
 	parts := strings.Split(name, "-")
 	return buildapi.Build{
 		Spec: buildapi.BuildSpec{},
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: "test",
 			Labels: map[string]string{
@@ -94,7 +95,7 @@ func TestForBuild(t *testing.T) {
 	}
 }
 
-func TestHandleComplete(t *testing.T) {
+func TestHandleCompleteSerial(t *testing.T) {
 	builds := []buildapi.Build{
 		addBuild("build-1", "sample-bc", buildapi.BuildPhaseComplete, buildapi.BuildRunPolicySerial),
 		addBuild("build-2", "sample-bc", buildapi.BuildPhaseNew, buildapi.BuildRunPolicySerial),
@@ -107,16 +108,43 @@ func TestHandleComplete(t *testing.T) {
 		t.Errorf("unexpected error %v", err)
 	}
 
-	resultBuilds, err := client.List("test", kapi.ListOptions{})
+	resultBuilds, err := client.List("test", metav1.ListOptions{})
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	if resultBuilds.Items[1].Status.StartTimestamp == nil {
-		t.Errorf("build-2 should have Status.StartTimestamp set to trigger it")
+	if _, ok := resultBuilds.Items[1].Annotations[buildapi.BuildAcceptedAnnotation]; !ok {
+		t.Errorf("build-2 should have Annotation %s set to trigger it", buildapi.BuildAcceptedAnnotation)
 	}
 
-	if resultBuilds.Items[2].Status.StartTimestamp != nil {
-		t.Errorf("build-3 should not have Status.StartTimestamp set")
+	if _, ok := resultBuilds.Items[2].Annotations[buildapi.BuildAcceptedAnnotation]; ok {
+		t.Errorf("build-3 should not have Annotation %s set", buildapi.BuildAcceptedAnnotation)
+	}
+}
+
+func TestHandleCompleteParallel(t *testing.T) {
+	builds := []buildapi.Build{
+		addBuild("build-1", "sample-bc", buildapi.BuildPhaseComplete, buildapi.BuildRunPolicyParallel),
+		addBuild("build-2", "sample-bc", buildapi.BuildPhaseNew, buildapi.BuildRunPolicyParallel),
+		addBuild("build-3", "sample-bc", buildapi.BuildPhaseNew, buildapi.BuildRunPolicyParallel),
+	}
+
+	client := newTestClient(builds)
+
+	if err := handleComplete(client, client, &builds[0]); err != nil {
+		t.Errorf("unexpected error %v", err)
+	}
+
+	resultBuilds, err := client.List("test", metav1.ListOptions{})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	if _, ok := resultBuilds.Items[1].Annotations[buildapi.BuildAcceptedAnnotation]; !ok {
+		t.Errorf("build-2 should have Annotation %s set to trigger it", buildapi.BuildAcceptedAnnotation)
+	}
+
+	if _, ok := resultBuilds.Items[2].Annotations[buildapi.BuildAcceptedAnnotation]; !ok {
+		t.Errorf("build-3 should have Annotation %s set to trigger it", buildapi.BuildAcceptedAnnotation)
 	}
 }

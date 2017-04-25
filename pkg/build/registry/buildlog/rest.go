@@ -6,14 +6,16 @@ import (
 
 	"github.com/golang/glog"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
+	genericrest "k8s.io/apiserver/pkg/registry/generic/rest"
+	"k8s.io/apiserver/pkg/registry/rest"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/rest"
-	"k8s.io/kubernetes/pkg/client/unversioned"
+	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
-	genericrest "k8s.io/kubernetes/pkg/registry/generic/rest"
-	"k8s.io/kubernetes/pkg/registry/pod"
-	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/registry/core/pod"
 
 	"github.com/openshift/origin/pkg/build/api"
 	"github.com/openshift/origin/pkg/build/api/validation"
@@ -31,15 +33,15 @@ type REST struct {
 }
 
 type podGetter struct {
-	podsNamespacer unversioned.PodsNamespacer
+	kcoreclient.PodsGetter
 }
 
-func (g *podGetter) Get(ctx kapi.Context, name string) (runtime.Object, error) {
-	ns, ok := kapi.NamespaceFrom(ctx)
+func (g *podGetter) Get(ctx apirequest.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
+	ns, ok := apirequest.NamespaceFrom(ctx)
 	if !ok {
 		return nil, errors.NewBadRequest("namespace parameter required.")
 	}
-	return g.podsNamespacer.Pods(ns).Get(name)
+	return g.Pods(ns).Get(name, *options)
 }
 
 const defaultTimeout time.Duration = 10 * time.Second
@@ -47,7 +49,7 @@ const defaultTimeout time.Duration = 10 * time.Second
 // NewREST creates a new REST for BuildLog
 // Takes build registry and pod client to get necessary attributes to assemble
 // URL to which the request shall be redirected in order to get build logs.
-func NewREST(getter rest.Getter, watcher rest.Watcher, pn unversioned.PodsNamespacer, connectionInfo kubeletclient.ConnectionInfoGetter) *REST {
+func NewREST(getter rest.Getter, watcher rest.Watcher, pn kcoreclient.PodsGetter, connectionInfo kubeletclient.ConnectionInfoGetter) *REST {
 	return &REST{
 		Getter:         getter,
 		Watcher:        watcher,
@@ -60,7 +62,7 @@ func NewREST(getter rest.Getter, watcher rest.Watcher, pn unversioned.PodsNamesp
 var _ = rest.GetterWithOptions(&REST{})
 
 // Get returns a streamer resource with the contents of the build log
-func (r *REST) Get(ctx kapi.Context, name string, opts runtime.Object) (runtime.Object, error) {
+func (r *REST) Get(ctx apirequest.Context, name string, opts runtime.Object) (runtime.Object, error) {
 	buildLogOpts, ok := opts.(*api.BuildLogOptions)
 	if !ok {
 		return nil, errors.NewBadRequest("did not get an expected options.")
@@ -68,7 +70,7 @@ func (r *REST) Get(ctx kapi.Context, name string, opts runtime.Object) (runtime.
 	if errs := validation.ValidateBuildLogOptions(buildLogOpts); len(errs) > 0 {
 		return nil, errors.NewInvalid(api.Kind("BuildLogOptions"), "", errs)
 	}
-	obj, err := r.Getter.Get(ctx, name)
+	obj, err := r.Getter.Get(ctx, name, &metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +80,7 @@ func (r *REST) Get(ctx kapi.Context, name string, opts runtime.Object) (runtime.
 		// Use the previous version
 		version--
 		previousBuildName := buildutil.BuildNameForConfigVersion(buildutil.ConfigNameForBuild(build), version)
-		previous, err := r.Getter.Get(ctx, previousBuildName)
+		previous, err := r.Getter.Get(ctx, previousBuildName, &metav1.GetOptions{})
 		if err != nil {
 			return nil, err
 		}

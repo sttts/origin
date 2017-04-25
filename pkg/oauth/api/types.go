@@ -1,13 +1,12 @@
 package api
 
 import (
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type OAuthAccessToken struct {
-	unversioned.TypeMeta
-	kapi.ObjectMeta
+	metav1.TypeMeta
+	metav1.ObjectMeta
 
 	// ClientName references the client that created this token.
 	ClientName string
@@ -35,8 +34,8 @@ type OAuthAccessToken struct {
 }
 
 type OAuthAuthorizeToken struct {
-	unversioned.TypeMeta
-	kapi.ObjectMeta
+	metav1.TypeMeta
+	metav1.ObjectMeta
 
 	// ClientName references the client that created this token.
 	ClientName string
@@ -59,13 +58,19 @@ type OAuthAuthorizeToken struct {
 	// UserUID is the unique UID associated with this token. UserUID and UserName must both match
 	// for this token to be valid.
 	UserUID string
+
+	// CodeChallenge is the optional code_challenge associated with this authorization code, as described in rfc7636
+	CodeChallenge string
+
+	// CodeChallengeMethod is the optional code_challenge_method associated with this authorization code, as described in rfc7636
+	CodeChallengeMethod string
 }
 
 // +genclient=true
 
 type OAuthClient struct {
-	unversioned.TypeMeta
-	kapi.ObjectMeta
+	metav1.TypeMeta
+	metav1.ObjectMeta
 
 	// Secret is the unique secret associated with a client
 	Secret string
@@ -121,8 +126,8 @@ type ClusterRoleScopeRestriction struct {
 }
 
 type OAuthClientAuthorization struct {
-	unversioned.TypeMeta
-	kapi.ObjectMeta
+	metav1.TypeMeta
+	metav1.ObjectMeta
 
 	// ClientName references the client that created this authorization
 	ClientName string
@@ -139,25 +144,37 @@ type OAuthClientAuthorization struct {
 }
 
 type OAuthAccessTokenList struct {
-	unversioned.TypeMeta
-	unversioned.ListMeta
+	metav1.TypeMeta
+	metav1.ListMeta
 	Items []OAuthAccessToken
 }
 
 type OAuthAuthorizeTokenList struct {
-	unversioned.TypeMeta
-	unversioned.ListMeta
+	metav1.TypeMeta
+	metav1.ListMeta
 	Items []OAuthAuthorizeToken
 }
 
 type OAuthClientList struct {
-	unversioned.TypeMeta
-	unversioned.ListMeta
+	metav1.TypeMeta
+	metav1.ListMeta
 	Items []OAuthClient
 }
 
 type OAuthClientAuthorizationList struct {
-	unversioned.TypeMeta
-	unversioned.ListMeta
+	metav1.TypeMeta
+	metav1.ListMeta
 	Items []OAuthClientAuthorization
+}
+
+type OAuthRedirectReference struct {
+	metav1.TypeMeta
+	metav1.ObjectMeta
+	Reference RedirectReference
+}
+
+type RedirectReference struct {
+	Group string
+	Kind  string
+	Name  string
 }

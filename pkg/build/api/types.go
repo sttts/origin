@@ -3,9 +3,9 @@ package api
 import (
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/util/sets"
 )
 
 const (
@@ -19,6 +19,18 @@ const (
 	BuildCloneAnnotation = "openshift.io/build.clone-of"
 	// BuildPodNameAnnotation is an annotation whose value is the name of the pod running this build
 	BuildPodNameAnnotation = "openshift.io/build.pod-name"
+	// BuildJenkinsStatusJSONAnnotation is an annotation holding the Jenkins status information
+	BuildJenkinsStatusJSONAnnotation = "openshift.io/jenkins-status-json"
+	// BuildJenkinsLogURLAnnotation is an annotation holding a link to the raw Jenkins build console log
+	BuildJenkinsLogURLAnnotation = "openshift.io/jenkins-log-url"
+	// BuildJenkinsConsoleLogURLAnnotation is an annotation holding a link to the Jenkins build console log (including Jenkins chrome wrappering)
+	BuildJenkinsConsoleLogURLAnnotation = "openshift.io/jenkins-console-log-url"
+	// BuildJenkinsBlueOceanLogURLAnnotation is an annotation holding a link to the Jenkins build console log via the Jenkins BlueOcean UI Plugin
+	BuildJenkinsBlueOceanLogURLAnnotation = "openshift.io/jenkins-blueocean-log-url"
+	// BuildJenkinsBuildURIAnnotation is an annotation holding a link to the Jenkins build
+	BuildJenkinsBuildURIAnnotation = "openshift.io/jenkins-build-uri"
+	// BuildSourceSecretMatchURIAnnotationPrefix is a prefix for annotations on a Secret which indicate a source URI against which the Secret can be used
+	BuildSourceSecretMatchURIAnnotationPrefix = "build.openshift.io/source-secret-match-uri-"
 	// BuildLabel is the key of a Pod label whose value is the Name of a Build which is run.
 	// NOTE: The value for this label may not contain the entire Build name because it will be
 	// truncated to maximum label length.
@@ -46,6 +58,28 @@ const (
 	// BuildConfigPausedAnnotation is an annotation that marks a BuildConfig as paused.
 	// New Builds cannot be instantiated from a paused BuildConfig.
 	BuildConfigPausedAnnotation = "openshift.io/build-config.paused"
+	// BuildAcceptedAnnotation is an annotation used to update a build that can now be
+	// run based on the RunPolicy (e.g. Serial). Updating the build with this annotation
+	// forces the build to be processed by the build controller queue without waiting
+	// for a resync.
+	BuildAcceptedAnnotation = "build.openshift.io/accepted"
+
+	// BuildStartedEventReason is the reason associated with the event registered when a build is started (pod is created).
+	BuildStartedEventReason = "BuildStarted"
+	// BuildStartedEventMessage is the message associated with the event registered when a build is started (pod is created).
+	BuildStartedEventMessage = "Build %s/%s is now running"
+	// BuildCompletedEventReason is the reason associated with the event registered when build completes successfully.
+	BuildCompletedEventReason = "BuildCompleted"
+	// BuildCompletedEventMessage is the message associated with the event registered when build completes successfully.
+	BuildCompletedEventMessage = "Build %s/%s completed successfully"
+	// BuildFailedEventReason is the reason associated with the event registered when build fails.
+	BuildFailedEventReason = "BuildFailed"
+	// BuildFailedEventMessage is the message associated with the event registered when build fails.
+	BuildFailedEventMessage = "Build %s/%s failed"
+	// BuildCancelledEventReason is the reason associated with the event registered when build is cancelled.
+	BuildCancelledEventReason = "BuildCancelled"
+	// BuildCancelledEventMessage is the message associated with the event registered when build is cancelled.
+	BuildCancelledEventMessage = "Build %s/%s has been cancelled"
 )
 
 // +genclient=true
@@ -53,8 +87,8 @@ const (
 // Build encapsulates the inputs needed to produce a new deployable image, as well as
 // the status of the execution and a reference to the Pod which executed the build.
 type Build struct {
-	unversioned.TypeMeta
-	kapi.ObjectMeta
+	metav1.TypeMeta
+	metav1.ObjectMeta
 
 	// Spec is all the inputs used to execute the build.
 	Spec BuildSpec
@@ -106,7 +140,23 @@ type CommonSpec struct {
 	// be active on a node before the system actively tries to terminate the
 	// build; value must be positive integer.
 	CompletionDeadlineSeconds *int64
+
+	// NodeSelector is a selector which must be true for the build pod to fit on a node
+	// If nil, it can be overridden by default build nodeselector values for the cluster.
+	// If set to an empty map or a map with any values, default build nodeselector values
+	// are ignored.
+	NodeSelector map[string]string
 }
+
+const (
+	BuildTriggerCauseManualMsg    = "Manually triggered"
+	BuildTriggerCauseConfigMsg    = "Build configuration change"
+	BuildTriggerCauseImageMsg     = "Image change"
+	BuildTriggerCauseGithubMsg    = "GitHub WebHook"
+	BuildTriggerCauseGenericMsg   = "Generic WebHook"
+	BuildTriggerCauseGitLabMsg    = "GitLab WebHook"
+	BuildTriggerCauseBitbucketMsg = "Bitbucket WebHook"
+)
 
 // BuildTriggerCause holds information about a triggered build. It is used for
 // displaying build trigger data for each build and build configuration in oc
@@ -128,6 +178,14 @@ type BuildTriggerCause struct {
 	// ImageChangeBuild stores information about an imagechange event that
 	// triggered a new build.
 	ImageChangeBuild *ImageChangeCause
+
+	// GitLabWebHook represents data for a GitLab webhook that fired a specific
+	// build.
+	GitLabWebHook *GitLabWebHookCause
+
+	// BitbucketWebHook represents data for a Bitbucket webhook that fired a
+	// specific build.
+	BitbucketWebHook *BitbucketWebHookCause
 }
 
 // GenericWebHookCause holds information about a generic WebHook that
@@ -151,6 +209,29 @@ type GitHubWebHookCause struct {
 	Secret string
 }
 
+// CommonWebHookCause factors out the identical format of these webhook
+// causes into struct so we can share it in the specific causes;  it is too late for
+// GitHub and Generic but we can leverage this pattern with GitLab and Bitbucket.
+type CommonWebHookCause struct {
+	// Revision is the git source revision information of the trigger.
+	Revision *SourceRevision
+
+	// Secret is the obfuscated webhook secret that triggered a build.
+	Secret string
+}
+
+// GitLabWebHookCause has information about a GitLab webhook that triggered a
+// build.
+type GitLabWebHookCause struct {
+	CommonWebHookCause
+}
+
+// BitbucketWebHookCause has information about a Bitbucket webhook that triggered a
+// build.
+type BitbucketWebHookCause struct {
+	CommonWebHookCause
+}
+
 // ImageChangeCause contains information about the image that triggered a
 // build.
 type ImageChangeCause struct {
@@ -164,7 +245,8 @@ type ImageChangeCause struct {
 
 // BuildStatus contains the status of a build
 type BuildStatus struct {
-	// Phase is the point in the build lifecycle.
+	// Phase is the point in the build lifecycle. Possible values are
+	// "New", "Pending", "Running", "Complete", "Failed", "Error", and "Cancelled".
 	Phase BuildPhase
 
 	// Cancelled describes if a cancel event was triggered for the build.
@@ -179,13 +261,13 @@ type BuildStatus struct {
 	// StartTimestamp is a timestamp representing the server time when this Build started
 	// running in a Pod.
 	// It is represented in RFC3339 form and is in UTC.
-	StartTimestamp *unversioned.Time
+	StartTimestamp *metav1.Time
 
 	// CompletionTimestamp is a timestamp representing the server time when this Build was
 	// finished, whether that build failed or succeeded.  It reflects the time at which
 	// the Pod running the Build terminated.
 	// It is represented in RFC3339 form and is in UTC.
-	CompletionTimestamp *unversioned.Time
+	CompletionTimestamp *metav1.Time
 
 	// Duration contains time.Duration object describing build time.
 	Duration time.Duration
@@ -198,6 +280,9 @@ type BuildStatus struct {
 
 	// Config is an ObjectReference to the BuildConfig this Build is based on.
 	Config *kapi.ObjectReference
+
+	// Output describes the Docker image the build has produced.
+	Output BuildStatusOutput
 }
 
 // BuildPhase represents the status of a build at a point in time.
@@ -240,33 +325,106 @@ const (
 
 	// StatusReasonCannotCreateBuildPodSpec is an error condition when the build
 	// strategy cannot create a build pod spec.
-	StatusReasonCannotCreateBuildPodSpec = "CannotCreateBuildPodSpec"
+	StatusReasonCannotCreateBuildPodSpec StatusReason = "CannotCreateBuildPodSpec"
 
 	// StatusReasonCannotCreateBuildPod is an error condition when a build pod
 	// cannot be created.
-	StatusReasonCannotCreateBuildPod = "CannotCreateBuildPod"
+	StatusReasonCannotCreateBuildPod StatusReason = "CannotCreateBuildPod"
 
 	// StatusReasonInvalidOutputReference is an error condition when the build
 	// output is an invalid reference.
-	StatusReasonInvalidOutputReference = "InvalidOutputReference"
+	StatusReasonInvalidOutputReference StatusReason = "InvalidOutputReference"
 
 	// StatusReasonCancelBuildFailed is an error condition when cancelling a build
 	// fails.
-	StatusReasonCancelBuildFailed = "CancelBuildFailed"
+	StatusReasonCancelBuildFailed StatusReason = "CancelBuildFailed"
 
 	// StatusReasonBuildPodDeleted is an error condition when the build pod is
 	// deleted before build completion.
-	StatusReasonBuildPodDeleted = "BuildPodDeleted"
+	StatusReasonBuildPodDeleted StatusReason = "BuildPodDeleted"
 
 	// StatusReasonExceededRetryTimeout is an error condition when the build has
 	// not completed and retrying the build times out.
-	StatusReasonExceededRetryTimeout = "ExceededRetryTimeout"
+	StatusReasonExceededRetryTimeout StatusReason = "ExceededRetryTimeout"
 
 	// StatusReasonMissingPushSecret indicates that the build is missing required
 	// secret for pushing the output image.
 	// The build will stay in the pending state until the secret is created, or the build times out.
-	StatusReasonMissingPushSecret = "MissingPushSecret"
+	StatusReasonMissingPushSecret StatusReason = "MissingPushSecret"
+
+	// StatusReasonPostCommitHookFailed indicates the post-commit hook failed.
+	StatusReasonPostCommitHookFailed StatusReason = "PostCommitHookFailed"
+
+	// StatusReasonPushImageToRegistryFailed indicates that an image failed to be
+	// pushed to the registry.
+	StatusReasonPushImageToRegistryFailed StatusReason = "PushImageToRegistryFailed"
+
+	// StatusReasonPullBuilderImageFailed indicates that we failed to pull the
+	// builder image.
+	StatusReasonPullBuilderImageFailed StatusReason = "PullBuilderImageFailed"
+
+	// StatusReasonFetchSourceFailed indicates that fetching the source of the
+	// build has failed.
+	StatusReasonFetchSourceFailed StatusReason = "FetchSourceFailed"
+
+	// StatusReasonInvalidContextDirectory indicates that the supplied
+	// contextDir does not exist
+	StatusReasonInvalidContextDirectory StatusReason = "InvalidContextDirectory"
+
+	// StatusReasonCancelledBuild indicates that the build was cancelled by the
+	// user.
+	StatusReasonCancelledBuild StatusReason = "CancelledBuild"
+
+	// StatusReasonDockerBuildFailed indicates that the docker build strategy has
+	// failed.
+	StatusReasonDockerBuildFailed StatusReason = "DockerBuildFailed"
+
+	// StatusReasonBuildPodExists indicates that the build tried to create a
+	// build pod but one was already present.
+	StatusReasonBuildPodExists StatusReason = "BuildPodExists"
+
+	// StatusReasonGenericBuildFailed is the reason associated with a broad
+	// range of build failures.
+	StatusReasonGenericBuildFailed StatusReason = "GenericBuildFailed"
 )
+
+// NOTE: These messages might change.
+const (
+	StatusMessageCannotCreateBuildPodSpec  = "Failed to create pod spec."
+	StatusMessageCannotCreateBuildPod      = "Failed creating build pod."
+	StatusMessageInvalidOutputRef          = "Output image could not be resolved."
+	StatusMessageCancelBuildFailed         = "Failed to cancel build."
+	StatusMessageBuildPodDeleted           = "The pod for this build was deleted before the build completed."
+	StatusMessageExceededRetryTimeout      = "Build did not complete and retrying timed out."
+	StatusMessageMissingPushSecret         = "Missing push secret."
+	StatusMessagePostCommitHookFailed      = "Build failed because of post commit hook."
+	StatusMessagePushImageToRegistryFailed = "Failed to push the image to the registry."
+	StatusMessagePullBuilderImageFailed    = "Failed pulling builder image."
+	StatusMessageFetchSourceFailed         = "Failed to fetch the input source."
+	StatusMessageInvalidContextDirectory   = "The supplied context directory does not exist."
+	StatusMessageCancelledBuild            = "The build was cancelled by the user."
+	StatusMessageDockerBuildFailed         = "Docker build strategy has failed."
+	StatusMessageBuildPodExists            = "The pod for this build already exists and is older than the build."
+	StatusMessageGenericBuildFailed        = "Generic Build failure - check logs for details."
+)
+
+// BuildStatusOutput contains the status of the built image.
+type BuildStatusOutput struct {
+	// To describes the status of the built image being pushed to a registry.
+	To *BuildStatusOutputTo
+}
+
+// BuildStatusOutputTo describes the status of the built image with regards to
+// image registry to which it was supposed to be pushed.
+type BuildStatusOutputTo struct {
+	// ImageDigest is the digest of the built Docker image. The digest uniquely
+	// identifies the image in the registry to which it was pushed.
+	//
+	// Please note that this field may not always be set even if the push
+	// completes successfully - e.g. when the registry returns no digest or
+	// returns it in a format that the builder doesn't understand.
+	ImageDigest string
+}
 
 // BuildSource is the input used for the build.
 type BuildSource struct {
@@ -329,7 +487,9 @@ type ImageSource struct {
 // ImageSourcePath describes a path to be copied from a source image and its destination within the build directory.
 type ImageSourcePath struct {
 	// SourcePath is the absolute path of the file or directory inside the image to
-	// copy to the build directory.
+	// copy to the build directory.  If the source path ends in /. then the content of
+	// the directory will be copied, but the directory itself will not be created at the
+	// destination.
 	SourcePath string
 
 	// DestinationDir is the relative directory within the build directory
@@ -387,6 +547,18 @@ type GitSourceRevision struct {
 	Message string
 }
 
+// ProxyConfig defines what proxies to use for an operation
+type ProxyConfig struct {
+	// HTTPProxy is a proxy used to reach the git repository over http
+	HTTPProxy *string
+
+	// HTTPSProxy is a proxy used to reach the git repository over https
+	HTTPSProxy *string
+
+	// NoProxy is the list of domains for which the proxy should not be used
+	NoProxy *string
+}
+
 // GitBuildSource defines the parameters of a Git SCM
 type GitBuildSource struct {
 	// URI points to the source that will be built. The structure of the source
@@ -396,11 +568,8 @@ type GitBuildSource struct {
 	// Ref is the branch/tag/ref to build.
 	Ref string
 
-	// HTTPProxy is a proxy used to reach the git repository over http
-	HTTPProxy *string
-
-	// HTTPSProxy is a proxy used to reach the git repository over https
-	HTTPSProxy *string
+	// ProxyConfig defines the proxies to use for the git clone operation
+	ProxyConfig
 }
 
 // SourceControlUser defines the identity of a user of source control
@@ -424,7 +593,7 @@ type BuildStrategy struct {
 	CustomStrategy *CustomBuildStrategy
 
 	// JenkinsPipelineStrategy holds the parameters to the Jenkins Pipeline build strategy.
-	// This strategy is experimental.
+	// This strategy is in tech preview.
 	JenkinsPipelineStrategy *JenkinsPipelineBuildStrategy
 }
 
@@ -448,7 +617,8 @@ type CustomBuildStrategy struct {
 	// registries
 	PullSecret *kapi.LocalObjectReference
 
-	// Env contains additional environment variables you want to pass into a builder container
+	// Env contains additional environment variables you want to pass into a builder container.
+	// ValueFrom is not supported.
 	Env []kapi.EnvVar
 
 	// ExposeDockerSocket will allow running Docker commands (and build Docker images) from
@@ -467,6 +637,27 @@ type CustomBuildStrategy struct {
 	BuildAPIVersion string
 }
 
+// ImageOptimizationPolicy describes what optimizations the builder can perform when building images.
+type ImageOptimizationPolicy string
+
+const (
+	// ImageOptimizationNone will generate a canonical Docker image as produced by the
+	// `docker build` command.
+	ImageOptimizationNone ImageOptimizationPolicy = "None"
+
+	// ImageOptimizationSkipLayers is an experimental policy and will avoid creating
+	// unique layers for each dockerfile line, resulting in smaller images and saving time
+	// during creation. Some Dockerfile syntax is not fully supported - content added to
+	// a VOLUME by an earlier layer may have incorrect uid, gid, and filesystem permissions.
+	// If an unsupported setting is detected, the build will fail.
+	ImageOptimizationSkipLayers ImageOptimizationPolicy = "SkipLayers"
+
+	// ImageOptimizationSkipLayersAndWarn is the same as SkipLayers, but will only
+	// warn to the build output instead of failing when unsupported syntax is detected. This
+	// policy is experimental.
+	ImageOptimizationSkipLayersAndWarn ImageOptimizationPolicy = "SkipLayersAndWarn"
+)
+
 // DockerBuildStrategy defines input parameters specific to Docker build.
 type DockerBuildStrategy struct {
 	// From is reference to an DockerImage, ImageStream, ImageStreamTag, or ImageStreamImage from which
@@ -483,8 +674,13 @@ type DockerBuildStrategy struct {
 	// --no-cache=true flag
 	NoCache bool
 
-	// Env contains additional environment variables you want to pass into a builder container
+	// Env contains additional environment variables you want to pass into a builder container.
+	// ValueFrom is not supported.
 	Env []kapi.EnvVar
+
+	// Args contains any build arguments that are to be passed to Docker.  See
+	// https://docs.docker.com/engine/reference/builder/#/arg for more details
+	BuildArgs []kapi.EnvVar
 
 	// ForcePull describes if the builder should pull the images from registry prior to building.
 	ForcePull bool
@@ -492,6 +688,15 @@ type DockerBuildStrategy struct {
 	// DockerfilePath is the path of the Dockerfile that will be used to build the Docker image,
 	// relative to the root of the context (contextDir).
 	DockerfilePath string
+
+	// ImageOptimizationPolicy describes what optimizations the system can use when building images
+	// to reduce the final size or time spent building the image. The default policy is 'None' which
+	// means the final build image will be equivalent to an image created by the Docker build API.
+	// The experimental policy 'SkipLayerCache' will avoid commiting new layers in between each
+	// image step, and will fail if the Dockerfile cannot provide compatibility with the 'None'
+	// policy. An additional experimental policy 'SkipLayerCacheAndWarn' is the same as
+	// 'SkipLayerCache' but simply warns if compatibility cannot be preserved.
+	ImageOptimizationPolicy *ImageOptimizationPolicy
 }
 
 // SourceBuildStrategy defines input parameters specific to an Source build.
@@ -505,21 +710,36 @@ type SourceBuildStrategy struct {
 	// registries
 	PullSecret *kapi.LocalObjectReference
 
-	// Env contains additional environment variables you want to pass into a builder container
+	// Env contains additional environment variables you want to pass into a builder container.
+	// ValueFrom is not supported.
 	Env []kapi.EnvVar
 
 	// Scripts is the location of Source scripts
 	Scripts string
 
 	// Incremental flag forces the Source build to do incremental builds if true.
-	Incremental bool
+	Incremental *bool
 
 	// ForcePull describes if the builder should pull the images from registry prior to building.
 	ForcePull bool
+
+	// RuntimeImage is an optional image that is used to run an application
+	// without unneeded dependencies installed. The building of the application
+	// is still done in the builder image but, post build, you can copy the
+	// needed artifacts in the runtime image for use.
+	// This field and the feature it enables are in tech preview.
+	RuntimeImage *kapi.ObjectReference
+
+	// RuntimeArtifacts specifies a list of source/destination pairs that will be
+	// copied from the builder to a runtime image. sourcePath can be a file or
+	// directory. destinationDir must be a directory. destinationDir can also be
+	// empty or equal to ".", in this case it just refers to the root of WORKDIR.
+	// This field and the feature it enables are in tech preview.
+	RuntimeArtifacts []ImageSourcePath
 }
 
 // JenkinsPipelineStrategy holds parameters specific to a Jenkins Pipeline build.
-// This strategy is experimental.
+// This strategy is in tech preview.
 type JenkinsPipelineBuildStrategy struct {
 	// JenkinsfilePath is the optional path of the Jenkinsfile that will be used to configure the pipeline
 	// relative to the root of the context (contextDir). If both JenkinsfilePath & Jenkinsfile are
@@ -528,6 +748,10 @@ type JenkinsPipelineBuildStrategy struct {
 
 	// Jenkinsfile defines the optional raw contents of a Jenkinsfile which defines a Jenkins pipeline build.
 	Jenkinsfile string
+
+	// Env contains additional environment variables you want to pass into a build pipeline.
+	// ValueFrom is not supported.
+	Env []kapi.EnvVar
 }
 
 // A BuildPostCommitSpec holds a build post commit hook specification. The hook
@@ -632,12 +856,25 @@ type BuildOutput struct {
 	// up the authentication for executing the Docker push to authentication
 	// enabled Docker Registry (or Docker Hub).
 	PushSecret *kapi.LocalObjectReference
+
+	// ImageLabels define a list of labels that are applied to the resulting image. If there
+	// are multiple labels with the same name then the last one in the list is used.
+	ImageLabels []ImageLabel
+}
+
+// ImageLabel represents a label applied to the resulting image.
+type ImageLabel struct {
+	// Name defines the name of the label. It must have non-zero length.
+	Name string
+
+	// Value defines the literal value of the label.
+	Value string
 }
 
 // BuildConfig is a template which can be used to create new builds.
 type BuildConfig struct {
-	unversioned.TypeMeta
-	kapi.ObjectMeta
+	metav1.TypeMeta
+	metav1.ObjectMeta
 
 	// Spec holds all the input necessary to produce a new build, and the conditions when
 	// to trigger them.
@@ -723,6 +960,13 @@ type BuildTriggerPolicy struct {
 
 	// ImageChange contains parameters for an ImageChange type of trigger
 	ImageChange *ImageChangeTrigger
+
+	// GitLabWebHook contains the parameters for a GitLab webhook type of trigger
+	GitLabWebHook *WebHookTrigger
+
+	// BitbucketWebHook contains the parameters for a Bitbucket webhook type of
+	// trigger
+	BitbucketWebHook *WebHookTrigger
 }
 
 // BuildTriggerType refers to a specific BuildTriggerPolicy implementation.
@@ -734,6 +978,8 @@ var KnownTriggerTypes = sets.NewString(
 	string(GenericWebHookBuildTriggerType),
 	string(ImageChangeBuildTriggerType),
 	string(ConfigChangeBuildTriggerType),
+	string(GitLabWebHookBuildTriggerType),
+	string(BitbucketWebHookBuildTriggerType),
 )
 
 const (
@@ -747,6 +993,14 @@ const (
 	GenericWebHookBuildTriggerType           BuildTriggerType = "Generic"
 	GenericWebHookBuildTriggerTypeDeprecated BuildTriggerType = "generic"
 
+	// GitLabWebHookBuildTriggerType represents a trigger that launches builds on
+	// GitLab webhook invocations
+	GitLabWebHookBuildTriggerType BuildTriggerType = "GitLab"
+
+	// BitbucketWebHookBuildTriggerType represents a trigger that launches builds on
+	// Bitbucket webhook invocations
+	BitbucketWebHookBuildTriggerType BuildTriggerType = "Bitbucket"
+
 	// ImageChangeBuildTriggerType represents a trigger that launches builds on
 	// availability of a new version of an image
 	ImageChangeBuildTriggerType           BuildTriggerType = "ImageChange"
@@ -759,8 +1013,8 @@ const (
 
 // BuildList is a collection of Builds.
 type BuildList struct {
-	unversioned.TypeMeta
-	unversioned.ListMeta
+	metav1.TypeMeta
+	metav1.ListMeta
 
 	// Items is a list of builds
 	Items []Build
@@ -768,8 +1022,8 @@ type BuildList struct {
 
 // BuildConfigList is a collection of BuildConfigs.
 type BuildConfigList struct {
-	unversioned.TypeMeta
-	unversioned.ListMeta
+	metav1.TypeMeta
+	metav1.ListMeta
 
 	// Items is a list of build configs
 	Items []BuildConfig
@@ -780,8 +1034,12 @@ type GenericWebHookEvent struct {
 	// Git is the git information, if any.
 	Git *GitInfo
 
-	// Env contains additional environment variables you want to pass into a builder container
+	// Env contains additional environment variables you want to pass into a builder container.
+	// ValueFrom is not supported.
 	Env []kapi.EnvVar
+
+	// DockerStrategyOptions contains additional docker-strategy specific options for the build
+	DockerStrategyOptions *DockerStrategyOptions
 }
 
 // GitInfo is the aggregated git information for a generic webhook post
@@ -792,6 +1050,7 @@ type GitInfo struct {
 	// Refs is a list of GitRefs for the provided repo - generally sent
 	// when used from a post-receive hook. This field is optional and is
 	// used when sending multiple refs
+	// +k8s:conversion-gen=false
 	Refs []GitRefInfo
 }
 
@@ -803,15 +1062,22 @@ type GitRefInfo struct {
 
 // BuildLog is the (unused) resource associated with the build log redirector
 type BuildLog struct {
-	unversioned.TypeMeta
+	metav1.TypeMeta
+}
+
+// DockerStrategyOptions contains extra strategy options for Docker builds
+type DockerStrategyOptions struct {
+	// Args contains any build arguments that are to be passed to Docker.  See
+	// https://docs.docker.com/engine/reference/builder/#/arg for more details
+	BuildArgs []kapi.EnvVar
 }
 
 // BuildRequest is the resource used to pass parameters to build generator
 type BuildRequest struct {
-	unversioned.TypeMeta
+	metav1.TypeMeta
 	// TODO: build request should allow name generation via Name and GenerateName, build config
 	// name should be provided as a separate field
-	kapi.ObjectMeta
+	metav1.ObjectMeta
 
 	// Revision is the information from the source for a specific repo snapshot.
 	Revision *SourceRevision
@@ -831,16 +1097,20 @@ type BuildRequest struct {
 	LastVersion *int64
 
 	// Env contains additional environment variables you want to pass into a builder container.
+	// ValueFrom is not supported.
 	Env []kapi.EnvVar
 
 	// TriggeredBy describes which triggers started the most recent update to the
 	// buildconfig and contains information about those triggers.
 	TriggeredBy []BuildTriggerCause
+
+	// DockerStrategyOptions contains additional docker-strategy specific options for the build
+	DockerStrategyOptions *DockerStrategyOptions
 }
 
 type BinaryBuildRequestOptions struct {
-	unversioned.TypeMeta
-	kapi.ObjectMeta
+	metav1.TypeMeta
+	metav1.ObjectMeta
 
 	AsFile string
 
@@ -867,7 +1137,7 @@ type BinaryBuildRequestOptions struct {
 
 // BuildLogOptions is the REST options for a build log
 type BuildLogOptions struct {
-	unversioned.TypeMeta
+	metav1.TypeMeta
 
 	// Container for which to return logs
 	Container string
@@ -885,7 +1155,7 @@ type BuildLogOptions struct {
 	// precedes the time a pod was started, only logs since the pod start will be returned.
 	// If this value is in the future, no logs will be returned.
 	// Only one of sinceSeconds or sinceTime may be specified.
-	SinceTime *unversioned.Time
+	SinceTime *metav1.Time
 	// If true, add an RFC3339 or RFC3339Nano timestamp at the beginning of every line
 	// of log output.
 	Timestamps bool

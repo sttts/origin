@@ -5,11 +5,11 @@ import (
 
 	"github.com/gonum/graph"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/apimachinery/registered"
-	"k8s.io/kubernetes/pkg/labels"
-	"k8s.io/kubernetes/pkg/runtime"
 
 	osgraph "github.com/openshift/origin/pkg/api/graph"
 	kubegraph "github.com/openshift/origin/pkg/api/kubegraph/nodes"
@@ -20,8 +20,8 @@ import (
 const (
 	// ExposedThroughServiceEdgeKind goes from a PodTemplateSpec or a Pod to Service.  The head should make the service's selector.
 	ExposedThroughServiceEdgeKind = "ExposedThroughService"
-	// ManagedByRCEdgeKind goes from Pod to ReplicationController when the Pod satisfies the ReplicationController's label selector
-	ManagedByRCEdgeKind = "ManagedByRC"
+	// ManagedByControllerEdgeKind goes from Pod to controller when the Pod satisfies a controller's label selector
+	ManagedByControllerEdgeKind = "ManagedByController"
 	// MountedSecretEdgeKind goes from PodSpec to Secret indicating that is or will be a request to mount a volume with the Secret.
 	MountedSecretEdgeKind = "MountedSecret"
 	// MountableSecretEdgeKind goes from ServiceAccount to Secret indicating that the SA allows the Secret to be mounted
@@ -91,31 +91,36 @@ func AddAllExposedPodEdges(g osgraph.MutableUniqueGraph) {
 	}
 }
 
-// AddManagedByRCPodEdges ensures that a directed edge exists between an RC and all the pods
+// AddManagedByControllerPodEdges ensures that a directed edge exists between a controller and all the pods
 // in the graph that match the label selector
-func AddManagedByRCPodEdges(g osgraph.MutableUniqueGraph, rcNode *kubegraph.ReplicationControllerNode) {
-	if rcNode.Spec.Selector == nil {
+func AddManagedByControllerPodEdges(g osgraph.MutableUniqueGraph, to graph.Node, namespace string, selector map[string]string) {
+	if selector == nil {
 		return
 	}
-	query := labels.SelectorFromSet(rcNode.Spec.Selector)
+	query := labels.SelectorFromSet(selector)
 	for _, n := range g.(graph.Graph).Nodes() {
 		switch target := n.(type) {
 		case *kubegraph.PodNode:
-			if target.Namespace != rcNode.Namespace {
+			if target.Namespace != namespace {
 				continue
 			}
 			if query.Matches(labels.Set(target.Labels)) {
-				g.AddEdge(target, rcNode, ManagedByRCEdgeKind)
+				g.AddEdge(target, to, ManagedByControllerEdgeKind)
 			}
 		}
 	}
 }
 
-// AddAllManagedByRCPodEdges calls AddManagedByRCPodEdges for every ServiceNode in the graph
-func AddAllManagedByRCPodEdges(g osgraph.MutableUniqueGraph) {
+// AddAllManagedByControllerPodEdges calls AddManagedByControllerPodEdges for every node in the graph
+// TODO: should do this through an interface (selects pods)
+func AddAllManagedByControllerPodEdges(g osgraph.MutableUniqueGraph) {
 	for _, node := range g.(graph.Graph).Nodes() {
-		if rcNode, ok := node.(*kubegraph.ReplicationControllerNode); ok {
-			AddManagedByRCPodEdges(g, rcNode)
+		switch cast := node.(type) {
+		case *kubegraph.ReplicationControllerNode:
+			AddManagedByControllerPodEdges(g, cast, cast.ReplicationController.Namespace, cast.ReplicationController.Spec.Selector)
+		case *kubegraph.StatefulSetNode:
+			// TODO: refactor to handle expanded selectors (along with ReplicaSets and Deployments)
+			AddManagedByControllerPodEdges(g, cast, cast.StatefulSet.Namespace, cast.StatefulSet.Spec.Selector.MatchLabels)
 		}
 	}
 }
@@ -125,7 +130,7 @@ func AddMountedSecretEdges(g osgraph.Graph, podSpec *kubegraph.PodSpecNode) {
 	containerNode := osgraph.GetTopLevelContainerNode(g, podSpec)
 	containerObj := g.GraphDescriber.Object(containerNode)
 
-	meta, err := kapi.ObjectMetaFor(containerObj.(runtime.Object))
+	meta, err := metav1.ObjectMetaFor(containerObj.(runtime.Object))
 	if err != nil {
 		// this should never happen.  it means that a podSpec is owned by a top level container that is not a runtime.Object
 		panic(err)
@@ -179,7 +184,7 @@ func AddRequestedServiceAccountEdges(g osgraph.Graph, podSpecNode *kubegraph.Pod
 	containerNode := osgraph.GetTopLevelContainerNode(g, podSpecNode)
 	containerObj := g.GraphDescriber.Object(containerNode)
 
-	meta, err := kapi.ObjectMetaFor(containerObj.(runtime.Object))
+	meta, err := metav1.ObjectMetaFor(containerObj.(runtime.Object))
 	if err != nil {
 		panic(err)
 	}
@@ -210,29 +215,30 @@ func AddHPAScaleRefEdges(g osgraph.Graph) {
 	for _, node := range g.NodesByKind(kubegraph.HorizontalPodAutoscalerNodeKind) {
 		hpaNode := node.(*kubegraph.HorizontalPodAutoscalerNode)
 
-		syntheticMeta := kapi.ObjectMeta{
+		syntheticMeta := metav1.ObjectMeta{
 			Name:      hpaNode.HorizontalPodAutoscaler.Spec.ScaleTargetRef.Name,
 			Namespace: hpaNode.HorizontalPodAutoscaler.Namespace,
 		}
 
-		var groupVersionResource unversioned.GroupVersionResource
+		var groupVersionResource schema.GroupVersionResource
 		resource := strings.ToLower(hpaNode.HorizontalPodAutoscaler.Spec.ScaleTargetRef.Kind)
-		if groupVersion, err := unversioned.ParseGroupVersion(hpaNode.HorizontalPodAutoscaler.Spec.ScaleTargetRef.APIVersion); err == nil {
+		if groupVersion, err := schema.ParseGroupVersion(hpaNode.HorizontalPodAutoscaler.Spec.ScaleTargetRef.APIVersion); err == nil {
 			groupVersionResource = groupVersion.WithResource(resource)
 		} else {
-			groupVersionResource = unversioned.GroupVersionResource{Resource: resource}
+			groupVersionResource = schema.GroupVersionResource{Resource: resource}
 		}
 
-		groupVersionResource, err := registered.RESTMapper().ResourceFor(groupVersionResource)
+		groupVersionResource, err := kapi.Registry.RESTMapper().ResourceFor(groupVersionResource)
 		if err != nil {
 			continue
 		}
 
 		var syntheticNode graph.Node
-		switch groupVersionResource.GroupResource() {
-		case kapi.Resource("replicationcontrollers"):
+		r := groupVersionResource.GroupResource()
+		switch {
+		case r == kapi.Resource("replicationcontrollers"):
 			syntheticNode = kubegraph.FindOrCreateSyntheticReplicationControllerNode(g, &kapi.ReplicationController{ObjectMeta: syntheticMeta})
-		case deployapi.Resource("deploymentconfigs"):
+		case deployapi.IsResourceOrLegacy("deploymentconfigs", r):
 			syntheticNode = deploygraph.FindOrCreateSyntheticDeploymentConfigNode(g, &deployapi.DeploymentConfig{ObjectMeta: syntheticMeta})
 		default:
 			continue

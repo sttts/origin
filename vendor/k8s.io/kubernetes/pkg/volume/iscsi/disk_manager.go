@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -60,7 +60,8 @@ func diskSetUp(manager diskManager, b iscsiDiskMounter, volPath string, mounter 
 	if b.readOnly {
 		options = append(options, "ro")
 	}
-	err = mounter.Mount(globalPDPath, volPath, "", options)
+	mountOptions := volume.JoinMountOptions(b.mountOptions, options)
+	err = mounter.Mount(globalPDPath, volPath, "", mountOptions)
 	if err != nil {
 		glog.Errorf("failed to bind mount:%s", globalPDPath)
 		return err

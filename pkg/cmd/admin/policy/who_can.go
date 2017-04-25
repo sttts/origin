@@ -8,9 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/api/unversioned"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
@@ -26,7 +26,7 @@ type whoCanOptions struct {
 	client           *client.Client
 
 	verb         string
-	resource     unversioned.GroupVersionResource
+	resource     schema.GroupVersionResource
 	resourceName string
 }
 
@@ -50,12 +50,11 @@ func NewCmdWhoCan(name, fullName string, f *clientcmd.Factory, out io.Writer) *c
 			options.bindingNamespace, _, err = f.DefaultNamespace()
 			kcmdutil.CheckErr(err)
 
-			err = options.run()
-			kcmdutil.CheckErr(err)
+			kcmdutil.CheckErr(options.run())
 		},
 	}
 
-	cmd.Flags().BoolVar(&options.allNamespaces, "all-namespaces", options.allNamespaces, "If present, list who can perform the specified action in all namespaces.")
+	cmd.Flags().BoolVar(&options.allNamespaces, "all-namespaces", options.allNamespaces, "If true, list who can perform the specified action in all namespaces.")
 
 	return cmd
 }
@@ -66,7 +65,7 @@ func (o *whoCanOptions) complete(f *clientcmd.Factory, args []string) error {
 		o.resourceName = args[2]
 		fallthrough
 	case 2:
-		restMapper, _ := f.Object(false)
+		restMapper, _ := f.Object()
 		o.verb = args[0]
 		o.resource = resourceFor(restMapper, args[1])
 	default:
@@ -76,17 +75,17 @@ func (o *whoCanOptions) complete(f *clientcmd.Factory, args []string) error {
 	return nil
 }
 
-func resourceFor(mapper meta.RESTMapper, resourceArg string) unversioned.GroupVersionResource {
-	fullySpecifiedGVR, groupResource := unversioned.ParseResourceArg(strings.ToLower(resourceArg))
-	gvr := unversioned.GroupVersionResource{}
+func resourceFor(mapper meta.RESTMapper, resourceArg string) schema.GroupVersionResource {
+	fullySpecifiedGVR, groupResource := schema.ParseResourceArg(strings.ToLower(resourceArg))
+	gvr := schema.GroupVersionResource{}
 	if fullySpecifiedGVR != nil {
 		gvr, _ = mapper.ResourceFor(*fullySpecifiedGVR)
 	}
-	if gvr.IsEmpty() {
+	if gvr.Empty() {
 		var err error
 		gvr, err = mapper.ResourceFor(groupResource.WithVersion(""))
 		if err != nil {
-			return unversioned.GroupVersionResource{Resource: resourceArg}
+			return schema.GroupVersionResource{Resource: resourceArg}
 		}
 	}
 
@@ -94,7 +93,7 @@ func resourceFor(mapper meta.RESTMapper, resourceArg string) unversioned.GroupVe
 }
 
 func (o *whoCanOptions) run() error {
-	authorizationAttributes := authorizationapi.AuthorizationAttributes{
+	authorizationAttributes := authorizationapi.Action{
 		Verb:         o.verb,
 		Group:        o.resource.Group,
 		Resource:     o.resource.Resource,
@@ -113,7 +112,7 @@ func (o *whoCanOptions) run() error {
 		return err
 	}
 
-	if resourceAccessReviewResponse.Namespace == kapi.NamespaceAll {
+	if resourceAccessReviewResponse.Namespace == metav1.NamespaceAll {
 		fmt.Printf("Namespace: <all>\n")
 	} else {
 		fmt.Printf("Namespace: %s\n", resourceAccessReviewResponse.Namespace)
@@ -136,6 +135,10 @@ func (o *whoCanOptions) run() error {
 		fmt.Printf("Groups: none\n\n")
 	} else {
 		fmt.Printf("Groups: %s\n\n", strings.Join(resourceAccessReviewResponse.Groups.List(), "\n        "))
+	}
+
+	if len(resourceAccessReviewResponse.EvaluationError) != 0 {
+		fmt.Printf("Error during evaluation, results may not be complete: %s\n", resourceAccessReviewResponse.EvaluationError)
 	}
 
 	return nil

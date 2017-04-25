@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -8,43 +9,49 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/meta"
+	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
-	"k8s.io/kubernetes/pkg/util/wait"
 
 	buildapi "github.com/openshift/origin/pkg/build/api"
 	buildclient "github.com/openshift/origin/pkg/build/client"
 	buildutil "github.com/openshift/origin/pkg/build/util"
 	osclient "github.com/openshift/origin/pkg/client"
+	"github.com/openshift/origin/pkg/cmd/templates"
 	cmdutil "github.com/openshift/origin/pkg/cmd/util"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 )
 
-const (
-	cancelBuildLong = `
-Cancel running, pending, or new builds
+// CancelBuildRecommendedCommandName is the recommended command name.
+const CancelBuildRecommendedCommandName = "cancel-build"
 
-This command requests a graceful shutdown of the build. There may be a delay between requesting
-the build and the time the build is terminated.`
+var (
+	cancelBuildLong = templates.LongDesc(`
+		Cancel running, pending, or new builds
 
-	cancelBuildExample = `  # Cancel the build with the given name
-  %[1]s cancel-build ruby-build-2
+		This command requests a graceful shutdown of the build. There may be a delay between requesting
+		the build and the time the build is terminated.`)
 
-  # Cancel the named build and print the build logs
-  %[1]s cancel-build ruby-build-2 --dump-logs
+	cancelBuildExample = templates.Examples(`
+	  # Cancel the build with the given name
+	  %[1]s %[2]s ruby-build-2
 
-  # Cancel the named build and create a new one with the same parameters
-  %[1]s cancel-build ruby-build-2 --restart
+	  # Cancel the named build and print the build logs
+	  %[1]s %[2]s ruby-build-2 --dump-logs
 
-  # Cancel multiple builds
-  %[1]s cancel-build ruby-build-1 ruby-build-2 ruby-build-3
+	  # Cancel the named build and create a new one with the same parameters
+	  %[1]s %[2]s ruby-build-2 --restart
 
-  # Cancel all builds created from 'ruby-build' build configuration that are in 'new' state
-  %[1]s cancel-build bc/ruby-build --state=new`
+	  # Cancel multiple builds
+	  %[1]s %[2]s ruby-build-1 ruby-build-2 ruby-build-3
+
+	  # Cancel all builds created from 'ruby-build' build configuration that are in 'new' state
+	  %[1]s %[2]s bc/ruby-build --state=new`)
 )
 
+// CancelBuildOptions contains all the options for running the CancelBuild cli command.
 type CancelBuildOptions struct {
 	In          io.Reader
 	Out, ErrOut io.Writer
@@ -64,18 +71,18 @@ type CancelBuildOptions struct {
 }
 
 // NewCmdCancelBuild implements the OpenShift cli cancel-build command
-func NewCmdCancelBuild(fullName string, f *clientcmd.Factory, in io.Reader, out io.Writer) *cobra.Command {
+func NewCmdCancelBuild(name, baseName string, f *clientcmd.Factory, in io.Reader, out, errout io.Writer) *cobra.Command {
 	o := &CancelBuildOptions{}
 
 	cmd := &cobra.Command{
-		Use:        "cancel-build (BUILD | BUILDCONFIG)",
+		Use:        fmt.Sprintf("%s (BUILD | BUILDCONFIG)", name),
 		Short:      "Cancel running, pending, or new builds",
 		Long:       cancelBuildLong,
-		Example:    fmt.Sprintf(cancelBuildExample, fullName),
+		Example:    fmt.Sprintf(cancelBuildExample, baseName, name),
 		SuggestFor: []string{"builds", "stop-build"},
 		Run: func(cmd *cobra.Command, args []string) {
-			kcmdutil.CheckErr(o.Complete(f, in, out, cmd, args))
-			kcmdutil.CheckErr(o.Run())
+			kcmdutil.CheckErr(o.Complete(f, cmd, args, in, out, errout))
+			kcmdutil.CheckErr(o.RunCancelBuild())
 		},
 	}
 
@@ -85,10 +92,11 @@ func NewCmdCancelBuild(fullName string, f *clientcmd.Factory, in io.Reader, out 
 	return cmd
 }
 
-func (o *CancelBuildOptions) Complete(f *clientcmd.Factory, in io.Reader, out io.Writer, cmd *cobra.Command, args []string) error {
+// Complete completes all the required options.
+func (o *CancelBuildOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, args []string, in io.Reader, out, errout io.Writer) error {
 	o.In = in
 	o.Out = out
-	o.ErrOut = cmd.Out()
+	o.ErrOut = errout
 	o.ReportError = func(err error) {
 		o.HasError = true
 		fmt.Fprintf(o.ErrOut, "error: %s\n", err.Error())
@@ -123,15 +131,16 @@ func (o *CancelBuildOptions) Complete(f *clientcmd.Factory, in io.Reader, out io
 	o.Client = client
 	o.BuildLister = buildclient.NewOSClientBuildClient(client)
 	o.BuildClient = client.Builds(namespace)
-	o.Mapper, _ = f.Object(false)
+	o.Mapper, _ = f.Object()
 
 	for _, item := range args {
 		resource, name, err := cmdutil.ResolveResource(buildapi.Resource("builds"), item, o.Mapper)
 		if err != nil {
 			return err
 		}
-		switch resource {
-		case buildapi.Resource("buildconfigs"):
+
+		switch {
+		case buildapi.IsResourceOrLegacy("buildconfigs", resource):
 			list, err := buildutil.BuildConfigBuilds(o.BuildLister, o.Namespace, name, nil)
 			if err != nil {
 				return err
@@ -139,7 +148,7 @@ func (o *CancelBuildOptions) Complete(f *clientcmd.Factory, in io.Reader, out io
 			for _, b := range list.Items {
 				o.BuildNames = append(o.BuildNames, b.Name)
 			}
-		case buildapi.Resource("builds"):
+		case buildapi.IsResourceOrLegacy("builds", resource):
 			o.BuildNames = append(o.BuildNames, strings.TrimSpace(name))
 		default:
 			return fmt.Errorf("invalid resource provided: %v", resource)
@@ -149,15 +158,17 @@ func (o *CancelBuildOptions) Complete(f *clientcmd.Factory, in io.Reader, out io
 	return nil
 }
 
-func (o *CancelBuildOptions) Run() error {
+// RunCancelBuild implements all the necessary functionality for CancelBuild.
+func (o *CancelBuildOptions) RunCancelBuild() error {
 	var builds []*buildapi.Build
 
 	for _, name := range o.BuildNames {
-		build, err := o.BuildClient.Get(name)
+		build, err := o.BuildClient.Get(name, metav1.GetOptions{})
 		if err != nil {
 			o.ReportError(fmt.Errorf("build %s/%s not found", o.Namespace, name))
 			continue
 		}
+
 		stateMatch := false
 		for _, state := range o.States {
 			if strings.ToLower(string(build.Status.Phase)) == state {
@@ -198,8 +209,8 @@ func (o *CancelBuildOptions) Run() error {
 				switch {
 				case err == nil:
 					return true, nil
-				case errors.IsConflict(err):
-					build, err = o.BuildClient.Get(build.Name)
+				case kapierrors.IsConflict(err):
+					build, err = o.BuildClient.Get(build.Name, metav1.GetOptions{})
 					return false, err
 				}
 				return true, err
@@ -208,9 +219,10 @@ func (o *CancelBuildOptions) Run() error {
 				o.ReportError(fmt.Errorf("build %s/%s failed to update: %v", build.Namespace, build.Name, err))
 				return
 			}
+
 			// Make sure the build phase is really cancelled.
 			err = wait.Poll(500*time.Millisecond, 30*time.Second, func() (bool, error) {
-				updatedBuild, err := o.BuildClient.Get(build.Name)
+				updatedBuild, err := o.BuildClient.Get(build.Name, metav1.GetOptions{})
 				if err != nil {
 					return true, err
 				}
@@ -220,27 +232,28 @@ func (o *CancelBuildOptions) Run() error {
 				o.ReportError(fmt.Errorf("build %s/%s failed to cancel: %v", build.Namespace, build.Name, err))
 				return
 			}
+
 			resource, name, _ := cmdutil.ResolveResource(buildapi.Resource("builds"), build.Name, o.Mapper)
-			kcmdutil.PrintSuccess(o.Mapper, false, o.Out, resource.Resource, name, "cancelled")
+			kcmdutil.PrintSuccess(o.Mapper, false, o.Out, resource.Resource, name, false, "cancelled")
 		}(b)
 	}
 	wg.Wait()
 
 	if o.Restart {
 		for _, b := range builds {
-			request := &buildapi.BuildRequest{ObjectMeta: kapi.ObjectMeta{Name: b.Name}}
+			request := &buildapi.BuildRequest{ObjectMeta: metav1.ObjectMeta{Namespace: b.Namespace, Name: b.Name}}
 			build, err := o.BuildClient.Clone(request)
 			if err != nil {
 				o.ReportError(fmt.Errorf("build %s/%s failed to restart: %v", b.Namespace, b.Name, err))
 				continue
 			}
 			resource, name, _ := cmdutil.ResolveResource(buildapi.Resource("builds"), build.Name, o.Mapper)
-			kcmdutil.PrintSuccess(o.Mapper, false, o.Out, resource.Resource, name, fmt.Sprintf("restarted build %q", b.Name))
+			kcmdutil.PrintSuccess(o.Mapper, false, o.Out, resource.Resource, name, false, fmt.Sprintf("restarted build %q", b.Name))
 		}
 	}
 
 	if o.HasError {
-		return fmt.Errorf("failure during the build cancellation")
+		return errors.New("failure during the build cancellation")
 	}
 
 	return nil

@@ -5,20 +5,38 @@ import (
 
 	"github.com/golang/glog"
 
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kerrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/client/cache"
-	"k8s.io/kubernetes/pkg/client/record"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/runtime"
-	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
-	"k8s.io/kubernetes/pkg/util/sets"
-	"k8s.io/kubernetes/pkg/util/workqueue"
+	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
+	kcorelisters "k8s.io/kubernetes/pkg/client/listers/core/internalversion"
 
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	deployutil "github.com/openshift/origin/pkg/deploy/util"
 	"github.com/openshift/origin/pkg/util"
 )
+
+// maxRetryCount is the maximum number of times the controller will retry errors.
+// The first requeue is after 5ms and subsequent requeues grow exponentially.
+// This effectively can extend up to 5*2^14ms which caps to 82s:
+//
+// 5ms, 10ms, 20ms, 40ms, 80ms, 160ms, 320ms, 640ms, 1.3s, 2.6s, 5.1s, 10.2s, 20.4s, 41s, 82s
+//
+//
+// The most common errors are:
+//
+// * failure to delete the deployer pods
+// * failure to update the replication controller
+// * pod may be missing from the cache once the deployment transitions to Pending.
+//
+// In most cases, we shouldn't need to retry up to maxRetryCount...
+const maxRetryCount = 15
 
 // fatalError is an error which can't be retried.
 type fatalError string
@@ -41,21 +59,21 @@ func (e actionableError) Error() string { return string(e) }
 //   2. If the deployment failed, the deployer pod is not deleted.
 type DeploymentController struct {
 	// rn is used for updating replication controllers.
-	rn kclient.ReplicationControllersNamespacer
+	rn kcoreclient.ReplicationControllersGetter
 	// pn is used for creating, updating, and deleting deployer pods.
-	pn kclient.PodsNamespacer
+	pn kcoreclient.PodsGetter
 
 	// queue contains replication controllers that need to be synced.
 	queue workqueue.RateLimitingInterface
 
-	// rcStore is a store of replication controllers.
-	rcStore cache.StoreToReplicationControllerLister
-	// podStore is a store of pods.
-	podStore cache.StoreToPodLister
-	// rcStoreSynced makes sure the rc store is synced before reconcling any deployment.
-	rcStoreSynced func() bool
-	// podStoreSynced makes sure the pod store is synced before reconcling any deployment.
-	podStoreSynced func() bool
+	// rcLister can list/get replication controllers from a shared informer's cache
+	rcLister kcorelisters.ReplicationControllerLister
+	// rcListerSynced makes sure the rc store is synced before reconcling any deployment.
+	rcListerSynced cache.InformerSynced
+	// podLister can list/get pods from a shared informer's cache
+	podLister kcorelisters.PodLister
+	// podListerSynced makes sure the pod store is synced before reconcling any deployment.
+	podListerSynced cache.InformerSynced
 
 	// deployerImage specifies which Docker image can support the default strategies.
 	deployerImage string
@@ -71,18 +89,23 @@ type DeploymentController struct {
 	recorder record.EventRecorder
 }
 
-// Handle processes deployment and either creates a deployer pod or responds
+// handle processes a deployment and either creates a deployer pod or responds
 // to a terminal deployment status. Since this controller started using caches,
 // the provided rc MUST be deep-copied beforehand (see work() in factory.go).
-func (c *DeploymentController) Handle(deployment *kapi.ReplicationController) error {
+func (c *DeploymentController) handle(deployment *kapi.ReplicationController, willBeDropped bool) error {
+	// Copy all the annotations from the deployment.
+	updatedAnnotations := make(map[string]string)
+	for key, value := range deployment.Annotations {
+		updatedAnnotations[key] = value
+	}
+
 	currentStatus := deployutil.DeploymentStatusFor(deployment)
 	nextStatus := currentStatus
-	deploymentScaled := false
 
 	deployerPodName := deployutil.DeployerPodNameForDeployment(deployment.Name)
-	deployer, deployerErr := c.getPod(deployment.Namespace, deployerPodName)
+	deployer, deployerErr := c.podLister.Pods(deployment.Namespace).Get(deployerPodName)
 	if deployerErr == nil {
-		nextStatus = c.nextStatus(deployer, deployment)
+		nextStatus = c.nextStatus(deployer, deployment, updatedAnnotations)
 	}
 
 	switch currentStatus {
@@ -101,14 +124,36 @@ func (c *DeploymentController) Handle(deployment *kapi.ReplicationController) er
 			break
 		}
 
-		// If the pod already exists, it's possible that a previous CreatePod
-		// succeeded but the deployment state update failed and now we're re-
-		// entering. Ensure that the pod is the one we created by verifying the
-		// annotation on it, and throw a retryable error.
-		if deployerErr != nil && !kerrors.IsNotFound(deployerErr) {
+		switch {
+		case kerrors.IsNotFound(deployerErr):
+			if _, ok := deployment.Annotations[deployapi.DeploymentIgnorePodAnnotation]; ok {
+				return nil
+			}
+
+			// Generate a deployer pod spec.
+			deployerPod, err := c.makeDeployerPod(deployment)
+			if err != nil {
+				return fatalError(fmt.Sprintf("couldn't make deployer pod for %s: %v", deployutil.LabelForDeployment(deployment), err))
+			}
+			// Create the deployer pod.
+			deploymentPod, err := c.pn.Pods(deployment.Namespace).Create(deployerPod)
+			// Retry on error.
+			if err != nil {
+				return actionableError(fmt.Sprintf("couldn't create deployer pod for %s: %v", deployutil.LabelForDeployment(deployment), err))
+			}
+			updatedAnnotations[deployapi.DeploymentPodAnnotation] = deploymentPod.Name
+			nextStatus = deployapi.DeploymentStatusPending
+			glog.V(4).Infof("Created deployer pod %s for deployment %s", deploymentPod.Name, deployutil.LabelForDeployment(deployment))
+
+		// Most likely dead code since we never get an error different from 404 back from the cache.
+		case deployerErr != nil:
+			// If the pod already exists, it's possible that a previous CreatePod
+			// succeeded but the deployment state update failed and now we're re-
+			// entering. Ensure that the pod is the one we created by verifying the
+			// annotation on it, and throw a retryable error.
 			return fmt.Errorf("couldn't fetch existing deployer pod for %s: %v", deployutil.LabelForDeployment(deployment), deployerErr)
-		}
-		if deployerErr == nil && deployer != nil {
+
+		default: /* deployerErr == nil */
 			// Do a stronger check to validate that the existing deployer pod is
 			// actually for this deployment, and if not, fail this deployment.
 			//
@@ -119,37 +164,16 @@ func (c *DeploymentController) Handle(deployment *kapi.ReplicationController) er
 			// of the code as well.
 			if deployutil.DeploymentNameFor(deployer) != deployment.Name {
 				nextStatus = deployapi.DeploymentStatusFailed
-				deployment.Annotations[deployapi.DeploymentStatusReasonAnnotation] = deployapi.DeploymentFailedUnrelatedDeploymentExists
+				updatedAnnotations[deployapi.DeploymentStatusReasonAnnotation] = deployapi.DeploymentFailedUnrelatedDeploymentExists
 				c.emitDeploymentEvent(deployment, kapi.EventTypeWarning, "FailedCreate", fmt.Sprintf("Error creating deployer pod since another pod with the same name (%q) exists", deployer.Name))
 				glog.V(2).Infof("Couldn't create deployer pod for %s since an unrelated pod with the same name (%q) exists", deployutil.LabelForDeployment(deployment), deployer.Name)
 			} else {
 				// Update to pending or to the appropriate status relative to the existing validated deployer pod.
-				deployment.Annotations[deployapi.DeploymentPodAnnotation] = deployer.Name
+				updatedAnnotations[deployapi.DeploymentPodAnnotation] = deployer.Name
 				nextStatus = nextStatusComp(nextStatus, deployapi.DeploymentStatusPending)
 				glog.V(4).Infof("Detected existing deployer pod %s for deployment %s", deployer.Name, deployutil.LabelForDeployment(deployment))
 			}
-			// Don't try and re-create the deployer pod.
-			break
 		}
-
-		if _, ok := deployment.Annotations[deployapi.DeploymentIgnorePodAnnotation]; ok {
-			return nil
-		}
-
-		// Generate a deployer pod spec.
-		deployerPod, err := c.makeDeployerPod(deployment)
-		if err != nil {
-			return fatalError(fmt.Sprintf("couldn't make deployer pod for %s: %v", deployutil.LabelForDeployment(deployment), err))
-		}
-		// Create the deployer pod.
-		deploymentPod, err := c.pn.Pods(deployment.Namespace).Create(deployerPod)
-		// Retry on error.
-		if err != nil {
-			return actionableError(fmt.Sprintf("couldn't create deployer pod for %s: %v", deployutil.LabelForDeployment(deployment), err))
-		}
-		deployment.Annotations[deployapi.DeploymentPodAnnotation] = deploymentPod.Name
-		nextStatus = deployapi.DeploymentStatusPending
-		glog.V(4).Infof("Created deployer pod %s for deployment %s", deploymentPod.Name, deployutil.LabelForDeployment(deployment))
 
 	case deployapi.DeploymentStatusPending, deployapi.DeploymentStatusRunning:
 		switch {
@@ -158,23 +182,27 @@ func (c *DeploymentController) Handle(deployment *kapi.ReplicationController) er
 			// If the deployment is cancelled here then we deleted the deployer in a previous
 			// resync of the deployment.
 			if !deployutil.IsDeploymentCancelled(deployment) {
-				deployment.Annotations[deployapi.DeploymentStatusAnnotation] = string(nextStatus)
-				deployment.Annotations[deployapi.DeploymentStatusReasonAnnotation] = deployapi.DeploymentFailedDeployerPodNoLongerExists
+				// Retry more before setting the deployment to Failed if it's Pending - the pod might not have
+				// appeared in the cache yet.
+				if !willBeDropped && currentStatus == deployapi.DeploymentStatusPending {
+					return deployerErr
+				}
+				updatedAnnotations[deployapi.DeploymentStatusReasonAnnotation] = deployapi.DeploymentFailedDeployerPodNoLongerExists
 				c.emitDeploymentEvent(deployment, kapi.EventTypeWarning, "Failed", fmt.Sprintf("Deployer pod %q has gone missing", deployerPodName))
-				glog.V(4).Infof("Failing deployment %q because its deployer pod %q disappeared", deployutil.LabelForDeployment(deployment), deployerPodName)
+				deployerErr = fmt.Errorf("Failing deployment %q because its deployer pod %q disappeared", deployutil.LabelForDeployment(deployment), deployerPodName)
+				utilruntime.HandleError(deployerErr)
 			}
 
 		case deployerErr != nil:
 			// We'll try again later on resync. Continue to process cancellations.
-			glog.V(4).Infof("Error getting deployer pod %s for deployment %s: %v", deployerPodName, deployutil.LabelForDeployment(deployment), deployerErr)
+			deployerErr = fmt.Errorf("Error getting deployer pod %q for deployment %q: %v", deployerPodName, deployutil.LabelForDeployment(deployment), deployerErr)
+			utilruntime.HandleError(deployerErr)
 
 		default: /* err == nil */
 			// If the deployment has been cancelled, delete any deployer pods
-			// found and transition the deployment to Pending so that the
-			// deployment config controller continues to see the deployment
-			// as in-flight. Eventually the deletion of the deployer pod should
-			// cause a requeue of this deployment and then it can be transitioned
-			// to Failed by this controller.
+			// found. Eventually the deletion of the deployer pod should cause
+			// a requeue of this deployment and then it can be transitioned to
+			// Failed.
 			if deployutil.IsDeploymentCancelled(deployment) {
 				if err := c.cleanupDeployerPods(deployment); err != nil {
 					return err
@@ -183,11 +211,6 @@ func (c *DeploymentController) Handle(deployment *kapi.ReplicationController) er
 		}
 
 	case deployapi.DeploymentStatusFailed:
-		// Check for test deployment and ensure the deployment scale matches
-		if config, err := deployutil.DecodeDeploymentConfig(deployment, c.codec); err == nil && config.Spec.Test {
-			deploymentScaled = deployment.Spec.Replicas != 0
-			deployment.Spec.Replicas = 0
-		}
 		// Try to cleanup once more a cancelled deployment in case hook pods
 		// were created just after we issued the first cleanup request.
 		if deployutil.IsDeploymentCancelled(deployment) {
@@ -197,21 +220,22 @@ func (c *DeploymentController) Handle(deployment *kapi.ReplicationController) er
 		}
 
 	case deployapi.DeploymentStatusComplete:
-		// Check for test deployment and ensure the deployment scale matches
-		if config, err := deployutil.DecodeDeploymentConfig(deployment, c.codec); err == nil && config.Spec.Test {
-			deploymentScaled = deployment.Spec.Replicas != 0
-			deployment.Spec.Replicas = 0
-		}
-
 		if err := c.cleanupDeployerPods(deployment); err != nil {
 			return err
 		}
 	}
 
-	if deployutil.CanTransitionPhase(currentStatus, nextStatus) || deploymentScaled {
-		deployment.Annotations[deployapi.DeploymentStatusAnnotation] = string(nextStatus)
+	// Update only if we need to transition to a new phase.
+	if deployutil.CanTransitionPhase(currentStatus, nextStatus) {
+		deployment, err := deployutil.DeploymentDeepCopy(deployment)
+		if err != nil {
+			return err
+		}
 
-		// if we are going to transition to failed or complete and scale is non-zero, we'll check one more
+		updatedAnnotations[deployapi.DeploymentStatusAnnotation] = string(nextStatus)
+		deployment.Annotations = updatedAnnotations
+
+		// If we are going to transition to failed or complete and scale is non-zero, we'll check one more
 		// time to see if we are a test deployment to guarantee that we maintain the test invariant.
 		if deployment.Spec.Replicas != 0 && deployutil.IsTerminatedDeployment(deployment) {
 			if config, err := deployutil.DecodeDeploymentConfig(deployment, c.codec); err == nil && config.Spec.Test {
@@ -223,11 +247,15 @@ func (c *DeploymentController) Handle(deployment *kapi.ReplicationController) er
 			return fmt.Errorf("couldn't update deployment %s to status %s: %v", deployutil.LabelForDeployment(deployment), nextStatus, err)
 		}
 		glog.V(4).Infof("Updated deployment %s status from %s to %s (scale: %d)", deployutil.LabelForDeployment(deployment), currentStatus, nextStatus, deployment.Spec.Replicas)
+
+		if deployutil.IsDeploymentCancelled(deployment) && deployutil.IsFailedDeployment(deployment) {
+			c.emitDeploymentEvent(deployment, kapi.EventTypeNormal, "DeploymentCancelled", fmt.Sprintf("Deployment %q cancelled", deployutil.LabelForDeployment(deployment)))
+		}
 	}
 	return nil
 }
 
-func (c *DeploymentController) nextStatus(pod *kapi.Pod, deployment *kapi.ReplicationController) deployapi.DeploymentStatus {
+func (c *DeploymentController) nextStatus(pod *kapi.Pod, deployment *kapi.ReplicationController, updatedAnnotations map[string]string) deployapi.DeploymentStatus {
 	switch pod.Status.Phase {
 	case kapi.PodPending:
 		return deployapi.DeploymentStatusPending
@@ -240,14 +268,14 @@ func (c *DeploymentController) nextStatus(pod *kapi.Pod, deployment *kapi.Replic
 		// then we need to remove the cancel annotations from the complete deployment
 		// and emit an event letting users know their cancellation failed.
 		if deployutil.IsDeploymentCancelled(deployment) {
-			delete(deployment.Annotations, deployapi.DeploymentCancelledAnnotation)
-			delete(deployment.Annotations, deployapi.DeploymentStatusReasonAnnotation)
+			delete(updatedAnnotations, deployapi.DeploymentCancelledAnnotation)
+			delete(updatedAnnotations, deployapi.DeploymentStatusReasonAnnotation)
 			c.emitDeploymentEvent(deployment, kapi.EventTypeWarning, "FailedCancellation", "Succeeded before cancel recorded")
 		}
 		// Sync the internal replica annotation with the target so that we can
 		// distinguish deployer updates from other scaling events.
-		deployment.Annotations[deployapi.DeploymentReplicasAnnotation] = deployment.Annotations[deployapi.DesiredReplicasAnnotation]
-		delete(deployment.Annotations, deployapi.DesiredReplicasAnnotation)
+		updatedAnnotations[deployapi.DeploymentReplicasAnnotation] = updatedAnnotations[deployapi.DesiredReplicasAnnotation]
+		delete(updatedAnnotations, deployapi.DesiredReplicasAnnotation)
 		return deployapi.DeploymentStatusComplete
 
 	case kapi.PodFailed:
@@ -283,11 +311,14 @@ func (c *DeploymentController) makeDeployerPod(deployment *kapi.ReplicationContr
 
 	// Assigning to a variable since its address is required
 	maxDeploymentDurationSeconds := deployapi.MaxDeploymentDurationSeconds
+	if deploymentConfig.Spec.Strategy.ActiveDeadlineSeconds != nil {
+		maxDeploymentDurationSeconds = *(deploymentConfig.Spec.Strategy.ActiveDeadlineSeconds)
+	}
 
 	gracePeriod := int64(10)
 
 	pod := &kapi.Pod{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: deployutil.DeployerPodNameForDeployment(deployment.Name),
 			Annotations: map[string]string{
 				deployapi.DeploymentAnnotation: deployment.Name,
@@ -295,6 +326,17 @@ func (c *DeploymentController) makeDeployerPod(deployment *kapi.ReplicationContr
 			Labels: map[string]string{
 				deployapi.DeployerPodForDeploymentLabel: deployment.Name,
 			},
+			// Set the owner reference to current deployment, so in case the deployment fails
+			// and the deployer pod is preserved when a revisionHistory limit is reached and the
+			// deployment is removed, we also remove the deployer pod with it.
+			OwnerReferences: []metav1.OwnerReference{{
+				// FIXME: This will have to point to apps.openshift.io/v1 after we switch to
+				// clientsets.
+				APIVersion: "v1",
+				Kind:       deployapi.Kind("DeploymentConfig").Kind,
+				Name:       deployment.Name,
+				UID:        deployment.UID,
+			}},
 		},
 		Spec: kapi.PodSpec{
 			Containers: []kapi.Container{
@@ -375,14 +417,14 @@ func (c *DeploymentController) makeDeployerContainer(strategy *deployapi.Deploym
 
 func (c *DeploymentController) cleanupDeployerPods(deployment *kapi.ReplicationController) error {
 	selector := deployutil.DeployerPodSelector(deployment.Name)
-	deployerList, err := c.podStore.Pods(deployment.Namespace).List(selector)
+	deployerList, err := c.podLister.Pods(deployment.Namespace).List(selector)
 	if err != nil {
 		return fmt.Errorf("couldn't fetch deployer pods for %q: %v", deployutil.LabelForDeployment(deployment), err)
 	}
 
 	cleanedAll := true
-	for _, deployerPod := range deployerList.Items {
-		if err := c.pn.Pods(deployerPod.Namespace).Delete(deployerPod.Name, &kapi.DeleteOptions{}); err != nil && !kerrors.IsNotFound(err) {
+	for _, deployerPod := range deployerList {
+		if err := c.pn.Pods(deployerPod.Namespace).Delete(deployerPod.Name, &metav1.DeleteOptions{}); err != nil && !kerrors.IsNotFound(err) {
 			// if the pod deletion failed, then log the error and continue
 			// we will try to delete any remaining deployer pods and return an error later
 			utilruntime.HandleError(fmt.Errorf("couldn't delete completed deployer pod %q for deployment %q: %v", deployerPod.Name, deployutil.LabelForDeployment(deployment), err))
@@ -416,13 +458,15 @@ func (c *DeploymentController) handleErr(err error, key interface{}, deployment 
 		return
 	}
 
-	if c.queue.NumRequeues(key) < 2 {
+	if c.queue.NumRequeues(key) < maxRetryCount {
 		c.queue.AddRateLimited(key)
 		return
 	}
 
+	msg := fmt.Sprintf("About to stop retrying %q: %v", deployment.Name, err)
 	if _, isActionableErr := err.(actionableError); isActionableErr {
-		c.emitDeploymentEvent(deployment, kapi.EventTypeWarning, "FailedRetry", fmt.Sprintf("About to stop retrying %s: %v", deployment.Name, err))
+		c.emitDeploymentEvent(deployment, kapi.EventTypeWarning, "FailedRetry", msg)
 	}
+	glog.V(2).Infof(msg)
 	c.queue.Forget(key)
 }

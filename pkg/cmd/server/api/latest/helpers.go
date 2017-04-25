@@ -10,8 +10,8 @@ import (
 
 	"github.com/ghodss/yaml"
 
-	"k8s.io/kubernetes/pkg/runtime"
-	kyaml "k8s.io/kubernetes/pkg/util/yaml"
+	"k8s.io/apimachinery/pkg/runtime"
+	kyaml "k8s.io/apimachinery/pkg/util/yaml"
 
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
 )
@@ -150,7 +150,10 @@ func IsAdmissionPluginActivated(reader io.Reader, defaultValue bool) (bool, erro
 	}
 	activationConfig, ok := obj.(*configapi.DefaultAdmissionConfig)
 	if !ok {
-		return false, fmt.Errorf("unexpected config object: %#v", obj)
+		// if we failed the cast, then we've got a config object specified for this admission plugin
+		// that means that this must be enabled and all additional validation is up to the
+		// admission plugin itself
+		return true, nil
 	}
 
 	return !activationConfig.Disable, nil

@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"io/ioutil"
 
-	kerrs "k8s.io/kubernetes/pkg/api/errors"
+	kerrs "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	"github.com/openshift/origin/pkg/authorization/rulevalidation"
@@ -20,7 +21,34 @@ type ClusterRoles struct {
 }
 
 const (
-	ClusterRolesName = "ClusterRoles"
+	ClusterRolesName   = "ClusterRoles"
+	clusterRoleMissing = `
+clusterrole/%s is missing.
+
+Use the 'oadm policy reconcile-cluster-roles' command to create the role. For example,
+
+  $ oadm policy reconcile-cluster-roles \
+         --additive-only=true --confirm
+`
+	clusterRoleReduced = `
+clusterrole/%s has changed, but the existing role has more permissions than the new role.
+
+If you can confirm that the extra permissions are not required, you may use the
+'oadm policy reconcile-cluster-roles' command to update the role to reduce permissions.
+For example,
+
+  $ oadm policy reconcile-cluster-roles \
+         --additive-only=false --confirm
+`
+	clusterRoleChanged = `
+clusterrole/%s has changed and the existing role does not have enough permissions.
+
+Use the 'oadm policy reconcile-cluster-roles' command to update the role.
+For example,
+
+  $ oadm policy reconcile-cluster-roles \
+         --additive-only=true --confirm
+`
 )
 
 func (d *ClusterRoles) Name() string {
@@ -39,7 +67,7 @@ func (d *ClusterRoles) CanRun() (bool, error) {
 		return false, fmt.Errorf("must have client.SubjectAccessReviews")
 	}
 
-	return userCan(d.SARClient, authorizationapi.AuthorizationAttributes{
+	return userCan(d.SARClient, authorizationapi.Action{
 		Verb:     "list",
 		Group:    authorizationapi.GroupName,
 		Resource: "clusterroles",
@@ -68,9 +96,9 @@ func (d *ClusterRoles) Check() types.DiagnosticResult {
 	}
 
 	for _, changedClusterRole := range changedClusterRoles {
-		actualClusterRole, err := d.ClusterRolesClient.ClusterRoles().Get(changedClusterRole.Name)
+		actualClusterRole, err := d.ClusterRolesClient.ClusterRoles().Get(changedClusterRole.Name, metav1.GetOptions{})
 		if kerrs.IsNotFound(err) {
-			r.Error("CRD1002", nil, fmt.Sprintf("clusterrole/%s is missing.\n\nUse the `oadm policy reconcile-cluster-roles` command to create the role.", changedClusterRole.Name))
+			r.Error("CRD1002", nil, fmt.Sprintf(clusterRoleMissing, changedClusterRole.Name))
 			continue
 		}
 		if err != nil {
@@ -79,7 +107,7 @@ func (d *ClusterRoles) Check() types.DiagnosticResult {
 
 		_, missingRules := rulevalidation.Covers(actualClusterRole.Rules, changedClusterRole.Rules)
 		if len(missingRules) == 0 {
-			r.Warn("CRD1003", nil, fmt.Sprintf("clusterrole/%s has changed, but the existing role has more permissions than the new role.\n\nUse the `oadm policy reconcile-cluster-roles` command to update the role to reduce permissions.", changedClusterRole.Name))
+			r.Info("CRD1003", fmt.Sprintf(clusterRoleReduced, changedClusterRole.Name))
 			_, extraRules := rulevalidation.Covers(changedClusterRole.Rules, actualClusterRole.Rules)
 			for _, extraRule := range extraRules {
 				r.Info("CRD1008", fmt.Sprintf("clusterrole/%s has extra permission %v.", changedClusterRole.Name, extraRule))
@@ -87,7 +115,7 @@ func (d *ClusterRoles) Check() types.DiagnosticResult {
 			continue
 		}
 
-		r.Error("CRD1005", nil, fmt.Sprintf("clusterrole/%s has changed and the existing role does not have enough permissions.\n\nUse the `oadm policy reconcile-cluster-roles` command to update the role.", changedClusterRole.Name))
+		r.Error("CRD1005", nil, fmt.Sprintf(clusterRoleChanged, changedClusterRole.Name))
 		for _, missingRule := range missingRules {
 			r.Info("CRD1007", fmt.Sprintf("clusterrole/%s is missing permission %v.", changedClusterRole.Name, missingRule))
 		}

@@ -73,6 +73,22 @@ items:
   userNames: null
 - apiVersion: v1
   groupNames:
+  - system:authenticated
+  - system:unauthenticated
+  kind: ClusterRoleBinding
+  metadata:
+    creationTimestamp: null
+    name: self-access-reviewers
+  roleRef:
+    name: self-access-reviewer
+  subjects:
+  - kind: SystemGroup
+    name: system:authenticated
+  - kind: SystemGroup
+    name: system:unauthenticated
+  userNames: null
+- apiVersion: v1
+  groupNames:
   - system:authenticated:oauth
   kind: ClusterRoleBinding
   metadata:
@@ -115,32 +131,6 @@ items:
     name: system:authenticated
   - kind: SystemGroup
     name: system:unauthenticated
-  userNames: null
-- apiVersion: v1
-  groupNames:
-  - system:routers
-  kind: ClusterRoleBinding
-  metadata:
-    creationTimestamp: null
-    name: system:routers
-  roleRef:
-    name: system:router
-  subjects:
-  - kind: SystemGroup
-    name: system:routers
-  userNames: null
-- apiVersion: v1
-  groupNames:
-  - system:registries
-  kind: ClusterRoleBinding
-  metadata:
-    creationTimestamp: null
-    name: system:registrys
-  roleRef:
-    name: system:registry
-  subjects:
-  - kind: SystemGroup
-    name: system:registries
   userNames: null
 - apiVersion: v1
   groupNames:
@@ -222,19 +212,6 @@ items:
     name: system:build-strategy-docker-binding
   roleRef:
     name: system:build-strategy-docker
-  subjects:
-  - kind: SystemGroup
-    name: system:authenticated
-  userNames: null
-- apiVersion: v1
-  groupNames:
-  - system:authenticated
-  kind: ClusterRoleBinding
-  metadata:
-    creationTimestamp: null
-    name: system:build-strategy-custom-binding
-  roleRef:
-    name: system:build-strategy-custom
   subjects:
   - kind: SystemGroup
     name: system:authenticated

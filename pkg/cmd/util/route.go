@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"strconv"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/util/intstr"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 
 	"github.com/openshift/origin/pkg/route/api"
 )
@@ -14,18 +15,18 @@ import (
 // UnsecuredRoute will return a route with enough info so that it can direct traffic to
 // the service provided by --service. Callers of this helper are responsible for providing
 // tls configuration, path, and the hostname of the route.
-func UnsecuredRoute(kc *kclient.Client, namespace, routeName, serviceName, portString string) (*api.Route, error) {
+func UnsecuredRoute(kc kclientset.Interface, namespace, routeName, serviceName, portString string) (*api.Route, error) {
 	if len(routeName) == 0 {
 		routeName = serviceName
 	}
 
-	svc, err := kc.Services(namespace).Get(serviceName)
+	svc, err := kc.Core().Services(namespace).Get(serviceName, metav1.GetOptions{})
 	if err != nil {
 		if len(portString) == 0 {
 			return nil, fmt.Errorf("you need to provide a route port via --port when exposing a non-existent service")
 		}
 		return &api.Route{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: routeName,
 			},
 			Spec: api.RouteSpec{
@@ -43,7 +44,7 @@ func UnsecuredRoute(kc *kclient.Client, namespace, routeName, serviceName, portS
 	}
 
 	route := &api.Route{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:   routeName,
 			Labels: svc.Labels,
 		},

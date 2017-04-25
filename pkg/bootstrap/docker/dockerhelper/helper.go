@@ -7,18 +7,20 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/blang/semver"
 	dockerclient "github.com/docker/engine-api/client"
+	dockertypes "github.com/docker/engine-api/types"
 	"github.com/docker/engine-api/types/registry"
 	docker "github.com/fsouza/go-dockerclient"
 	"github.com/golang/glog"
 	"golang.org/x/net/context"
 
+	"github.com/openshift/imagebuilder/imageprogress"
 	starterrors "github.com/openshift/origin/pkg/bootstrap/docker/errors"
-	"github.com/openshift/origin/pkg/util/docker/dockerfile/builder/imageprogress"
 )
 
 const openShiftInsecureCIDR = "172.30.0.0/16"
@@ -27,6 +29,7 @@ const openShiftInsecureCIDR = "172.30.0.0/16"
 type Helper struct {
 	client          *docker.Client
 	engineAPIClient *dockerclient.Client
+	info            *dockertypes.Info
 }
 
 // NewHelper creates a new Helper
@@ -54,21 +57,33 @@ func hasCIDR(cidr string, listOfCIDRs []*registry.NetIPNet) bool {
 	return false
 }
 
-// HasInsecureRegistryArg checks whether the docker daemon is configured with
-// the appropriate insecure registry argument
-func (h *Helper) HasInsecureRegistryArg() (bool, error) {
+func (h *Helper) dockerInfo() (*dockertypes.Info, error) {
+	if h.info != nil {
+		return h.info, nil
+	}
+	if h.engineAPIClient == nil {
+		return nil, fmt.Errorf("the Docker engine API client is not initialized")
+	}
 	glog.V(5).Infof("Retrieving Docker daemon info")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	if h.engineAPIClient == nil {
-		return false, fmt.Errorf("the Docker engine API client is not initialized")
-	}
 	info, err := h.engineAPIClient.Info(ctx)
 	defer cancel()
 	if err != nil {
 		glog.V(2).Infof("Could not retrieve Docker info: %v", err)
-		return false, err
+		return nil, err
 	}
 	glog.V(5).Infof("Docker daemon info: %#v", info)
+	h.info = &info
+	return h.info, nil
+}
+
+// HasInsecureRegistryArg checks whether the docker daemon is configured with
+// the appropriate insecure registry argument
+func (h *Helper) HasInsecureRegistryArg() (bool, error) {
+	info, err := h.dockerInfo()
+	if err != nil {
+		return false, err
+	}
 	registryConfig := info.RegistryConfig
 	if err != nil {
 		return false, err
@@ -76,26 +91,53 @@ func (h *Helper) HasInsecureRegistryArg() (bool, error) {
 	return hasCIDR(openShiftInsecureCIDR, registryConfig.InsecureRegistryCIDRs), nil
 }
 
-// Version returns the Docker version
-func (h *Helper) Version() (*semver.Version, error) {
+var (
+	fedoraPackage = regexp.MustCompile("\\.fc[0-9_]*\\.")
+	rhelPackage   = regexp.MustCompile("\\.el[0-9_]*\\.")
+)
+
+// DockerRoot returns the root directory for Docker
+func (h *Helper) DockerRoot() (string, error) {
+	info, err := h.dockerInfo()
+	if err != nil {
+		return "", nil
+	}
+	return info.DockerRootDir, nil
+}
+
+// Version returns the Docker version and whether it is a Red Hat distro version
+func (h *Helper) Version() (*semver.Version, bool, error) {
 	glog.V(5).Infof("Retrieving Docker version")
 	env, err := h.client.Version()
 	if err != nil {
 		glog.V(2).Infof("Error retrieving version: %v", err)
-		return nil, err
+		return nil, false, err
 	}
 	glog.V(5).Infof("Docker version results: %#v", env)
 	versionStr := env.Get("Version")
 	if len(versionStr) == 0 {
-		return nil, errors.New("did not get a version")
+		return nil, false, errors.New("did not get a version")
 	}
 	glog.V(5).Infof("Version: %s", versionStr)
 	dockerVersion, err := semver.Parse(versionStr)
 	if err != nil {
 		glog.V(2).Infof("Error parsing Docker version %q", versionStr)
-		return nil, err
+		return nil, false, err
 	}
-	return &dockerVersion, nil
+	isRedHat := false
+	packageVersion := env.Get("PkgVersion")
+	if len(packageVersion) > 0 {
+		isRedHat = fedoraPackage.MatchString(packageVersion) || rhelPackage.MatchString(packageVersion)
+	}
+	return &dockerVersion, isRedHat, nil
+}
+
+func (h *Helper) GetDockerProxySettings() (httpProxy, httpsProxy, noProxy string, err error) {
+	info, err := h.dockerInfo()
+	if err != nil {
+		return "", "", "", err
+	}
+	return info.HTTPProxy, info.HTTPSProxy, info.NoProxy, nil
 }
 
 // CheckAndPull checks whether a Docker image exists. If not, it pulls it.
@@ -131,8 +173,7 @@ func (h *Helper) CheckAndPull(image string, out io.Writer) error {
 }
 
 // GetContainerState returns whether a container exists and if it does whether it's running
-func (h *Helper) GetContainerState(id string) (exists, running bool, err error) {
-	var container *docker.Container
+func (h *Helper) GetContainerState(id string) (container *docker.Container, running bool, err error) {
 	glog.V(5).Infof("Inspecting docker container %q", id)
 	container, err = h.client.InspectContainer(id)
 	if err != nil {
@@ -144,10 +185,9 @@ func (h *Helper) GetContainerState(id string) (exists, running bool, err error) 
 		glog.V(5).Infof("An error occurred inspecting container %q: %v", id, err)
 		return
 	}
-	exists = true
 	running = container.State.Running
 	glog.V(5).Infof("Container inspect result: %#v", container)
-	glog.V(5).Infof("Container exists = %v, running = %v", exists, running)
+	glog.V(5).Infof("Container running = %v", running)
 	return
 }
 

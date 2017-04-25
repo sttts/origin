@@ -7,8 +7,8 @@ import (
 	// it causes all the admission plugins to be registered, giving us a full listing.
 	_ "k8s.io/kubernetes/cmd/kube-apiserver/app"
 
-	"k8s.io/kubernetes/pkg/admission"
-	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apiserver/pkg/admission"
 
 	"github.com/openshift/origin/pkg/cmd/server/origin"
 	imageadmission "github.com/openshift/origin/pkg/image/admission"
@@ -25,19 +25,20 @@ var admissionPluginsNotUsedByKube = sets.NewString(
 	"PodSecurityPolicy",      // from kube, this will eventually replace SecurityContextConstraints but for now origin does not use it.
 	"ResourceQuota",          // from kube, we replace this with quotaadmission.PluginName
 
-	"BuildByStrategy",          // from origin, only needed for managing builds, not kubernetes resources
-	"BuildDefaults",            // from origin, only needed for managing builds, not kubernetes resources
-	"BuildOverrides",           // from origin, only needed for managing builds, not kubernetes resources
-	imageadmission.PluginName,  // from origin, used for limiting image sizes, not kubernetes resources
-	"JenkinsBootstrapper",      // from origin, only needed for managing builds, not kubernetes resources
-	"OriginNamespaceLifecycle", // from origin, only needed for rejecting openshift resources, so not needed by kube
-	"ProjectRequestLimit",      // from origin, used for limiting project requests by user (online use case)
-	"RunOnceDuration",          // from origin, used for overriding the ActiveDeadlineSeconds for run-once pods
+	"BuildByStrategy",                        // from origin, only needed for managing builds, not kubernetes resources
+	imageadmission.PluginName,                // from origin, used for limiting image sizes, not kubernetes resources
+	"openshift.io/JenkinsBootstrapper",       // from origin, only needed for managing builds, not kubernetes resources
+	"openshift.io/BuildConfigSecretInjector", // from origin, only needed for managing builds, not kubernetes resources
+	"OriginNamespaceLifecycle",               // from origin, only needed for rejecting openshift resources, so not needed by kube
+	"ProjectRequestLimit",                    // from origin, used for limiting project requests by user (online use case)
+	"openshift.io/RestrictSubjectBindings",   // from origin, used for enforcing rolebindingrestrictions, not kubernetes resources
+	"RunOnceDuration",                        // from origin, used for overriding the ActiveDeadlineSeconds for run-once pods
 
 	"NamespaceExists",  // superseded by NamespaceLifecycle
 	"InitialResources", // do we want this? https://github.com/kubernetes/kubernetes/blob/master/docs/proposals/initial-resources.md
 
-	"PersistentVolumeLabel", // do we want this? disable by default
+	"PodPreset",                // alpha in kube 1.6, not on by default
+	"DefaultTolerationSeconds", // alpha, not on by default
 )
 
 func TestKubeAdmissionControllerUsage(t *testing.T) {
@@ -54,6 +55,25 @@ func TestKubeAdmissionControllerUsage(t *testing.T) {
 			if !admissionPluginsNotUsedByKube.Has(pluginName) {
 				t.Errorf("%v not used", pluginName)
 			}
+		}
+	}
+}
+
+func TestAdmissionOnOffCoverage(t *testing.T) {
+	configuredAdmissionPlugins := sets.NewString(origin.CombinedAdmissionControlPlugins...)
+	allCoveredAdmissionPlugins := sets.String{}
+	allCoveredAdmissionPlugins.Insert(defaultOnPlugins.List()...)
+	allCoveredAdmissionPlugins.Insert(defaultOffPlugins.List()...)
+
+	if !configuredAdmissionPlugins.Equal(allCoveredAdmissionPlugins) {
+		t.Errorf("every admission plugin must be default on or default off. differences: %v and %v",
+			configuredAdmissionPlugins.Difference(allCoveredAdmissionPlugins),
+			allCoveredAdmissionPlugins.Difference(configuredAdmissionPlugins))
+	}
+
+	for plugin := range defaultOnPlugins {
+		if defaultOffPlugins.Has(plugin) {
+			t.Errorf("%v is both enabled and disabled", plugin)
 		}
 	}
 }

@@ -4,14 +4,15 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utildiff "k8s.io/apimachinery/pkg/util/diff"
+	"k8s.io/apimachinery/pkg/util/sets"
+	clientgotesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/cache"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/resource"
-	"k8s.io/kubernetes/pkg/client/cache"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
-	"k8s.io/kubernetes/pkg/controller/framework"
-	"k8s.io/kubernetes/pkg/runtime"
-	utildiff "k8s.io/kubernetes/pkg/util/diff"
-	"k8s.io/kubernetes/pkg/util/sets"
+	kcorelisters "k8s.io/kubernetes/pkg/client/listers/core/internalversion"
 
 	ocache "github.com/openshift/origin/pkg/client/cache"
 	"github.com/openshift/origin/pkg/client/testclient"
@@ -57,7 +58,7 @@ func TestUpdateQuota(t *testing.T) {
 				return []*quotaapi.ClusterResourceQuota{user1, user2}
 			},
 			quotaToUpdate: &kapi.ResourceQuota{
-				ObjectMeta: kapi.ObjectMeta{Namespace: "foo", Name: "user-one"},
+				ObjectMeta: metav1.ObjectMeta{Namespace: "foo", Name: "user-one"},
 				Spec: kapi.ResourceQuotaSpec{
 					Hard: kapi.ResourceList{
 						kapi.ResourcePods:    resource.MustParse("10"),
@@ -94,7 +95,7 @@ func TestUpdateQuota(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		quotaIndexer := cache.NewIndexer(framework.DeletionHandlingMetaNamespaceKeyFunc, cache.Indexers{})
+		quotaIndexer := cache.NewIndexer(cache.DeletionHandlingMetaNamespaceKeyFunc, cache.Indexers{})
 		availableQuotas := tc.availableQuotas()
 		objs := []runtime.Object{}
 		for i := range availableQuotas {
@@ -123,11 +124,11 @@ func TestUpdateQuota(t *testing.T) {
 
 		var actualQuota *quotaapi.ClusterResourceQuota
 		for _, action := range client.Actions() {
-			updateAction, ok := action.(ktestclient.UpdateAction)
+			updateAction, ok := action.(clientgotesting.UpdateActionImpl)
 			if !ok {
 				continue
 			}
-			if updateAction.Matches("update", "clusterresourcequotas") {
+			if updateAction.Matches("update", "clusterresourcequotas") && updateAction.Subresource == "status" {
 				actualQuota = updateAction.GetObject().(*quotaapi.ClusterResourceQuota)
 				break
 			}
@@ -153,7 +154,7 @@ func TestUpdateQuota(t *testing.T) {
 
 func defaultQuota() *quotaapi.ClusterResourceQuota {
 	return &quotaapi.ClusterResourceQuota{
-		ObjectMeta: kapi.ObjectMeta{Name: "foo"},
+		ObjectMeta: metav1.ObjectMeta{Name: "foo"},
 		Spec: quotaapi.ClusterResourceQuotaSpec{
 			Quota: kapi.ResourceQuotaSpec{
 				Hard: kapi.ResourceList{
@@ -182,7 +183,7 @@ func TestGetQuota(t *testing.T) {
 				return nil
 			},
 			availableNamespaces: []*kapi.Namespace{
-				{ObjectMeta: kapi.ObjectMeta{Name: "foo", Labels: map[string]string{"one": "alfa"}}},
+				{ObjectMeta: metav1.ObjectMeta{Name: "foo", Labels: map[string]string{"one": "alfa"}}},
 			},
 			mapperFunc: func() clusterquotamapping.ClusterQuotaMapper {
 				mapper := newFakeClusterQuotaMapper()
@@ -200,7 +201,7 @@ func TestGetQuota(t *testing.T) {
 				return nil
 			},
 			availableNamespaces: []*kapi.Namespace{
-				{ObjectMeta: kapi.ObjectMeta{Name: "foo", Labels: map[string]string{"one": "alfa"}}},
+				{ObjectMeta: metav1.ObjectMeta{Name: "foo", Labels: map[string]string{"one": "alfa"}}},
 			},
 			mapperFunc: func() clusterquotamapping.ClusterQuotaMapper {
 				mapper := newFakeClusterQuotaMapper()
@@ -245,7 +246,7 @@ func TestGetQuota(t *testing.T) {
 				return []*quotaapi.ClusterResourceQuota{user1, user2}
 			},
 			availableNamespaces: []*kapi.Namespace{
-				{ObjectMeta: kapi.ObjectMeta{Name: "foo", Labels: map[string]string{"one": "alfa"}}},
+				{ObjectMeta: metav1.ObjectMeta{Name: "foo", Labels: map[string]string{"one": "alfa"}}},
 			},
 			mapperFunc: func() clusterquotamapping.ClusterQuotaMapper {
 				mapper := newFakeClusterQuotaMapper()
@@ -258,7 +259,7 @@ func TestGetQuota(t *testing.T) {
 			expectedQuotas: func() []*kapi.ResourceQuota {
 				return []*kapi.ResourceQuota{
 					{
-						ObjectMeta: kapi.ObjectMeta{Namespace: "foo", Name: "user-one"},
+						ObjectMeta: metav1.ObjectMeta{Namespace: "foo", Name: "user-one"},
 						Spec: kapi.ResourceQuotaSpec{
 							Hard: kapi.ResourceList{
 								kapi.ResourcePods:    resource.MustParse("10"),
@@ -281,18 +282,18 @@ func TestGetQuota(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		quotaIndexer := cache.NewIndexer(framework.DeletionHandlingMetaNamespaceKeyFunc, cache.Indexers{})
+		quotaIndexer := cache.NewIndexer(cache.DeletionHandlingMetaNamespaceKeyFunc, cache.Indexers{})
 		availableQuotas := tc.availableQuotas()
 		for i := range availableQuotas {
 			quotaIndexer.Add(availableQuotas[i])
 		}
 		quotaLister := &ocache.IndexerToClusterResourceQuotaLister{Indexer: quotaIndexer}
 
-		namespaceIndexer := cache.NewIndexer(framework.DeletionHandlingMetaNamespaceKeyFunc, cache.Indexers{})
+		namespaceIndexer := cache.NewIndexer(cache.DeletionHandlingMetaNamespaceKeyFunc, cache.Indexers{})
 		for i := range tc.availableNamespaces {
 			namespaceIndexer.Add(tc.availableNamespaces[i])
 		}
-		namespaceLister := &ocache.IndexerToNamespaceLister{Indexer: namespaceIndexer}
+		namespaceLister := kcorelisters.NewNamespaceLister(namespaceIndexer)
 
 		client := testclient.NewSimpleFake()
 

@@ -1,5 +1,3 @@
-// +build integration
-
 package integration
 
 import (
@@ -8,6 +6,8 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,28 +17,38 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AaronO/go-git-http"
+	"github.com/AaronO/go-git-http/auth"
+	"github.com/elazarl/goproxy"
 	docker "github.com/fsouza/go-dockerclient"
+
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilerrs "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
+	clientgotesting "k8s.io/client-go/testing"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
-	"k8s.io/kubernetes/pkg/runtime"
-	utilerrs "k8s.io/kubernetes/pkg/util/errors"
-	"k8s.io/kubernetes/pkg/util/sets"
 
 	buildapi "github.com/openshift/origin/pkg/build/api"
 	client "github.com/openshift/origin/pkg/client/testclient"
+	clicmd "github.com/openshift/origin/pkg/cmd/cli/cmd"
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	"github.com/openshift/origin/pkg/dockerregistry"
+	"github.com/openshift/origin/pkg/generate"
 	"github.com/openshift/origin/pkg/generate/app"
 	"github.com/openshift/origin/pkg/generate/app/cmd"
 	apptest "github.com/openshift/origin/pkg/generate/app/test"
 	"github.com/openshift/origin/pkg/generate/dockerfile"
+	"github.com/openshift/origin/pkg/generate/git"
+	"github.com/openshift/origin/pkg/generate/jenkinsfile"
 	"github.com/openshift/origin/pkg/generate/source"
 	imageapi "github.com/openshift/origin/pkg/image/api"
 	templateapi "github.com/openshift/origin/pkg/template/api"
+	"github.com/openshift/source-to-image/pkg/test"
 
 	_ "github.com/openshift/origin/pkg/api/install"
+	"github.com/openshift/origin/test/util"
 )
 
 func skipExternalGit(t *testing.T) {
@@ -160,7 +170,7 @@ func TestNewAppResolve(t *testing.T) {
 			name: "Successful docker build",
 			cfg: cmd.AppConfig{
 				GenerationInputs: cmd.GenerationInputs{
-					Strategy: "docker",
+					Strategy: generate.StrategyDocker,
 				},
 			},
 			components: app.ComponentReferences{
@@ -186,7 +196,7 @@ func TestNewAppResolve(t *testing.T) {
 
 func TestNewAppDetectSource(t *testing.T) {
 	skipExternalGit(t)
-	gitLocalDir := createLocalGitDirectory(t)
+	gitLocalDir := test.CreateLocalGitDirectory(t)
 	defer os.RemoveAll(gitLocalDir)
 
 	dockerSearcher := app.DockerRegistrySearcher{
@@ -205,8 +215,9 @@ func TestNewAppDetectSource(t *testing.T) {
 			cfg: &cmd.AppConfig{
 				Resolvers: cmd.Resolvers{
 					Detector: app.SourceRepositoryEnumerator{
-						Detectors: source.DefaultDetectors,
-						Tester:    dockerfile.NewTester(),
+						Detectors:         source.DefaultDetectors,
+						DockerfileTester:  dockerfile.NewTester(),
+						JenkinsfileTester: jenkinsfile.NewTester(),
 					},
 					DockerSearcher: dockerSearcher,
 				},
@@ -270,11 +281,38 @@ func (r *ExactMatchDockerSearcher) Search(precise bool, terms ...string) (app.Co
 	return matches, r.Errs
 }
 
+// Some circular reference detection requires ImageStreams to
+// be created with Tag support. The ExactMatchDirectTagDockerSearcher
+// creates a Matcher which triggers the logic to enable tag support.
+type ExactMatchDirectTagDockerSearcher struct {
+	Errs []error
+}
+
+func (r *ExactMatchDirectTagDockerSearcher) Search(precise bool, terms ...string) (app.ComponentMatches, []error) {
+	matches := app.ComponentMatches{}
+	for _, value := range terms {
+		matches = append(matches, &app.ComponentMatch{
+			Value:       value,
+			Name:        value,
+			Argument:    fmt.Sprintf("--docker-image=%q", value),
+			Description: fmt.Sprintf("Docker image %q", value),
+			Score:       0.0,
+			Image:       &imageapi.DockerImage{},
+			Meta:        map[string]string{"direct-tag": "1"},
+		})
+	}
+	return matches, r.Errs
+}
+
 func TestNewAppRunAll(t *testing.T) {
 	skipExternalGit(t)
 	dockerSearcher := app.DockerRegistrySearcher{
 		Client: dockerregistry.NewClient(10*time.Second, true),
 	}
+	failClient := &client.Fake{}
+	failClient.AddReactor("get", "images", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
+		return true, nil, errors.NewInternalError(fmt.Errorf(""))
+	})
 	tests := []struct {
 		name            string
 		config          *cmd.AppConfig
@@ -306,12 +344,13 @@ func TestNewAppRunAll(t *testing.T) {
 						Namespaces:        []string{"default"},
 					},
 					Detector: app.SourceRepositoryEnumerator{
-						Detectors: source.DefaultDetectors,
-						Tester:    dockerfile.NewTester(),
+						Detectors:         source.DefaultDetectors,
+						DockerfileTester:  dockerfile.NewTester(),
+						JenkinsfileTester: jenkinsfile.NewTester(),
 					},
 				},
 				GenerationInputs: cmd.GenerationInputs{
-					Strategy: "source",
+					Strategy: generate.StrategySource,
 				},
 				Typer:           kapi.Scheme,
 				OSClient:        &client.Fake{},
@@ -348,13 +387,14 @@ func TestNewAppRunAll(t *testing.T) {
 						Namespaces:                []string{"openshift", "default"},
 					},
 					Detector: app.SourceRepositoryEnumerator{
-						Detectors: source.DefaultDetectors,
-						Tester:    dockerfile.NewTester(),
+						Detectors:         source.DefaultDetectors,
+						DockerfileTester:  dockerfile.NewTester(),
+						JenkinsfileTester: jenkinsfile.NewTester(),
 					},
 				},
 
 				GenerationInputs: cmd.GenerationInputs{
-					Strategy: "source",
+					Strategy: generate.StrategySource,
 					Labels:   map[string]string{"label1": "value1", "label2": "value2"},
 				},
 				Typer:           kapi.Scheme,
@@ -392,12 +432,13 @@ func TestNewAppRunAll(t *testing.T) {
 						Namespaces:                []string{"openshift", "default"},
 					},
 					Detector: app.SourceRepositoryEnumerator{
-						Detectors: source.DefaultDetectors,
-						Tester:    dockerfile.NewTester(),
+						Detectors:         source.DefaultDetectors,
+						DockerfileTester:  dockerfile.NewTester(),
+						JenkinsfileTester: jenkinsfile.NewTester(),
 					},
 				},
 				GenerationInputs: cmd.GenerationInputs{
-					Strategy: "docker",
+					Strategy: generate.StrategyDocker,
 				},
 				Typer:           kapi.Scheme,
 				OSClient:        &client.Fake{},
@@ -433,8 +474,9 @@ func TestNewAppRunAll(t *testing.T) {
 						Namespaces:                []string{"openshift", "default"},
 					},
 					Detector: app.SourceRepositoryEnumerator{
-						Detectors: source.DefaultDetectors,
-						Tester:    dockerfile.NewTester(),
+						Detectors:         source.DefaultDetectors,
+						DockerfileTester:  dockerfile.NewTester(),
+						JenkinsfileTester: jenkinsfile.NewTester(),
 					},
 				},
 
@@ -460,7 +502,7 @@ func TestNewAppRunAll(t *testing.T) {
 					SourceRepositories: []string{"https://github.com/openshift/ruby-hello-world"},
 				},
 				GenerationInputs: cmd.GenerationInputs{
-					Strategy:         "source",
+					Strategy:         generate.StrategySource,
 					InsecureRegistry: true,
 				},
 
@@ -485,8 +527,9 @@ func TestNewAppRunAll(t *testing.T) {
 					},
 					TemplateFileSearcher: &app.TemplateFileSearcher{},
 					Detector: app.SourceRepositoryEnumerator{
-						Detectors: source.DefaultDetectors,
-						Tester:    dockerfile.NewTester(),
+						Detectors:         source.DefaultDetectors,
+						DockerfileTester:  dockerfile.NewTester(),
+						JenkinsfileTester: jenkinsfile.NewTester(),
 					},
 				},
 				Typer:           kapi.Scheme,
@@ -524,8 +567,9 @@ func TestNewAppRunAll(t *testing.T) {
 						Namespaces:                []string{"openshift", "default"},
 					},
 					Detector: app.SourceRepositoryEnumerator{
-						Detectors: source.DefaultDetectors,
-						Tester:    dockerfile.NewTester(),
+						Detectors:         source.DefaultDetectors,
+						DockerfileTester:  dockerfile.NewTester(),
+						JenkinsfileTester: jenkinsfile.NewTester(),
 					},
 				},
 
@@ -574,8 +618,9 @@ func TestNewAppRunAll(t *testing.T) {
 						Namespaces:                []string{"openshift", "default"},
 					},
 					Detector: app.SourceRepositoryEnumerator{
-						Detectors: source.DefaultDetectors,
-						Tester:    dockerfile.NewTester(),
+						Detectors:         source.DefaultDetectors,
+						DockerfileTester:  dockerfile.NewTester(),
+						JenkinsfileTester: jenkinsfile.NewTester(),
 					},
 				},
 				Typer:           kapi.Scheme,
@@ -618,8 +663,9 @@ func TestNewAppRunAll(t *testing.T) {
 						Namespaces:                []string{"openshift", "default"},
 					},
 					Detector: app.SourceRepositoryEnumerator{
-						Detectors: source.DefaultDetectors,
-						Tester:    dockerfile.NewTester(),
+						Detectors:         source.DefaultDetectors,
+						DockerfileTester:  dockerfile.NewTester(),
+						JenkinsfileTester: jenkinsfile.NewTester(),
 					},
 				},
 				Typer:           kapi.Scheme,
@@ -695,11 +741,7 @@ func TestNewAppRunAll(t *testing.T) {
 						RegistrySearcher: &ExactMatchDockerSearcher{Errs: []error{errors.NewInternalError(fmt.Errorf("test error"))}},
 					},
 					ImageStreamSearcher: app.ImageStreamSearcher{
-						Client: client.NewSimpleFake(&unversioned.Status{
-							Status: unversioned.StatusFailure,
-							Code:   http.StatusInternalServerError,
-							Reason: unversioned.StatusReasonInternalError,
-						}),
+						Client:            failClient,
 						ImageStreamImages: &client.Fake{},
 						Namespaces:        []string{"default"},
 					},
@@ -874,6 +916,20 @@ func TestNewAppRunBuilds(t *testing.T) {
 		checkOutput func(stdout, stderr io.Reader) error
 	}{
 		{
+			name: "successful build from dockerfile",
+			config: &cmd.AppConfig{
+				GenerationInputs: cmd.GenerationInputs{
+					Dockerfile: "FROM openshift/origin:v1.0.6\nUSER foo",
+				},
+			},
+			expected: map[string][]string{
+				"buildConfig": {"origin"},
+				// There's a single image stream, but different tags: input from
+				// openshift/origin:v1.0.6, output to openshift/origin:latest.
+				"imageStream": {"origin"},
+			},
+		},
+		{
 			name: "successful ruby app generation",
 			config: &cmd.AppConfig{
 				ComponentInputs: cmd.ComponentInputs{
@@ -889,20 +945,6 @@ func TestNewAppRunBuilds(t *testing.T) {
 				//   That's bad, so the code should either error in this case or be a bit smarter.
 				"buildConfig": {"ruby-hello-world", "ruby-hello-world-1"},
 				"imageStream": {"nodejs-010-centos7", "ruby-22-centos7"},
-			},
-		},
-		{
-			name: "successful build from dockerfile",
-			config: &cmd.AppConfig{
-				GenerationInputs: cmd.GenerationInputs{
-					Dockerfile: "FROM openshift/origin:v1.0.6\nUSER foo",
-				},
-			},
-			expected: map[string][]string{
-				"buildConfig": {"origin"},
-				// There's a single image stream, but different tags: input from
-				// openshift/origin:v1.0.6, output to openshift/origin:latest.
-				"imageStream": {"origin"},
 			},
 		},
 		{
@@ -1035,7 +1077,7 @@ func TestNewAppRunBuilds(t *testing.T) {
 			config: &cmd.AppConfig{
 				GenerationInputs: cmd.GenerationInputs{
 					Dockerfile: "FROM openshift/origin-base\nUSER foo",
-					Strategy:   "source",
+					Strategy:   generate.StrategySource,
 				},
 			},
 			expectedErr: func(err error) bool {
@@ -1047,7 +1089,7 @@ func TestNewAppRunBuilds(t *testing.T) {
 			config: &cmd.AppConfig{
 				GenerationInputs: cmd.GenerationInputs{
 					Dockerfile: "USER foo",
-					Strategy:   "docker",
+					Strategy:   generate.StrategyDocker,
 				},
 			},
 			expectedErr: func(err error) bool {
@@ -1188,6 +1230,135 @@ func TestNewAppRunBuilds(t *testing.T) {
 				return nil
 			},
 		},
+		{
+			name: "successful build from source with autodetected jenkinsfile",
+			config: &cmd.AppConfig{
+				ComponentInputs: cmd.ComponentInputs{
+					SourceRepositories: []string{
+						"https://github.com/openshift/nodejs-ex",
+					},
+				},
+				GenerationInputs: cmd.GenerationInputs{
+					ContextDir: "openshift/pipeline",
+				},
+			},
+			expected: map[string][]string{
+				"buildConfig": {"nodejs-ex"},
+			},
+			checkResult: func(res *cmd.AppResult) error {
+				if len(res.List.Items) != 1 {
+					return fmt.Errorf("expected one Item returned")
+				}
+				bc, ok := res.List.Items[0].(*buildapi.BuildConfig)
+				if !ok {
+					return fmt.Errorf("expected Item of type *buildapi.BuildConfig")
+				}
+				if !reflect.DeepEqual(bc.Spec.Output, buildapi.BuildOutput{}) {
+					return fmt.Errorf("invalid bc.Spec.Output, got %#v", bc.Spec.Output)
+				}
+				if !reflect.DeepEqual(bc.Spec.Source, buildapi.BuildSource{
+					ContextDir: "openshift/pipeline",
+					Git:        &buildapi.GitBuildSource{URI: "https://github.com/openshift/nodejs-ex"},
+					Secrets:    []buildapi.SecretBuildSource{},
+				}) {
+					return fmt.Errorf("invalid bc.Spec.Source, got %#v", bc.Spec.Source)
+				}
+				if !reflect.DeepEqual(bc.Spec.Strategy, buildapi.BuildStrategy{JenkinsPipelineStrategy: &buildapi.JenkinsPipelineBuildStrategy{}}) {
+					return fmt.Errorf("invalid bc.Spec.Strategy, got %#v", bc.Spec.Strategy)
+				}
+				return nil
+			},
+		},
+		{
+			name: "successful build from component with source with pipeline strategy",
+			config: &cmd.AppConfig{
+				ComponentInputs: cmd.ComponentInputs{
+					Components: []string{
+						"centos/nodejs-4-centos7~https://github.com/openshift/nodejs-ex",
+					},
+				},
+				GenerationInputs: cmd.GenerationInputs{
+					ContextDir: "openshift/pipeline",
+					Strategy:   generate.StrategyPipeline,
+				},
+			},
+			expected: map[string][]string{
+				"buildConfig": {"nodejs-ex"},
+			},
+			checkResult: func(res *cmd.AppResult) error {
+				if len(res.List.Items) != 1 {
+					return fmt.Errorf("expected one Item returned")
+				}
+				bc, ok := res.List.Items[0].(*buildapi.BuildConfig)
+				if !ok {
+					return fmt.Errorf("expected Item of type *buildapi.BuildConfig")
+				}
+				if !reflect.DeepEqual(bc.Spec.Output, buildapi.BuildOutput{}) {
+					return fmt.Errorf("invalid bc.Spec.Output, got %#v", bc.Spec.Output)
+				}
+				if !reflect.DeepEqual(bc.Spec.Source, buildapi.BuildSource{
+					ContextDir: "openshift/pipeline",
+					Git:        &buildapi.GitBuildSource{URI: "https://github.com/openshift/nodejs-ex"},
+					Secrets:    []buildapi.SecretBuildSource{},
+				}) {
+					return fmt.Errorf("invalid bc.Spec.Source, got %#v", bc.Spec.Source.Git)
+				}
+				if !reflect.DeepEqual(bc.Spec.Strategy, buildapi.BuildStrategy{JenkinsPipelineStrategy: &buildapi.JenkinsPipelineBuildStrategy{}}) {
+					return fmt.Errorf("invalid bc.Spec.Strategy, got %#v", bc.Spec.Strategy)
+				}
+				return nil
+			},
+		},
+		{
+			name: "successful build from source with jenkinsfile with pipeline strategy",
+			config: &cmd.AppConfig{
+				ComponentInputs: cmd.ComponentInputs{
+					SourceRepositories: []string{
+						"https://github.com/openshift/nodejs-ex",
+					},
+				},
+				GenerationInputs: cmd.GenerationInputs{
+					ContextDir: "openshift/pipeline",
+					Strategy:   generate.StrategyPipeline,
+				},
+			},
+			expected: map[string][]string{
+				"buildConfig": {"nodejs-ex"},
+			},
+		},
+		{
+			name: "failed build from source with jenkinsfile with docker strategy",
+			config: &cmd.AppConfig{
+				ComponentInputs: cmd.ComponentInputs{
+					SourceRepositories: []string{
+						"https://github.com/openshift/nodejs-ex",
+					},
+				},
+				GenerationInputs: cmd.GenerationInputs{
+					ContextDir: "openshift/pipeline",
+					Strategy:   generate.StrategyDocker,
+				},
+			},
+			expectedErr: func(err error) bool {
+				return strings.HasPrefix(err.Error(), "No Dockerfile was found in the repository")
+			},
+		},
+		{
+			name: "failed build from source without jenkinsfile with pipeline strategy",
+			config: &cmd.AppConfig{
+				ComponentInputs: cmd.ComponentInputs{
+					SourceRepositories: []string{
+						"https://github.com/openshift/nodejs-ex",
+					},
+				},
+				GenerationInputs: cmd.GenerationInputs{
+					Strategy: generate.StrategyPipeline,
+				},
+			},
+			expectedErr: func(err error) bool {
+				return strings.HasPrefix(err.Error(), "No Jenkinsfile was found in the repository")
+			},
+		},
 	}
 	for _, test := range tests {
 		stdout, stderr := PrepareAppConfig(test.config)
@@ -1244,7 +1415,7 @@ func TestNewAppRunBuilds(t *testing.T) {
 	}
 }
 
-func TestBuildOutputCycleDetection(t *testing.T) {
+func TestNewAppBuildOutputCycleDetection(t *testing.T) {
 	skipExternalGit(t)
 	tests := []struct {
 		name   string
@@ -1255,7 +1426,32 @@ func TestBuildOutputCycleDetection(t *testing.T) {
 		checkOutput func(stdout, stderr io.Reader) error
 	}{
 		{
-			name: "successful build from dockerfile with identical input and output image references with warning",
+			name: "successful build with warning that output docker-image may trigger input ImageStream change; legacy ImageStream without tags",
+			config: &cmd.AppConfig{
+				GenerationInputs: cmd.GenerationInputs{
+					OutputDocker: true,
+					To:           "centos/ruby-22-centos7",
+					Dockerfile:   "FROM centos/ruby-22-centos7:latest",
+				},
+			},
+			expected: map[string][]string{
+				"buildConfig": {"ruby-22-centos7"},
+				"imageStream": {"ruby-22-centos7"},
+			},
+			checkOutput: func(stdout, stderr io.Reader) error {
+				got, err := ioutil.ReadAll(stderr)
+				if err != nil {
+					return err
+				}
+				want := "--> WARNING: output image of \"centos/ruby-22-centos7:latest\" should be different than input\n"
+				if string(got) != want {
+					return fmt.Errorf("stderr: got %q; want %q", got, want)
+				}
+				return nil
+			},
+		},
+		{
+			name: "successful build from dockerfile with identical input and output image references with warning(1)",
 			config: &cmd.AppConfig{
 				GenerationInputs: cmd.GenerationInputs{
 					Dockerfile: "FROM centos\nRUN yum install -y httpd",
@@ -1271,7 +1467,7 @@ func TestBuildOutputCycleDetection(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				want := "--> WARNING: output image of \"default/centos:latest\" must be different than input\n"
+				want := "--> WARNING: output image of \"centos:latest\" should be different than input\n"
 				if string(got) != want {
 					return fmt.Errorf("stderr: got %q; want %q", got, want)
 				}
@@ -1279,7 +1475,7 @@ func TestBuildOutputCycleDetection(t *testing.T) {
 			},
 		},
 		{
-			name: "successful build from dockerfile with identical input and output image references with warning",
+			name: "successful build from dockerfile with identical input and output image references with warning(2)",
 			config: &cmd.AppConfig{
 				GenerationInputs: cmd.GenerationInputs{
 					Dockerfile: "FROM openshift/ruby-22-centos7\nRUN yum install -y httpd",
@@ -1295,7 +1491,7 @@ func TestBuildOutputCycleDetection(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				want := "--> WARNING: output image of \"default/ruby-22-centos7:latest\" must be different than input\n"
+				want := "--> WARNING: output image of \"openshift/ruby-22-centos7:latest\" should be different than input\n"
 				if string(got) != want {
 					return fmt.Errorf("stderr: got %q; want %q", got, want)
 				}
@@ -1303,7 +1499,7 @@ func TestBuildOutputCycleDetection(t *testing.T) {
 			},
 		},
 		{
-			name: "unsuccessful build from dockerfile due to identical input and output image references",
+			name: "unsuccessful build from dockerfile due to identical input and output image references(1)",
 			config: &cmd.AppConfig{
 				GenerationInputs: cmd.GenerationInputs{
 					Dockerfile: "FROM centos\nRUN yum install -y httpd",
@@ -1311,13 +1507,13 @@ func TestBuildOutputCycleDetection(t *testing.T) {
 			},
 			expectedErr: func(err error) bool {
 				e := app.CircularOutputReferenceError{
-					Reference: "default/centos:latest",
+					Reference: "centos:latest",
 				}
 				return err.Error() == fmt.Errorf("%v, set a different tag with --to", e).Error()
 			},
 		},
 		{
-			name: "unsuccessful build from dockerfile due to identical input and output image references",
+			name: "unsuccessful build from dockerfile due to identical input and output image references(2)",
 			config: &cmd.AppConfig{
 				GenerationInputs: cmd.GenerationInputs{
 					Dockerfile: "FROM openshift/ruby-22-centos7\nRUN yum install -y httpd",
@@ -1325,9 +1521,73 @@ func TestBuildOutputCycleDetection(t *testing.T) {
 			},
 			expectedErr: func(err error) bool {
 				e := app.CircularOutputReferenceError{
-					Reference: "default/ruby-22-centos7:latest",
+					Reference: "openshift/ruby-22-centos7:latest",
 				}
 				return err.Error() == fmt.Errorf("%v, set a different tag with --to", e).Error()
+			},
+		},
+		{
+			name: "successful build with warning that output docker-image may trigger input ImageStream change",
+			config: &cmd.AppConfig{
+				GenerationInputs: cmd.GenerationInputs{
+					OutputDocker: true,
+					To:           "centos/ruby-22-centos7",
+					Dockerfile:   "FROM centos/ruby-22-centos7",
+				},
+				Resolvers: cmd.Resolvers{
+					DockerSearcher: app.DockerClientSearcher{
+						Client:           &apptest.FakeDockerClient{},
+						Insecure:         true,
+						RegistrySearcher: &ExactMatchDirectTagDockerSearcher{},
+					},
+				},
+			},
+			expected: map[string][]string{
+				"buildConfig": {"ruby-22-centos7"},
+				"imageStream": {"ruby-22-centos7"},
+			},
+			checkOutput: func(stdout, stderr io.Reader) error {
+				got, err := ioutil.ReadAll(stderr)
+				if err != nil {
+					return err
+				}
+				want := "--> WARNING: output image of \"centos/ruby-22-centos7:latest\" should be different than input\n"
+				if string(got) != want {
+					return fmt.Errorf("stderr: got %q; want %q", got, want)
+				}
+				return nil
+			},
+		},
+		{
+			name: "successful build with warning that output docker-image may trigger input ImageStream change; latest variation",
+			config: &cmd.AppConfig{
+				GenerationInputs: cmd.GenerationInputs{
+					OutputDocker: true,
+					To:           "centos/ruby-22-centos7",
+					Dockerfile:   "FROM centos/ruby-22-centos7:latest",
+				},
+				Resolvers: cmd.Resolvers{
+					DockerSearcher: app.DockerClientSearcher{
+						Client:           &apptest.FakeDockerClient{},
+						Insecure:         true,
+						RegistrySearcher: &ExactMatchDirectTagDockerSearcher{},
+					},
+				},
+			},
+			expected: map[string][]string{
+				"buildConfig": {"ruby-22-centos7"},
+				"imageStream": {"ruby-22-centos7"},
+			},
+			checkOutput: func(stdout, stderr io.Reader) error {
+				got, err := ioutil.ReadAll(stderr)
+				if err != nil {
+					return err
+				}
+				want := "--> WARNING: output image of \"centos/ruby-22-centos7:latest\" should be different than input\n"
+				if string(got) != want {
+					return fmt.Errorf("stderr: got %q; want %q", got, want)
+				}
+				return nil
 			},
 		},
 	}
@@ -1344,7 +1604,7 @@ func TestBuildOutputCycleDetection(t *testing.T) {
 		}
 		if test.checkOutput != nil {
 			if err := test.checkOutput(stdout, stderr); err != nil {
-				t.Error(err)
+				t.Errorf("Error during test %q: %v", test.name, err)
 				continue
 			}
 		}
@@ -1378,6 +1638,7 @@ func TestBuildOutputCycleDetection(t *testing.T) {
 			}
 		}
 	}
+
 }
 
 func TestNewAppNewBuildEnvVars(t *testing.T) {
@@ -1400,16 +1661,16 @@ func TestNewAppNewBuildEnvVars(t *testing.T) {
 					DockerImages:       []string{"centos/ruby-22-centos7", "openshift/nodejs-010-centos7"},
 				},
 				GenerationInputs: cmd.GenerationInputs{
-					AddEnvironmentToBuild: true,
-					OutputDocker:          true,
-					Environment:           []string{"BUILD_ENV_1=env_value_1", "BUILD_ENV_2=env_value_2"},
+					OutputDocker:     true,
+					BuildEnvironment: []string{"BUILD_ENV_1=env_value_1", "BUILD_ENV_2=env_value_2"},
 				},
 
 				Resolvers: cmd.Resolvers{
 					DockerSearcher: dockerSearcher,
 					Detector: app.SourceRepositoryEnumerator{
-						Detectors: source.DefaultDetectors,
-						Tester:    dockerfile.NewTester(),
+						Detectors:         source.DefaultDetectors,
+						DockerfileTester:  dockerfile.NewTester(),
+						JenkinsfileTester: jenkinsfile.NewTester(),
 					},
 				},
 				Typer:           kapi.Scheme,
@@ -1477,8 +1738,9 @@ func TestNewAppBuildConfigEnvVarsAndSecrets(t *testing.T) {
 				Resolvers: cmd.Resolvers{
 					DockerSearcher: dockerSearcher,
 					Detector: app.SourceRepositoryEnumerator{
-						Detectors: source.DefaultDetectors,
-						Tester:    dockerfile.NewTester(),
+						Detectors:         source.DefaultDetectors,
+						DockerfileTester:  dockerfile.NewTester(),
+						JenkinsfileTester: jenkinsfile.NewTester(),
 					},
 				},
 				Typer:           kapi.Scheme,
@@ -1531,15 +1793,268 @@ func TestNewAppBuildConfigEnvVarsAndSecrets(t *testing.T) {
 	}
 }
 
+func TestNewAppSourceAuthRequired(t *testing.T) {
+
+	tests := []struct {
+		name               string
+		passwordProtected  bool
+		useProxy           bool
+		expectAuthRequired bool
+	}{
+		{
+			name:               "no auth",
+			passwordProtected:  false,
+			useProxy:           false,
+			expectAuthRequired: false,
+		},
+		{
+			name:               "basic auth",
+			passwordProtected:  true,
+			useProxy:           false,
+			expectAuthRequired: true,
+		},
+		{
+			name:               "proxy required",
+			passwordProtected:  false,
+			useProxy:           true,
+			expectAuthRequired: true,
+		},
+		{
+			name:               "basic auth and proxy required",
+			passwordProtected:  true,
+			useProxy:           true,
+			expectAuthRequired: true,
+		},
+	}
+
+	for _, test := range tests {
+		url, tempRepoDir := setupLocalGitRepo(t, test.passwordProtected, test.useProxy)
+
+		sourceRepo, err := app.NewSourceRepository(url, generate.StrategySource)
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+
+		detector := app.SourceRepositoryEnumerator{
+			Detectors:         source.DefaultDetectors,
+			DockerfileTester:  dockerfile.NewTester(),
+			JenkinsfileTester: jenkinsfile.NewTester(),
+		}
+
+		if err = sourceRepo.Detect(detector, true); err != nil {
+			t.Fatalf("%v", err)
+		}
+
+		_, sourceRef, err := app.StrategyAndSourceForRepository(sourceRepo, nil)
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+
+		if test.expectAuthRequired != sourceRef.RequiresAuth {
+			t.Errorf("%s: unexpected auth required result. Expected: %v. Actual: %v", test.name, test.expectAuthRequired, sourceRef.RequiresAuth)
+		}
+		os.RemoveAll(tempRepoDir)
+	}
+}
+
+func TestNewAppListAndSearch(t *testing.T) {
+	tests := []struct {
+		name           string
+		options        clicmd.NewAppOptions
+		expectedOutput string
+	}{
+		{
+			name: "search, no oldversion",
+			options: clicmd.NewAppOptions{
+				ObjectGeneratorOptions: &clicmd.ObjectGeneratorOptions{
+					Config: &cmd.AppConfig{
+						ComponentInputs: cmd.ComponentInputs{
+							ImageStreams: []string{"ruby"},
+						},
+						AsSearch: true,
+					}},
+			},
+			expectedOutput: "Image streams (oc new-app --image-stream=<image-stream> [--code=<source>])\n-----\nruby\n  Project: default\n  Tags:    latest\n\n",
+		},
+		{
+			name: "list, no oldversion",
+			options: clicmd.NewAppOptions{
+				ObjectGeneratorOptions: &clicmd.ObjectGeneratorOptions{
+					Config: &cmd.AppConfig{
+						AsList: true,
+					}},
+			},
+			expectedOutput: "Image streams (oc new-app --image-stream=<image-stream> [--code=<source>])\n-----\nruby\n  Project: default\n  Tags:    latest\n\n",
+		},
+	}
+	for _, test := range tests {
+		stdout, stderr := PrepareAppConfig(test.options.Config)
+		test.options.Action.Out, test.options.ErrOut = stdout, stderr
+		test.options.BaseName = "oc"
+		test.options.CommandName = "new-app"
+
+		err := test.options.RunNewApp()
+		if err != nil {
+			t.Errorf("expected err == nil, got err == %v", err)
+		}
+		if stderr.Len() > 0 {
+			t.Errorf("expected stderr == %q, got stderr == %q", "", stderr.Bytes())
+		}
+		if string(stdout.Bytes()) != test.expectedOutput {
+			t.Errorf("expected stdout == %q, got stdout == %q", test.expectedOutput, stdout.Bytes())
+		}
+	}
+}
+
+func setupLocalGitRepo(t *testing.T, passwordProtected bool, requireProxy bool) (string, string) {
+	// Create test directories
+	testDir, err := ioutil.TempDir(util.GetBaseDir(), "gitauth")
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	initialRepoDir := filepath.Join(testDir, "initial-repo")
+	if err = os.Mkdir(initialRepoDir, 0755); err != nil {
+		t.Fatalf("%v", err)
+	}
+	gitHomeDir := filepath.Join(testDir, "git-home")
+	if err = os.Mkdir(gitHomeDir, 0755); err != nil {
+		t.Fatalf("%v", err)
+	}
+	testRepoDir := filepath.Join(gitHomeDir, "test-repo")
+	if err = os.Mkdir(testRepoDir, 0755); err != nil {
+		t.Fatalf("%v", err)
+	}
+	userHomeDir := filepath.Join(testDir, "user-home")
+	if err = os.Mkdir(userHomeDir, 0755); err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	// Set initial repo contents
+	gitRepo := git.NewRepositoryWithEnv([]string{
+		"GIT_AUTHOR_NAME=developer",
+		"GIT_AUTHOR_EMAIL=developer@example.com",
+		"GIT_COMMITTER_NAME=developer",
+		"GIT_COMMITTER_EMAIL=developer@example.com",
+	})
+	if err = gitRepo.Init(initialRepoDir, false); err != nil {
+		t.Fatalf("%v", err)
+	}
+	if err = ioutil.WriteFile(filepath.Join(initialRepoDir, "Dockerfile"), []byte("FROM mysql\nLABEL mylabel=myvalue\n"), 0644); err != nil {
+		t.Fatalf("%v", err)
+	}
+	if err = gitRepo.Add(initialRepoDir, "."); err != nil {
+		t.Fatalf("%v", err)
+	}
+	if err = gitRepo.Commit(initialRepoDir, "initial commit"); err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	// Clone to repository inside gitHomeDir
+	if err = gitRepo.CloneBare(testRepoDir, initialRepoDir); err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	// Initialize test git server
+	var gitHandler http.Handler
+	gitHandler = githttp.New(gitHomeDir)
+
+	// If password protected, set handler to require password
+	user := "gituser"
+	password := "gitpass"
+	if passwordProtected {
+		authenticator := auth.Authenticator(func(info auth.AuthInfo) (bool, error) {
+			if info.Username != user && info.Password != password {
+				return false, nil
+			}
+			return true, nil
+		})
+		gitHandler = authenticator(gitHandler)
+	}
+	gitServer := httptest.NewServer(gitHandler)
+	gitURLString := fmt.Sprintf("%s/%s", gitServer.URL, "test-repo")
+
+	var proxyServer *httptest.Server
+
+	// If proxy required, create a simple proxy server that will forward any host to the git server
+	if requireProxy {
+		gitURL, err := url.Parse(gitURLString)
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+		proxy := goproxy.NewProxyHttpServer()
+		proxy.OnRequest().DoFunc(
+			func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+				r.URL.Host = gitURL.Host
+				return r, nil
+			})
+		gitURLString = "http://example.com/test-repo"
+		proxyServer = httptest.NewServer(proxy)
+	}
+
+	gitConfig := `
+[user]
+name = developer
+email = developer@org.org
+`
+	if passwordProtected {
+		authSection := `
+[url %q]
+insteadOf = %s
+		`
+		urlWithAuth, err := url.Parse(gitURLString)
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+		urlWithAuth.User = url.UserPassword(user, password)
+		authSection = fmt.Sprintf(authSection, urlWithAuth.String(), gitURLString)
+		gitConfig += authSection
+	}
+
+	if requireProxy {
+		proxySection := `
+[http]
+	proxy = %s
+`
+		proxySection = fmt.Sprintf(proxySection, proxyServer.URL)
+		gitConfig += proxySection
+	}
+
+	if err = ioutil.WriteFile(filepath.Join(userHomeDir, ".gitconfig"), []byte(gitConfig), 0644); err != nil {
+		t.Fatalf("%v", err)
+	}
+	os.Setenv("HOME", userHomeDir)
+	os.Setenv("GIT_ASKPASS", "true")
+
+	return gitURLString, testDir
+
+}
+
 func builderImageStream() *imageapi.ImageStream {
 	return &imageapi.ImageStream{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:            "ruby",
+			Namespace:       "default",
 			ResourceVersion: "1",
+		},
+		Spec: imageapi.ImageStreamSpec{
+			Tags: map[string]imageapi.TagReference{
+				"oldversion": {
+					Annotations: map[string]string{
+						"tags": "hidden",
+					},
+				},
+			},
 		},
 		Status: imageapi.ImageStreamStatus{
 			Tags: map[string]imageapi.TagEventList{
 				"latest": {
+					Items: []imageapi.TagEvent{
+						{
+							Image: "the-image-id",
+						},
+					},
+				},
+				"oldversion": {
 					Items: []imageapi.TagEvent{
 						{
 							Image: "the-image-id",
@@ -1593,13 +2108,13 @@ func dockerBuilderImage() *docker.Image {
 
 func fakeImageStreamSearcher() app.Searcher {
 	client := &client.Fake{}
-	client.AddReactor("get", "imagestreams", func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
+	client.AddReactor("get", "imagestreams", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
 		return true, builderImageStream(), nil
 	})
-	client.AddReactor("list", "imagestreams", func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
+	client.AddReactor("list", "imagestreams", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
 		return true, builderImageStreams(), nil
 	})
-	client.AddReactor("get", "imagestreamimages", func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
+	client.AddReactor("get", "imagestreamimages", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
 		return true, builderImage(), nil
 	})
 
@@ -1612,7 +2127,7 @@ func fakeImageStreamSearcher() app.Searcher {
 
 func fakeTemplateSearcher() app.Searcher {
 	client := &client.Fake{}
-	client.AddReactor("list", "templates", func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
+	client.AddReactor("list", "templates", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
 		return true, templateList(), nil
 	})
 
@@ -1627,7 +2142,7 @@ func templateList() *templateapi.TemplateList {
 		Items: []templateapi.Template{
 			{
 				Objects: []runtime.Object{},
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name:      "first-stored-template",
 					Namespace: "default",
 				},
@@ -1662,15 +2177,6 @@ func fakeSimpleDockerSearcher() app.Searcher {
 	}
 }
 
-func createLocalGitDirectory(t *testing.T) string {
-	dir, err := ioutil.TempDir(os.TempDir(), "s2i-test")
-	if err != nil {
-		t.Error(err)
-	}
-	os.Mkdir(filepath.Join(dir, ".git"), 0600)
-	return dir
-}
-
 // MockSourceRepositories is a set of mocked source repositories used for
 // testing
 func MockSourceRepositories(t *testing.T, file string) []*app.SourceRepository {
@@ -1679,7 +2185,7 @@ func MockSourceRepositories(t *testing.T, file string) []*app.SourceRepository {
 		"https://github.com/openshift/ruby-hello-world.git",
 		file,
 	} {
-		s, err := app.NewSourceRepository(location)
+		s, err := app.NewSourceRepository(location, generate.StrategySource)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1696,11 +2202,14 @@ func PrepareAppConfig(config *cmd.AppConfig) (stdout, stderr *bytes.Buffer) {
 	config.Out, config.ErrOut = stdout, stderr
 
 	config.Detector = app.SourceRepositoryEnumerator{
-		Detectors: source.DefaultDetectors,
-		Tester:    dockerfile.NewTester(),
+		Detectors:         source.DefaultDetectors,
+		DockerfileTester:  dockerfile.NewTester(),
+		JenkinsfileTester: jenkinsfile.NewTester(),
 	}
-	config.DockerSearcher = app.DockerRegistrySearcher{
-		Client: dockerregistry.NewClient(10*time.Second, true),
+	if config.DockerSearcher == nil {
+		config.DockerSearcher = app.DockerRegistrySearcher{
+			Client: dockerregistry.NewClient(10*time.Second, true),
+		}
 	}
 	config.ImageStreamByAnnotationSearcher = fakeImageStreamSearcher()
 	config.ImageStreamSearcher = fakeImageStreamSearcher()

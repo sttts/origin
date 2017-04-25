@@ -7,12 +7,10 @@ import (
 	"strings"
 	"testing"
 	"text/tabwriter"
-	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
-	"k8s.io/kubernetes/pkg/kubectl"
+	kfake "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 
 	api "github.com/openshift/origin/pkg/api"
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
@@ -23,8 +21,8 @@ import (
 	imageapi "github.com/openshift/origin/pkg/image/api"
 	oauthapi "github.com/openshift/origin/pkg/oauth/api"
 	projectapi "github.com/openshift/origin/pkg/project/api"
-	sdnapi "github.com/openshift/origin/pkg/sdn/api"
 	securityapi "github.com/openshift/origin/pkg/security/api"
+	templateapi "github.com/openshift/origin/pkg/template/api"
 
 	// install all APIs
 	_ "github.com/openshift/origin/pkg/api/install"
@@ -32,6 +30,7 @@ import (
 	_ "k8s.io/kubernetes/pkg/apis/autoscaling/install"
 	_ "k8s.io/kubernetes/pkg/apis/batch/install"
 	_ "k8s.io/kubernetes/pkg/apis/extensions/install"
+	kprinters "k8s.io/kubernetes/pkg/printers"
 )
 
 type describeClient struct {
@@ -52,13 +51,18 @@ var DescriberCoverageExceptions = []reflect.Type{
 	reflect.TypeOf(&deployapi.DeploymentConfigRollback{}),             // normal users don't ever look at these
 	reflect.TypeOf(&deployapi.DeploymentLog{}),                        // normal users don't ever look at these
 	reflect.TypeOf(&deployapi.DeploymentLogOptions{}),                 // normal users don't ever look at these
+	reflect.TypeOf(&deployapi.DeploymentRequest{}),                    // normal users don't ever look at these
 	reflect.TypeOf(&imageapi.DockerImage{}),                           // not a top level resource
 	reflect.TypeOf(&imageapi.ImageStreamImport{}),                     // normal users don't ever look at these
 	reflect.TypeOf(&oauthapi.OAuthAccessToken{}),                      // normal users don't ever look at these
 	reflect.TypeOf(&oauthapi.OAuthAuthorizeToken{}),                   // normal users don't ever look at these
 	reflect.TypeOf(&oauthapi.OAuthClientAuthorization{}),              // normal users don't ever look at these
 	reflect.TypeOf(&projectapi.ProjectRequest{}),                      // normal users don't ever look at these
+	reflect.TypeOf(&templateapi.TemplateInstance{}),                   // normal users don't ever look at these
+	reflect.TypeOf(&templateapi.BrokerTemplateInstance{}),             // normal users don't ever look at these
 	reflect.TypeOf(&authorizationapi.IsPersonalSubjectAccessReview{}), // not a top level resource
+	// ATM image signature doesn't provide any human readable information
+	reflect.TypeOf(&imageapi.ImageSignature{}),
 
 	// these resources can't be "GET"ed, so you can't make a describer for them
 	reflect.TypeOf(&authorizationapi.SubjectAccessReviewResponse{}),
@@ -68,9 +72,11 @@ var DescriberCoverageExceptions = []reflect.Type{
 	reflect.TypeOf(&authorizationapi.LocalSubjectAccessReview{}),
 	reflect.TypeOf(&authorizationapi.LocalResourceAccessReview{}),
 	reflect.TypeOf(&authorizationapi.SelfSubjectRulesReview{}),
+	reflect.TypeOf(&authorizationapi.SubjectRulesReview{}),
 	reflect.TypeOf(&securityapi.PodSecurityPolicySubjectReview{}),
 	reflect.TypeOf(&securityapi.PodSecurityPolicySelfSubjectReview{}),
 	reflect.TypeOf(&securityapi.PodSecurityPolicyReview{}),
+	reflect.TypeOf(&oauthapi.OAuthRedirectReference{}),
 }
 
 // MissingDescriberCoverageExceptions is the list of types that were missing describer methods when I started
@@ -79,9 +85,6 @@ var DescriberCoverageExceptions = []reflect.Type{
 var MissingDescriberCoverageExceptions = []reflect.Type{
 	reflect.TypeOf(&imageapi.ImageStreamMapping{}),
 	reflect.TypeOf(&oauthapi.OAuthClient{}),
-	reflect.TypeOf(&sdnapi.ClusterNetwork{}),
-	reflect.TypeOf(&sdnapi.HostSubnet{}),
-	reflect.TypeOf(&sdnapi.NetNamespace{}),
 }
 
 func TestDescriberCoverage(t *testing.T) {
@@ -109,36 +112,40 @@ main:
 			}
 		}
 
-		_, ok := DescriberFor(api.SchemeGroupVersion.WithKind(apiType.Name()).GroupKind(), c, &ktestclient.Fake{}, "")
+		gk := api.SchemeGroupVersion.WithKind(apiType.Name()).GroupKind()
+		_, ok := DescriberFor(gk, c, kfake.NewSimpleClientset(), "")
 		if !ok {
-			t.Errorf("missing printer for %v.  Check pkg/cmd/cli/describe/describer.go", apiType)
+			t.Errorf("missing describer for %v.  Check pkg/cmd/cli/describe/describer.go", apiType)
 		}
 	}
 }
 
 func TestDescribers(t *testing.T) {
 	fake := &testclient.Fake{}
-	fakeKube := &ktestclient.Fake{}
+	fakeKube := kfake.NewSimpleClientset()
 	c := &describeClient{T: t, Namespace: "foo", Fake: fake}
 
-	testDescriberList := []kubectl.Describer{
-		&BuildDescriber{c, fakeKube},
-		&BuildConfigDescriber{c, ""},
-		&ImageDescriber{c},
-		&ImageStreamDescriber{c},
-		&ImageStreamTagDescriber{c},
-		&ImageStreamImageDescriber{c},
-		&RouteDescriber{c, fakeKube},
-		&ProjectDescriber{c, fakeKube},
-		&PolicyDescriber{c},
-		&PolicyBindingDescriber{c},
-		&TemplateDescriber{c, nil, nil, nil},
+	testCases := []struct {
+		d    kprinters.Describer
+		name string
+	}{
+		{&BuildDescriber{c, fakeKube}, "bar"},
+		{&BuildConfigDescriber{c, fakeKube, ""}, "bar"},
+		{&ImageDescriber{c}, "bar"},
+		{&ImageStreamDescriber{c}, "bar"},
+		{&ImageStreamTagDescriber{c}, "bar:latest"},
+		{&ImageStreamImageDescriber{c}, "bar@sha256:other"},
+		{&RouteDescriber{c, fakeKube}, "bar"},
+		{&ProjectDescriber{c, fakeKube}, "bar"},
+		{&PolicyDescriber{c}, "bar"},
+		{&PolicyBindingDescriber{c}, "bar"},
+		{&TemplateDescriber{c, nil, nil, nil}, "bar"},
 	}
 
-	for _, d := range testDescriberList {
-		out, err := d.Describe("foo", "bar", kubectl.DescriberSettings{})
+	for _, test := range testCases {
+		out, err := test.d.Describe("foo", test.name, kprinters.DescriberSettings{})
 		if err != nil {
-			t.Errorf("unexpected error for %v: %v", d, err)
+			t.Errorf("unexpected error for %v: %v", test.d, err)
 		}
 		if !strings.Contains(out, "Name:") || !strings.Contains(out, "Labels:") {
 			t.Errorf("unexpected out: %s", out)
@@ -152,123 +159,111 @@ func TestDescribeBuildDuration(t *testing.T) {
 		output string
 	}
 
-	creation := unversioned.Date(2015, time.April, 9, 6, 0, 0, 0, time.Local)
 	// now a minute ago
-	minuteAgo := unversioned.Unix(unversioned.Now().Rfc3339Copy().Time.Unix()-60, 0)
-	start := unversioned.Date(2015, time.April, 9, 6, 1, 0, 0, time.Local)
-	completion := unversioned.Date(2015, time.April, 9, 6, 2, 0, 0, time.Local)
-	duration := completion.Rfc3339Copy().Time.Sub(start.Rfc3339Copy().Time)
-	zeroDuration := time.Duration(0)
+	now := metav1.Now()
+	minuteAgo := metav1.Unix(now.Rfc3339Copy().Time.Unix()-60, 0)
+	twoMinutesAgo := metav1.Unix(now.Rfc3339Copy().Time.Unix()-120, 0)
+	threeMinutesAgo := metav1.Unix(now.Rfc3339Copy().Time.Unix()-180, 0)
 
 	tests := []testBuild{
 		{ // 0 - build new
 			&buildapi.Build{
-				ObjectMeta: kapi.ObjectMeta{CreationTimestamp: minuteAgo},
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: minuteAgo},
 				Status: buildapi.BuildStatus{
-					Phase:    buildapi.BuildPhaseNew,
-					Duration: zeroDuration,
+					Phase: buildapi.BuildPhaseNew,
 				},
 			},
 			"waiting for 1m",
 		},
 		{ // 1 - build pending
 			&buildapi.Build{
-				ObjectMeta: kapi.ObjectMeta{CreationTimestamp: minuteAgo},
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: minuteAgo},
 				Status: buildapi.BuildStatus{
-					Phase:    buildapi.BuildPhasePending,
-					Duration: zeroDuration,
+					Phase: buildapi.BuildPhasePending,
 				},
 			},
 			"waiting for 1m",
 		},
 		{ // 2 - build running
 			&buildapi.Build{
-				ObjectMeta: kapi.ObjectMeta{CreationTimestamp: creation},
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: twoMinutesAgo},
 				Status: buildapi.BuildStatus{
-					StartTimestamp: &start,
+					StartTimestamp: &minuteAgo,
 					Phase:          buildapi.BuildPhaseRunning,
-					Duration:       duration,
 				},
 			},
 			"running for 1m",
 		},
 		{ // 3 - build completed
 			&buildapi.Build{
-				ObjectMeta: kapi.ObjectMeta{CreationTimestamp: creation},
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: threeMinutesAgo},
 				Status: buildapi.BuildStatus{
-					StartTimestamp:      &start,
-					CompletionTimestamp: &completion,
+					StartTimestamp:      &twoMinutesAgo,
+					CompletionTimestamp: &minuteAgo,
 					Phase:               buildapi.BuildPhaseComplete,
-					Duration:            duration,
 				},
 			},
 			"1m",
 		},
 		{ // 4 - build failed
 			&buildapi.Build{
-				ObjectMeta: kapi.ObjectMeta{CreationTimestamp: creation},
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: threeMinutesAgo},
 				Status: buildapi.BuildStatus{
-					StartTimestamp:      &start,
-					CompletionTimestamp: &completion,
+					StartTimestamp:      &twoMinutesAgo,
+					CompletionTimestamp: &minuteAgo,
 					Phase:               buildapi.BuildPhaseFailed,
-					Duration:            duration,
 				},
 			},
 			"1m",
 		},
 		{ // 5 - build error
 			&buildapi.Build{
-				ObjectMeta: kapi.ObjectMeta{CreationTimestamp: creation},
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: threeMinutesAgo},
 				Status: buildapi.BuildStatus{
-					StartTimestamp:      &start,
-					CompletionTimestamp: &completion,
+					StartTimestamp:      &twoMinutesAgo,
+					CompletionTimestamp: &minuteAgo,
 					Phase:               buildapi.BuildPhaseError,
-					Duration:            duration,
 				},
 			},
 			"1m",
 		},
 		{ // 6 - build cancelled before running, start time wasn't set yet
 			&buildapi.Build{
-				ObjectMeta: kapi.ObjectMeta{CreationTimestamp: creation},
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: threeMinutesAgo},
 				Status: buildapi.BuildStatus{
-					CompletionTimestamp: &completion,
+					CompletionTimestamp: &minuteAgo,
 					Phase:               buildapi.BuildPhaseCancelled,
-					Duration:            duration,
 				},
 			},
 			"waited for 2m",
 		},
 		{ // 7 - build cancelled while running, start time is set already
 			&buildapi.Build{
-				ObjectMeta: kapi.ObjectMeta{CreationTimestamp: creation},
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: threeMinutesAgo},
 				Status: buildapi.BuildStatus{
-					StartTimestamp:      &start,
-					CompletionTimestamp: &completion,
+					StartTimestamp:      &twoMinutesAgo,
+					CompletionTimestamp: &minuteAgo,
 					Phase:               buildapi.BuildPhaseCancelled,
-					Duration:            duration,
 				},
 			},
 			"1m",
 		},
 		{ // 8 - build failed before running, start time wasn't set yet
 			&buildapi.Build{
-				ObjectMeta: kapi.ObjectMeta{CreationTimestamp: creation},
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: threeMinutesAgo},
 				Status: buildapi.BuildStatus{
-					CompletionTimestamp: &completion,
+					CompletionTimestamp: &minuteAgo,
 					Phase:               buildapi.BuildPhaseFailed,
-					Duration:            duration,
 				},
 			},
 			"waited for 2m",
 		},
 		{ // 9 - build error before running, start time wasn't set yet
 			&buildapi.Build{
-				ObjectMeta: kapi.ObjectMeta{CreationTimestamp: creation},
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: threeMinutesAgo},
 				Status: buildapi.BuildStatus{
-					CompletionTimestamp: &completion,
+					CompletionTimestamp: &minuteAgo,
 					Phase:               buildapi.BuildPhaseError,
-					Duration:            duration,
 				},
 			},
 			"waited for 2m",
@@ -284,7 +279,7 @@ func TestDescribeBuildDuration(t *testing.T) {
 
 func mkPod(status kapi.PodPhase, exitCode int) *kapi.Pod {
 	return &kapi.Pod{
-		ObjectMeta: kapi.ObjectMeta{Name: "PodName"},
+		ObjectMeta: metav1.ObjectMeta{Name: "PodName"},
 		Status: kapi.PodStatus{
 			Phase: status,
 			ContainerStatuses: []kapi.ContainerStatus{

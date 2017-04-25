@@ -6,10 +6,12 @@ import (
 
 	"github.com/gonum/graph"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	kapi "k8s.io/kubernetes/pkg/api"
 	_ "k8s.io/kubernetes/pkg/api/install"
+	kapps "k8s.io/kubernetes/pkg/apis/apps"
 	"k8s.io/kubernetes/pkg/apis/autoscaling"
-	"k8s.io/kubernetes/pkg/runtime"
 
 	osgraph "github.com/openshift/origin/pkg/api/graph"
 	kubegraph "github.com/openshift/origin/pkg/api/kubegraph/nodes"
@@ -38,6 +40,14 @@ func TestNamespaceEdgeMatching(t *testing.T) {
 		rc.Spec.Selector = map[string]string{"a": "1"}
 		kubegraph.EnsureReplicationControllerNode(g, rc)
 
+		p := &kapps.StatefulSet{}
+		p.Namespace = namespace
+		p.Name = "the-statefulset"
+		p.Spec.Selector = &metav1.LabelSelector{
+			MatchLabels: map[string]string{"a": "1"},
+		}
+		kubegraph.EnsureStatefulSetNode(g, p)
+
 		svc := &kapi.Service{}
 		svc.Namespace = namespace
 		svc.Name = "the-svc"
@@ -49,7 +59,7 @@ func TestNamespaceEdgeMatching(t *testing.T) {
 	fn("other", g)
 	AddAllExposedPodEdges(g)
 	AddAllExposedPodTemplateSpecEdges(g)
-	AddAllManagedByRCPodEdges(g)
+	AddAllManagedByControllerPodEdges(g)
 
 	for _, edge := range g.Edges() {
 		nsTo, err := namespaceFor(edge.To())
@@ -70,7 +80,7 @@ func namespaceFor(node graph.Node) (string, error) {
 	obj := node.(objectifier).Object()
 	switch t := obj.(type) {
 	case runtime.Object:
-		meta, err := kapi.ObjectMetaFor(t)
+		meta, err := metav1.ObjectMetaFor(t)
 		if err != nil {
 			return "", err
 		}
@@ -79,6 +89,10 @@ func namespaceFor(node graph.Node) (string, error) {
 		return node.(*kubegraph.PodSpecNode).Namespace, nil
 	case *kapi.ReplicationControllerSpec:
 		return node.(*kubegraph.ReplicationControllerSpecNode).Namespace, nil
+	case *kapps.StatefulSetSpec:
+		return node.(*kubegraph.StatefulSetSpecNode).Namespace, nil
+	case *kapi.PodTemplateSpec:
+		return node.(*kubegraph.PodTemplateSpecNode).Namespace, nil
 	default:
 		return "", fmt.Errorf("unknown object: %#v", obj)
 	}
@@ -165,8 +179,9 @@ func TestHPADCEdges(t *testing.T) {
 	hpa.Name = "test-hpa"
 	hpa.Spec = autoscaling.HorizontalPodAutoscalerSpec{
 		ScaleTargetRef: autoscaling.CrossVersionObjectReference{
-			Name: "test-dc",
-			Kind: "DeploymentConfig",
+			Name:       "test-dc",
+			Kind:       "DeploymentConfig",
+			APIVersion: "apps.openshift.io/v1",
 		},
 	}
 

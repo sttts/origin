@@ -8,15 +8,17 @@ import (
 	"strings"
 	"testing"
 
+	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/diff"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/apiserver/pkg/authentication/user"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kapierrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/resource"
-	"k8s.io/kubernetes/pkg/auth/user"
 	kquota "k8s.io/kubernetes/pkg/quota"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/diff"
-	"k8s.io/kubernetes/pkg/util/sets"
-	"k8s.io/kubernetes/pkg/util/validation/field"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	"github.com/openshift/origin/pkg/authorization/registry/subjectaccessreview"
@@ -43,7 +45,9 @@ func (u *fakeUser) GetGroups() []string {
 }
 
 func (u *fakeUser) GetExtra() map[string][]string {
-	return map[string][]string{}
+	return map[string][]string{
+		authorizationapi.ScopesKey: {"a", "b"},
+	}
 }
 
 type fakeDefaultRegistry struct {
@@ -63,9 +67,9 @@ type fakeSubjectAccessReviewRegistry struct {
 
 var _ subjectaccessreview.Registry = &fakeSubjectAccessReviewRegistry{}
 
-func (f *fakeSubjectAccessReviewRegistry) CreateSubjectAccessReview(ctx kapi.Context, subjectAccessReview *authorizationapi.SubjectAccessReview) (*authorizationapi.SubjectAccessReviewResponse, error) {
+func (f *fakeSubjectAccessReviewRegistry) CreateSubjectAccessReview(ctx apirequest.Context, subjectAccessReview *authorizationapi.SubjectAccessReview) (*authorizationapi.SubjectAccessReviewResponse, error) {
 	f.request = subjectAccessReview
-	f.requestNamespace = kapi.NamespaceValue(ctx)
+	f.requestNamespace = apirequest.NamespaceValue(ctx)
 	return &authorizationapi.SubjectAccessReviewResponse{Allowed: f.allow}, f.err
 }
 
@@ -77,7 +81,7 @@ func TestDockerImageRepository(t *testing.T) {
 	}{
 		"DockerImageRepository set on stream": {
 			stream: &api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "somerepo",
 				},
 				Spec: api.ImageStreamSpec{
@@ -88,7 +92,7 @@ func TestDockerImageRepository(t *testing.T) {
 		},
 		"DockerImageRepository set on stream with default registry": {
 			stream: &api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "foo",
 					Name:      "somerepo",
 				},
@@ -101,7 +105,7 @@ func TestDockerImageRepository(t *testing.T) {
 		},
 		"default namespace": {
 			stream: &api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "somerepo",
 				},
 			},
@@ -110,7 +114,7 @@ func TestDockerImageRepository(t *testing.T) {
 		},
 		"nondefault namespace": {
 			stream: &api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name:      "somerepo",
 					Namespace: "somens",
 				},
@@ -120,7 +124,7 @@ func TestDockerImageRepository(t *testing.T) {
 		},
 		"missing default registry": {
 			stream: &api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name:      "somerepo",
 					Namespace: "somens",
 				},
@@ -131,7 +135,7 @@ func TestDockerImageRepository(t *testing.T) {
 	}
 
 	for testName, test := range tests {
-		strategy := NewStrategy(&fakeDefaultRegistry{test.defaultRegistry}, &fakeSubjectAccessReviewRegistry{}, &testutil.FakeImageStreamLimitVerifier{})
+		strategy := NewStrategy(&fakeDefaultRegistry{test.defaultRegistry}, &fakeSubjectAccessReviewRegistry{}, &testutil.FakeImageStreamLimitVerifier{}, nil)
 		value := strategy.dockerImageRepository(test.stream)
 		if e, a := test.expected, value; e != a {
 			t.Errorf("%s: expected %q, got %q", testName, e, a)
@@ -232,7 +236,7 @@ func TestTagVerifier(t *testing.T) {
 			expectSar: true,
 			sarError:  errors.New("foo"),
 			expected: field.ErrorList{
-				field.Forbidden(field.NewPath("spec", "tags").Key("latest").Child("from"), "otherns/otherstream"),
+				field.Forbidden(field.NewPath("spec", "tags").Key("latest").Child("from"), `otherns/otherstream: "" ""- foo`),
 			},
 		},
 		"sar denied": {
@@ -248,7 +252,7 @@ func TestTagVerifier(t *testing.T) {
 			expectSar:  true,
 			sarAllowed: false,
 			expected: field.ErrorList{
-				field.Forbidden(field.NewPath("spec", "tags").Key("latest").Child("from"), "otherns/otherstream"),
+				field.Forbidden(field.NewPath("spec", "tags").Key("latest").Child("from"), `otherns/otherstream: "" ""`),
 			},
 		},
 		"ref changed": {
@@ -288,7 +292,7 @@ func TestTagVerifier(t *testing.T) {
 		}
 
 		stream := &api.ImageStream{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Namespace: "namespace",
 				Name:      "stream",
 			},
@@ -309,13 +313,15 @@ func TestTagVerifier(t *testing.T) {
 				t.Errorf("%s: sar namespace: expected %v, got %v", name, e, a)
 			}
 			expectedSar := &authorizationapi.SubjectAccessReview{
-				Action: authorizationapi.AuthorizationAttributes{
+				Action: authorizationapi.Action{
+					//				Group:        "image.openshift.io",
 					Verb:         "get",
-					Resource:     "imagestreams",
+					Resource:     "imagestreams/layers",
 					ResourceName: "otherstream",
 				},
 				User:   "user",
 				Groups: sets.NewString("group1"),
+				Scopes: []string{"a", "b"},
 			}
 			if e, a := expectedSar, sar.request; !reflect.DeepEqual(e, a) {
 				t.Errorf("%s: unexpected SAR request: %s", name, diff.ObjectDiff(e, a))
@@ -368,7 +374,7 @@ func TestLimitVerifier(t *testing.T) {
 		{
 			name: "no limit",
 			is: api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "test",
 					Name:      "is",
 				},
@@ -390,7 +396,7 @@ func TestLimitVerifier(t *testing.T) {
 		{
 			name: "below limit",
 			is: api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "test",
 					Name:      "is",
 				},
@@ -413,7 +419,7 @@ func TestLimitVerifier(t *testing.T) {
 		{
 			name: "exceed images",
 			is: api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "test",
 					Name:      "is",
 				},
@@ -439,15 +445,13 @@ func TestLimitVerifier(t *testing.T) {
 				},
 			},
 			isEvaluator: makeISEvaluator(1, 0),
-			expected: field.ErrorList{
-				field.Forbidden(field.NewPath("imageStream"), makeISForbiddenError("is", []kapi.ResourceName{api.ResourceImageStreamImages}).Error()),
-			},
+			expected:    field.ErrorList{field.InternalError(field.NewPath(""), makeISForbiddenError("is", []kapi.ResourceName{api.ResourceImageStreamImages}))},
 		},
 
 		{
 			name: "exceed tags",
 			is: api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "test",
 					Name:      "is",
 				},
@@ -459,20 +463,21 @@ func TestLimitVerifier(t *testing.T) {
 								Kind: "DockerImage",
 								Name: testutil.MakeDockerImageReference("test", "is", testutil.ChildImageWith2LayersDigest),
 							},
+							ReferencePolicy: api.TagReferencePolicy{
+								Type: api.SourceTagReferencePolicy,
+							},
 						},
 					},
 				},
 			},
 			isEvaluator: makeISEvaluator(0, 0),
-			expected: field.ErrorList{
-				field.Forbidden(field.NewPath("imageStream"), makeISForbiddenError("is", []kapi.ResourceName{api.ResourceImageStreamTags}).Error()),
-			},
+			expected:    field.ErrorList{field.InternalError(field.NewPath(""), makeISForbiddenError("is", []kapi.ResourceName{api.ResourceImageStreamTags}))},
 		},
 
 		{
 			name: "exceed images and tags",
 			is: api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "test",
 					Name:      "is",
 				},
@@ -483,6 +488,9 @@ func TestLimitVerifier(t *testing.T) {
 							From: &kapi.ObjectReference{
 								Kind: "DockerImage",
 								Name: testutil.MakeDockerImageReference("test", "other", testutil.BaseImageWith1LayerDigest),
+							},
+							ReferencePolicy: api.TagReferencePolicy{
+								Type: api.SourceTagReferencePolicy,
 							},
 						},
 					},
@@ -501,9 +509,7 @@ func TestLimitVerifier(t *testing.T) {
 				},
 			},
 			isEvaluator: makeISEvaluator(0, 0),
-			expected: field.ErrorList{
-				field.Forbidden(field.NewPath("imageStream"), makeISForbiddenError("is", []kapi.ResourceName{api.ResourceImageStreamImages, api.ResourceImageStreamTags}).Error()),
-			},
+			expected:    field.ErrorList{field.InternalError(field.NewPath(""), makeISForbiddenError("is", []kapi.ResourceName{api.ResourceImageStreamImages, api.ResourceImageStreamTags}))},
 		},
 	}
 
@@ -521,11 +527,24 @@ func TestLimitVerifier(t *testing.T) {
 			defaultRegistry: &fakeDefaultRegistry{},
 		}
 
-		ctx := kapi.WithUser(kapi.NewDefaultContext(), &fakeUser{})
-		errList := s.Validate(ctx, &tc.is)
+		ctx := apirequest.WithUser(apirequest.NewDefaultContext(), &fakeUser{})
+		err := s.Validate(ctx, &tc.is)
+		if e, a := tc.expected, err; !reflect.DeepEqual(e, a) {
+			t.Errorf("%s: unexpected validation errors: %s", tc.name, diff.ObjectReflectDiff(e, a))
+		}
 
-		if e, a := tc.expected, errList; !reflect.DeepEqual(e, a) {
-			t.Errorf("%s: unexpected validation errors: %s", tc.name, diff.ObjectDiff(e, a))
+		// Update must fail the exact same way
+		tc.is.ResourceVersion = "1"
+		old := &api.ImageStream{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace:       "test",
+				Name:            "is",
+				ResourceVersion: "1",
+			},
+		}
+		err = s.ValidateUpdate(ctx, &tc.is, old)
+		if e, a := tc.expected, err; !reflect.DeepEqual(e, a) {
+			t.Errorf("%s: unexpected validation errors: %s", tc.name, diff.ObjectReflectDiff(e, a))
 		}
 	}
 }
@@ -534,7 +553,7 @@ type fakeImageStreamGetter struct {
 	stream *api.ImageStream
 }
 
-func (f *fakeImageStreamGetter) Get(ctx kapi.Context, name string) (runtime.Object, error) {
+func (f *fakeImageStreamGetter) Get(ctx apirequest.Context, name string, opts *metav1.GetOptions) (runtime.Object, error) {
 	return f.stream, nil
 }
 
@@ -1028,7 +1047,7 @@ func TestTagsChanged(t *testing.T) {
 
 	for testName, test := range tests {
 		stream := &api.ImageStream{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: "stream",
 			},
 			Spec: api.ImageStreamSpec{
@@ -1046,7 +1065,7 @@ func TestTagsChanged(t *testing.T) {
 			previousTagHistory, _ = obj.(map[string]api.TagEventList)
 		}
 		previousStream := &api.ImageStream{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: "stream",
 			},
 			Spec: api.ImageStreamSpec{
@@ -1062,9 +1081,9 @@ func TestTagsChanged(t *testing.T) {
 		}
 
 		s := &Strategy{
-			defaultRegistry: &fakeDefaultRegistry{},
+			defaultRegistry:   &fakeDefaultRegistry{},
+			imageStreamGetter: &fakeImageStreamGetter{test.otherStream},
 		}
-		s.ImageStreamGetter = &fakeImageStreamGetter{test.otherStream}
 		err := s.tagsChanged(previousStream, stream)
 		if len(err) > 0 {
 			t.Errorf("%s: unable to process tags: %v", testName, err)

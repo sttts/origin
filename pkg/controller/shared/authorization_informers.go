@@ -3,11 +3,10 @@ package shared
 import (
 	"reflect"
 
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client/cache"
-	"k8s.io/kubernetes/pkg/controller/framework"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/watch"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/tools/cache"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	"github.com/openshift/origin/pkg/client"
@@ -15,7 +14,7 @@ import (
 )
 
 type ClusterPolicyInformer interface {
-	Informer() framework.SharedIndexInformer
+	Informer() cache.SharedIndexInformer
 	// still use an indexer, no telling what someone will want to index on someday
 	Indexer() cache.Indexer
 	Lister() client.SyncedClusterPoliciesListerInterface
@@ -25,7 +24,7 @@ type clusterPolicyInformer struct {
 	*sharedInformerFactory
 }
 
-func (f *clusterPolicyInformer) Informer() framework.SharedIndexInformer {
+func (f *clusterPolicyInformer) Informer() cache.SharedIndexInformer {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
@@ -36,19 +35,19 @@ func (f *clusterPolicyInformer) Informer() framework.SharedIndexInformer {
 		return informer
 	}
 
-	lw := f.customListerWatchers.GetListerWatcher(kapi.Resource("clusterpolicies"))
+	lw := f.customListerWatchers.GetListerWatcher(authorizationapi.Resource("clusterpolicies"))
 	if lw == nil {
 		lw = &cache.ListWatch{
-			ListFunc: func(options kapi.ListOptions) (runtime.Object, error) {
+			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 				return f.originClient.ClusterPolicies().List(options)
 			},
-			WatchFunc: func(options kapi.ListOptions) (watch.Interface, error) {
+			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
 				return f.originClient.ClusterPolicies().Watch(options)
 			},
 		}
 	}
 
-	informer = framework.NewSharedIndexInformer(
+	informer = cache.NewSharedIndexInformer(
 		lw,
 		informerObj,
 		f.defaultResync,
@@ -69,7 +68,7 @@ func (f *clusterPolicyInformer) Lister() client.SyncedClusterPoliciesListerInter
 }
 
 type ClusterPolicyBindingInformer interface {
-	Informer() framework.SharedIndexInformer
+	Informer() cache.SharedIndexInformer
 	// still use an indexer, no telling what someone will want to index on someday
 	Indexer() cache.Indexer
 	Lister() client.SyncedClusterPolicyBindingsListerInterface
@@ -79,7 +78,7 @@ type clusterPolicyBindingInformer struct {
 	*sharedInformerFactory
 }
 
-func (f *clusterPolicyBindingInformer) Informer() framework.SharedIndexInformer {
+func (f *clusterPolicyBindingInformer) Informer() cache.SharedIndexInformer {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
@@ -90,19 +89,19 @@ func (f *clusterPolicyBindingInformer) Informer() framework.SharedIndexInformer 
 		return informer
 	}
 
-	lw := f.customListerWatchers.GetListerWatcher(kapi.Resource("clusterpolicybindings"))
+	lw := f.customListerWatchers.GetListerWatcher(authorizationapi.Resource("clusterpolicybindings"))
 	if lw == nil {
 		lw = &cache.ListWatch{
-			ListFunc: func(options kapi.ListOptions) (runtime.Object, error) {
+			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 				return f.originClient.ClusterPolicyBindings().List(options)
 			},
-			WatchFunc: func(options kapi.ListOptions) (watch.Interface, error) {
+			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
 				return f.originClient.ClusterPolicyBindings().Watch(options)
 			},
 		}
 	}
 
-	informer = framework.NewSharedIndexInformer(
+	informer = cache.NewSharedIndexInformer(
 		lw,
 		informerObj,
 		f.defaultResync,
@@ -123,7 +122,7 @@ func (f *clusterPolicyBindingInformer) Lister() client.SyncedClusterPolicyBindin
 }
 
 type PolicyInformer interface {
-	Informer() framework.SharedIndexInformer
+	Informer() cache.SharedIndexInformer
 	// still use an indexer, no telling what someone will want to index on someday
 	Indexer() cache.Indexer
 	Lister() client.SyncedPoliciesListerNamespacer
@@ -133,7 +132,7 @@ type policyInformer struct {
 	*sharedInformerFactory
 }
 
-func (f *policyInformer) Informer() framework.SharedIndexInformer {
+func (f *policyInformer) Informer() cache.SharedIndexInformer {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
@@ -144,19 +143,19 @@ func (f *policyInformer) Informer() framework.SharedIndexInformer {
 		return informer
 	}
 
-	lw := f.customListerWatchers.GetListerWatcher(kapi.Resource("policies"))
+	lw := f.customListerWatchers.GetListerWatcher(authorizationapi.Resource("policies"))
 	if lw == nil {
 		lw = &cache.ListWatch{
-			ListFunc: func(options kapi.ListOptions) (runtime.Object, error) {
-				return f.originClient.Policies(kapi.NamespaceAll).List(options)
+			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+				return f.originClient.Policies(metav1.NamespaceAll).List(options)
 			},
-			WatchFunc: func(options kapi.ListOptions) (watch.Interface, error) {
-				return f.originClient.Policies(kapi.NamespaceAll).Watch(options)
+			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+				return f.originClient.Policies(metav1.NamespaceAll).Watch(options)
 			},
 		}
 	}
 
-	informer = framework.NewSharedIndexInformer(
+	informer = cache.NewSharedIndexInformer(
 		lw,
 		informerObj,
 		f.defaultResync,
@@ -177,7 +176,7 @@ func (f *policyInformer) Lister() client.SyncedPoliciesListerNamespacer {
 }
 
 type PolicyBindingInformer interface {
-	Informer() framework.SharedIndexInformer
+	Informer() cache.SharedIndexInformer
 	// still use an indexer, no telling what someone will want to index on someday
 	Indexer() cache.Indexer
 	Lister() client.SyncedPolicyBindingsListerNamespacer
@@ -187,7 +186,7 @@ type policyBindingInformer struct {
 	*sharedInformerFactory
 }
 
-func (f *policyBindingInformer) Informer() framework.SharedIndexInformer {
+func (f *policyBindingInformer) Informer() cache.SharedIndexInformer {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
@@ -198,19 +197,19 @@ func (f *policyBindingInformer) Informer() framework.SharedIndexInformer {
 		return informer
 	}
 
-	lw := f.customListerWatchers.GetListerWatcher(kapi.Resource("policybindings"))
+	lw := f.customListerWatchers.GetListerWatcher(authorizationapi.Resource("policybindings"))
 	if lw == nil {
 		lw = &cache.ListWatch{
-			ListFunc: func(options kapi.ListOptions) (runtime.Object, error) {
-				return f.originClient.PolicyBindings(kapi.NamespaceAll).List(options)
+			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+				return f.originClient.PolicyBindings(metav1.NamespaceAll).List(options)
 			},
-			WatchFunc: func(options kapi.ListOptions) (watch.Interface, error) {
-				return f.originClient.PolicyBindings(kapi.NamespaceAll).Watch(options)
+			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+				return f.originClient.PolicyBindings(metav1.NamespaceAll).Watch(options)
 			},
 		}
 	}
 
-	informer = framework.NewSharedIndexInformer(
+	informer = cache.NewSharedIndexInformer(
 		lw,
 		informerObj,
 		f.defaultResync,

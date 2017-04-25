@@ -4,20 +4,20 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
-	"strings"
 	"time"
 
 	"github.com/golang/glog"
 
-	"k8s.io/kubernetes/pkg/admission"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apiserver/pkg/admission"
 	kapi "k8s.io/kubernetes/pkg/api"
-	apierrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/apimachinery/registered"
-	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	"k8s.io/kubernetes/pkg/util/sets"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	kadmission "k8s.io/kubernetes/pkg/kubeapiserver/admission"
 
-	"github.com/openshift/origin/pkg/api"
+	"github.com/openshift/origin/pkg/api/latest"
+	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	oadmission "github.com/openshift/origin/pkg/cmd/server/admission"
 	"github.com/openshift/origin/pkg/project/cache"
 	projectutil "github.com/openshift/origin/pkg/project/util"
@@ -26,36 +26,52 @@ import (
 // TODO: modify the upstream plug-in so this can be collapsed
 // need ability to specify a RESTMapper on upstream version
 func init() {
-	admission.RegisterPlugin("OriginNamespaceLifecycle", func(client clientset.Interface, config io.Reader) (admission.Interface, error) {
-		return NewLifecycle(client, recommendedCreatableResources)
+	admission.RegisterPlugin("OriginNamespaceLifecycle", func(config io.Reader) (admission.Interface, error) {
+		return NewLifecycle(recommendedCreatableResources)
 	})
 }
 
 type lifecycle struct {
-	client clientset.Interface
+	client kclientset.Interface
 	cache  *cache.ProjectCache
 
 	// creatableResources is a set of resources that can be created even if the namespace is terminating
-	creatableResources sets.String
+	creatableResources map[schema.GroupResource]bool
 }
 
-var recommendedCreatableResources = sets.NewString("resourceaccessreviews", "localresourceaccessreviews")
-var _ = oadmission.WantsProjectCache(&lifecycle{})
-var _ = oadmission.Validator(&lifecycle{})
+var recommendedCreatableResources = map[schema.GroupResource]bool{
+	authorizationapi.Resource("resourceaccessreviews"):      true,
+	authorizationapi.Resource("localresourceaccessreviews"): true,
+	authorizationapi.Resource("subjectaccessreviews"):       true,
+	authorizationapi.Resource("localsubjectaccessreviews"):  true,
+	authorizationapi.Resource("selfsubjectrulesreviews"):    true,
+	authorizationapi.Resource("subjectrulesreviews"):        true,
 
-// Admit enforces that a namespace must exist in order to associate content with it.
-// Admit enforces that a namespace that is terminating cannot accept new content being associated with it.
+	authorizationapi.LegacyResource("resourceaccessreviews"):      true,
+	authorizationapi.LegacyResource("localresourceaccessreviews"): true,
+	authorizationapi.LegacyResource("subjectaccessreviews"):       true,
+	authorizationapi.LegacyResource("localsubjectaccessreviews"):  true,
+	authorizationapi.LegacyResource("selfsubjectrulesreviews"):    true,
+	authorizationapi.LegacyResource("subjectrulesreviews"):        true,
+}
+var _ = oadmission.WantsProjectCache(&lifecycle{})
+var _ = kadmission.WantsInternalKubeClientSet(&lifecycle{})
+
+// Admit enforces that a namespace must have the openshift finalizer associated with it in order to create origin API objects within it
 func (e *lifecycle) Admit(a admission.Attributes) (err error) {
 	if len(a.GetNamespace()) == 0 {
 		return nil
 	}
-	// always allow a SAR request through, the SAR will return information about
-	// the ability to take action on the object, no need to verify it here.
-	if isSubjectAccessReview(a) {
+	// only pay attention to origin resources
+	if !latest.OriginKind(a.GetKind()) {
+		return nil
+	}
+	// always allow creatable resources through.  These requests should always be allowed.
+	if e.creatableResources[a.GetResource().GroupResource()] {
 		return nil
 	}
 
-	groupMeta, err := registered.Group(a.GetKind().Group)
+	groupMeta, err := kapi.Registry.Group(a.GetKind().Group)
 	if err != nil {
 		return err
 	}
@@ -68,17 +84,6 @@ func (e *lifecycle) Admit(a admission.Attributes) (err error) {
 		return nil
 	}
 
-	// we want to allow someone to delete something in case it was phantom created somehow
-	if a.GetOperation() == "DELETE" {
-		return nil
-	}
-
-	name := "Unknown"
-	obj := a.GetObject()
-	if obj != nil {
-		name, _ = meta.NewAccessor().Name(obj)
-	}
-
 	if !e.cache.Running() {
 		return admission.NewForbidden(a, err)
 	}
@@ -86,14 +91,6 @@ func (e *lifecycle) Admit(a admission.Attributes) (err error) {
 	namespace, err := e.cache.GetNamespace(a.GetNamespace())
 	if err != nil {
 		return admission.NewForbidden(a, err)
-	}
-
-	if a.GetOperation() != "CREATE" {
-		return nil
-	}
-
-	if namespace.Status.Phase == kapi.NamespaceTerminating && !e.creatableResources.Has(strings.ToLower(a.GetResource().Resource)) {
-		return apierrors.NewForbidden(a.GetResource().GroupResource(), name, fmt.Errorf("Namespace %s is terminating", a.GetNamespace()))
 	}
 
 	// in case of concurrency issues, we will retry this logic
@@ -116,7 +113,7 @@ func (e *lifecycle) Admit(a admission.Attributes) (err error) {
 		time.Sleep(interval)
 
 		// it's possible the namespace actually was deleted, so just forbid if this occurs
-		namespace, err = e.client.Core().Namespaces().Get(a.GetNamespace())
+		namespace, err = e.client.Core().Namespaces().Get(a.GetNamespace(), metav1.GetOptions{})
 		if err != nil {
 			return admission.NewForbidden(a, err)
 		}
@@ -125,11 +122,15 @@ func (e *lifecycle) Admit(a admission.Attributes) (err error) {
 }
 
 func (e *lifecycle) Handles(operation admission.Operation) bool {
-	return true
+	return operation == admission.Create
 }
 
 func (e *lifecycle) SetProjectCache(c *cache.ProjectCache) {
 	e.cache = c
+}
+
+func (q *lifecycle) SetInternalKubeClientSet(c kclientset.Interface) {
+	q.client = c
 }
 
 func (e *lifecycle) Validate() error {
@@ -139,18 +140,8 @@ func (e *lifecycle) Validate() error {
 	return nil
 }
 
-func NewLifecycle(client clientset.Interface, creatableResources sets.String) (admission.Interface, error) {
+func NewLifecycle(creatableResources map[schema.GroupResource]bool) (admission.Interface, error) {
 	return &lifecycle{
-		client:             client,
 		creatableResources: creatableResources,
 	}, nil
-}
-
-var (
-	sar  = api.Kind("SubjectAccessReview")
-	lsar = api.Kind("LocalSubjectAccessReview")
-)
-
-func isSubjectAccessReview(a admission.Attributes) bool {
-	return a.GetKind().GroupKind() == sar || a.GetKind().GroupKind() == lsar
 }

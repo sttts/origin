@@ -1,5 +1,3 @@
-// +build integration
-
 package integration
 
 import (
@@ -11,7 +9,7 @@ import (
 	"os"
 	"testing"
 
-	knet "k8s.io/kubernetes/pkg/util/net"
+	knet "k8s.io/apimachinery/pkg/util/net"
 
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
 	"github.com/openshift/origin/pkg/cmd/util"
@@ -30,6 +28,7 @@ const (
 
 func TestSNI(t *testing.T) {
 	testutil.RequireEtcd(t)
+	defer testutil.DumpEtcdOnFailure(t)
 	// Create tempfiles with certs and keys we're going to use
 	certNames := map[string]string{}
 	for certName, certContents := range sniCerts {

@@ -1,5 +1,3 @@
-// +build integration
-
 package integration
 
 import (
@@ -9,8 +7,9 @@ import (
 	"testing"
 
 	oclient "github.com/openshift/origin/pkg/client"
-	"k8s.io/kubernetes/pkg/auth/user"
-	"k8s.io/kubernetes/pkg/client/restclient"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apiserver/pkg/authentication/user"
+	restclient "k8s.io/client-go/rest"
 
 	"github.com/openshift/origin/pkg/cmd/server/admin"
 	"github.com/openshift/origin/pkg/cmd/util"
@@ -40,6 +39,7 @@ func TestOAuthCertFallback(t *testing.T) {
 	)
 
 	testutil.RequireEtcd(t)
+	defer testutil.DumpEtcdOnFailure(t)
 	// Build master config
 	masterOptions, err := testserver.DefaultMasterOptions()
 	if err != nil {
@@ -93,6 +93,7 @@ func TestOAuthCertFallback(t *testing.T) {
 		path.Join(fakecadir, "fakeclient.crt"),
 		path.Join(fakecadir, "fakeclient.key"),
 		&user.DefaultInfo{Name: "fakeuser"},
+		365*2, /* 2 years */
 	)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -167,7 +168,7 @@ func TestOAuthCertFallback(t *testing.T) {
 
 		client := oclient.NewOrDie(&config)
 
-		user, err := client.Users().Get("~")
+		user, err := client.Users().Get("~", metav1.GetOptions{})
 
 		if user.Name != test.expectedUser {
 			t.Errorf("%s: unexpected user %q", k, user.Name)

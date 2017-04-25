@@ -5,8 +5,9 @@ import (
 
 	"github.com/golang/glog"
 
+	apierrs "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kapi "k8s.io/kubernetes/pkg/api"
-	apierrs "k8s.io/kubernetes/pkg/api/errors"
 
 	"github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/image/api"
@@ -101,9 +102,6 @@ func resetScheduledTags(stream *api.ImageStream) {
 	}
 }
 
-// retryCount is the number of times to retry on a conflict when updating an image stream
-const retryCount = 2
-
 // Next processes the given image stream, looking for streams that have DockerImageRepository
 // set but have not yet been marked as "ready". If transient errors occur, err is returned but
 // the image stream is not modified (so it will be tried again later). If a permanent
@@ -136,7 +134,7 @@ func (c *ImportController) Next(stream *api.ImageStream, notifier Notifier) erro
 	}
 
 	isi := &api.ImageStreamImport{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:            stream.Name,
 			Namespace:       stream.Namespace,
 			ResourceVersion: stream.ResourceVersion,
@@ -149,9 +147,10 @@ func (c *ImportController) Next(stream *api.ImageStream, notifier Notifier) erro
 			continue
 		}
 		isi.Spec.Images = append(isi.Spec.Images, api.ImageImportSpec{
-			From:         kapi.ObjectReference{Kind: "DockerImage", Name: tagRef.From.Name},
-			To:           &kapi.LocalObjectReference{Name: tag},
-			ImportPolicy: tagRef.ImportPolicy,
+			From:            kapi.ObjectReference{Kind: "DockerImage", Name: tagRef.From.Name},
+			To:              &kapi.LocalObjectReference{Name: tag},
+			ImportPolicy:    tagRef.ImportPolicy,
+			ReferencePolicy: tagRef.ReferencePolicy,
 		})
 	}
 	if repo := stream.Spec.DockerImageRepository; !partial && len(repo) > 0 {
@@ -174,7 +173,7 @@ func (c *ImportController) Next(stream *api.ImageStream, notifier Notifier) erro
 }
 
 func (c *ImportController) NextTimedByName(namespace, name string) error {
-	stream, err := c.streams.ImageStreams(namespace).Get(name)
+	stream, err := c.streams.ImageStreams(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
 		if apierrs.IsNotFound(err) {
 			return ErrNotImportable

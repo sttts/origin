@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,8 +26,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
-	"k8s.io/kubernetes/pkg/util/flag"
+	"k8s.io/apiserver/pkg/util/flag"
+	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/kubernetes/pkg/kubectl/cmd/templates"
+	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
+	"k8s.io/kubernetes/pkg/util/i18n"
 )
 
 const (
@@ -42,28 +45,27 @@ type setOptions struct {
 	setRawBytes   flag.Tristate
 }
 
-const set_long = `Sets an individual value in a kubeconfig file
-PROPERTY_NAME is a dot delimited name where each token represents either a attribute name or a map key.  Map keys may not contain dots.
-PROPERTY_VALUE is the new value you wish to set. Binary fields such as 'certificate-authority-data' expect a base64 encoded string unless the --set-raw-bytes flag is used.`
+var set_long = templates.LongDesc(`
+	Sets an individual value in a kubeconfig file
+
+	PROPERTY_NAME is a dot delimited name where each token represents either an attribute name or a map key.  Map keys may not contain dots.
+
+	PROPERTY_VALUE is the new value you wish to set. Binary fields such as 'certificate-authority-data' expect a base64 encoded string unless the --set-raw-bytes flag is used.`)
 
 func NewCmdConfigSet(out io.Writer, configAccess clientcmd.ConfigAccess) *cobra.Command {
 	options := &setOptions{configAccess: configAccess}
 
 	cmd := &cobra.Command{
 		Use:   "set PROPERTY_NAME PROPERTY_VALUE",
-		Short: "Sets an individual value in a kubeconfig file",
+		Short: i18n.T("Sets an individual value in a kubeconfig file"),
 		Long:  set_long,
 		Run: func(cmd *cobra.Command, args []string) {
 			if !options.complete(cmd) {
 				return
 			}
 
-			err := options.run()
-			if err != nil {
-				fmt.Fprintf(out, "%v\n", err)
-			} else {
-				fmt.Fprintf(out, "property %q set.\n", options.propertyName)
-			}
+			cmdutil.CheckErr(options.run())
+			fmt.Fprintf(out, "Property %q set.\n", options.propertyName)
 		},
 	}
 

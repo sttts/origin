@@ -5,8 +5,8 @@ import (
 	"io"
 	"os"
 
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client/restclient"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	restclient "k8s.io/client-go/rest"
 
 	buildapi "github.com/openshift/origin/pkg/build/api"
 	"github.com/openshift/origin/pkg/client"
@@ -14,30 +14,27 @@ import (
 
 const gitRepositoryAnnotationKey = "openshift.io/git-repository"
 
-func GetRepositoryBuildConfigs(name string, out io.Writer) error {
-	client, err := getClient()
-	if err != nil {
-		return err
-	}
+func GetRepositoryBuildConfigs(c client.Interface, name string, out io.Writer) error {
 
 	ns := os.Getenv("POD_NAMESPACE")
-	buildConfigList, err := client.BuildConfigs(ns).List(kapi.ListOptions{})
+	buildConfigList, err := c.BuildConfigs(ns).List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
 
 	matchingBuildConfigs := []*buildapi.BuildConfig{}
 
-	for _, bc := range buildConfigList.Items {
+	for i := range buildConfigList.Items {
+		bc := &buildConfigList.Items[i]
 		repoAnnotation, hasAnnotation := bc.Annotations[gitRepositoryAnnotationKey]
 		if hasAnnotation {
 			if repoAnnotation == name {
-				matchingBuildConfigs = append(matchingBuildConfigs, &bc)
+				matchingBuildConfigs = append(matchingBuildConfigs, bc)
 			}
 			continue
 		}
 		if bc.Name == name {
-			matchingBuildConfigs = append(matchingBuildConfigs, &bc)
+			matchingBuildConfigs = append(matchingBuildConfigs, bc)
 		}
 	}
 
@@ -55,7 +52,7 @@ func GetRepositoryBuildConfigs(name string, out io.Writer) error {
 	return nil
 }
 
-func getClient() (client.Interface, error) {
+func GetClient() (client.Interface, error) {
 	clientConfig, err := restclient.InClusterConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get client config: %v", err)

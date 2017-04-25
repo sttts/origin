@@ -8,12 +8,16 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/watch"
+	clientgotesting "k8s.io/client-go/testing"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/sets"
-	"k8s.io/kubernetes/pkg/watch"
+	externalfake "k8s.io/kubernetes/pkg/client/clientset_generated/clientset/fake"
+	internalfake "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
+	kexternalinformers "k8s.io/kubernetes/pkg/client/informers/informers_generated/externalversions"
+	kinternalinformers "k8s.io/kubernetes/pkg/client/informers/informers_generated/internalversion"
 
 	"github.com/openshift/origin/pkg/client/testclient"
 	"github.com/openshift/origin/pkg/controller/shared"
@@ -21,9 +25,11 @@ import (
 )
 
 var (
-	keys           = []string{"different", "used", "important", "every", "large"}
-	values         = []string{"time", "person"}
-	namespaceNames = []string{
+	keys             = []string{"different", "used", "important", "every", "large"}
+	values           = []string{"time", "person"}
+	annotationKeys   = []string{"different", "used", "important", "every", "large", "foo.bar.baz/key", "whitespace key"}
+	annotationValues = []string{"Person", "time and place", "Thing", "me@example.com", "system:admin"}
+	namespaceNames   = []string{
 		"tokillamockingbird", "harrypotter", "1984", "prideandprejudice", "thediaryofayounggirl", "animalfarm", "thehobbit",
 		"thelittleprince", "thegreatgatsby", "thecatcherintherye", "lordoftherings", "janeeyre", "romeoandjuliet", "thechroniclesofnarnia",
 		"lordoftheflies", "thegivingtree", "charlottesweb", "greeneggsandham", "alicesadventuresinwonderland", "littlewomen",
@@ -48,20 +54,26 @@ func runFuzzer(t *testing.T) {
 	defer close(stopCh)
 
 	startingNamespaces := CreateStartingNamespaces()
-	kubeclient := ktestclient.NewSimpleFake(startingNamespaces...)
+	internalKubeClient := internalfake.NewSimpleClientset(startingNamespaces...)
+	externalKubeClient := externalfake.NewSimpleClientset(startingNamespaces...)
 	nsWatch := watch.NewFake()
-	kubeclient.PrependWatchReactor("namespaces", ktestclient.DefaultWatchReactor(nsWatch, nil))
+	internalKubeClient.PrependWatchReactor("namespaces", clientgotesting.DefaultWatchReactor(nsWatch, nil))
+	externalKubeClient.PrependWatchReactor("namespaces", clientgotesting.DefaultWatchReactor(nsWatch, nil))
 
 	startingQuotas := CreateStartingQuotas()
 	originclient := testclient.NewSimpleFake(startingQuotas...)
 	quotaWatch := watch.NewFake()
-	originclient.AddWatchReactor("clusterresourcequotas", ktestclient.DefaultWatchReactor(quotaWatch, nil))
+	originclient.PrependWatchReactor("clusterresourcequotas", clientgotesting.DefaultWatchReactor(quotaWatch, nil))
 
-	informerFactory := shared.NewInformerFactory(kubeclient, originclient, shared.DefaultListerWatcherOverrides{}, 10*time.Minute)
-	controller := NewClusterQuotaMappingController(informerFactory.Namespaces(), informerFactory.ClusterResourceQuotas())
+	internalKubeInformerFactory := kinternalinformers.NewSharedInformerFactory(internalKubeClient, 10*time.Minute)
+	externalKubeInformerFactory := kexternalinformers.NewSharedInformerFactory(externalKubeClient, 10*time.Minute)
+	informerFactory := shared.NewInformerFactory(internalKubeInformerFactory, externalKubeInformerFactory, internalKubeClient, originclient, shared.DefaultListerWatcherOverrides{}, 10*time.Minute)
+	controller := NewClusterQuotaMappingController(internalKubeInformerFactory.Core().InternalVersion().Namespaces(), informerFactory.ClusterResourceQuotas())
 	go controller.Run(5, stopCh)
 	informerFactory.Start(stopCh)
 	informerFactory.StartCore(stopCh)
+	internalKubeInformerFactory.Start(stopCh)
+	externalKubeInformerFactory.Start(stopCh)
 
 	finalNamespaces := map[string]*kapi.Namespace{}
 	finalQuotas := map[string]*quotaapi.ClusterResourceQuota{}
@@ -271,12 +283,20 @@ func NewQuota(name string) *quotaapi.ClusterResourceQuota {
 		return ret
 	}
 
-	ret.Spec.Selector.LabelSelector = &unversioned.LabelSelector{MatchLabels: map[string]string{}}
+	ret.Spec.Selector.LabelSelector = &metav1.LabelSelector{MatchLabels: map[string]string{}}
 	for i := 0; i < numSelectorKeys; i++ {
 		key := keys[rand.Intn(len(keys))]
 		value := values[rand.Intn(len(values))]
 
 		ret.Spec.Selector.LabelSelector.MatchLabels[key] = value
+	}
+
+	ret.Spec.Selector.AnnotationSelector = map[string]string{}
+	for i := 0; i < numSelectorKeys; i++ {
+		key := annotationKeys[rand.Intn(len(annotationKeys))]
+		value := annotationValues[rand.Intn(len(annotationValues))]
+
+		ret.Spec.Selector.AnnotationSelector[key] = value
 	}
 
 	return ret
@@ -297,6 +317,14 @@ func NewNamespace(name string) *kapi.Namespace {
 		value := values[rand.Intn(len(values))]
 
 		ret.Labels[key] = value
+	}
+
+	ret.Annotations = map[string]string{}
+	for i := 0; i < numLabels; i++ {
+		key := annotationKeys[rand.Intn(len(annotationKeys))]
+		value := annotationValues[rand.Intn(len(annotationValues))]
+
+		ret.Annotations[key] = value
 	}
 
 	return ret

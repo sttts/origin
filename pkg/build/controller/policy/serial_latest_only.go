@@ -3,10 +3,10 @@ package policy
 import (
 	"time"
 
-	"k8s.io/kubernetes/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/errors"
 
-	kerrors "k8s.io/kubernetes/pkg/util/errors"
-	"k8s.io/kubernetes/pkg/util/wait"
+	kerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/golang/glog"
 	buildapi "github.com/openshift/origin/pkg/build/api"
@@ -37,11 +37,11 @@ func (s *SerialLatestOnlyPolicy) IsRunnable(build *buildapi.Build) (bool, error)
 	if err := kerrors.NewAggregate(s.cancelPreviousBuilds(build)); err != nil {
 		return false, err
 	}
-	nextBuild, runningBuilds, err := GetNextConfigBuild(s.BuildLister, build.Namespace, bcName)
+	nextBuilds, runningBuilds, err := GetNextConfigBuild(s.BuildLister, build.Namespace, bcName)
 	if err != nil || runningBuilds {
 		return false, err
 	}
-	return nextBuild != nil && nextBuild.Name == build.Name, err
+	return len(nextBuilds) == 1 && nextBuilds[0].Name == build.Name, err
 }
 
 // IsRunnable implements the Scheduler interface.

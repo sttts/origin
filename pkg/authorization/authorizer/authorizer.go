@@ -1,10 +1,11 @@
 package authorizer
 
 import (
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/auth/user"
-	kerrors "k8s.io/kubernetes/pkg/util/errors"
-	"k8s.io/kubernetes/pkg/util/sets"
+	"errors"
+
+	kerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apiserver/pkg/authorization/authorizer"
 
 	"github.com/openshift/origin/pkg/authorization/rulevalidation"
 )
@@ -14,44 +15,25 @@ type openshiftAuthorizer struct {
 	forbiddenMessageMaker ForbiddenMessageMaker
 }
 
-func NewAuthorizer(ruleResolver rulevalidation.AuthorizationRuleResolver, forbiddenMessageMaker ForbiddenMessageMaker) Authorizer {
-	return &openshiftAuthorizer{ruleResolver, forbiddenMessageMaker}
+func NewAuthorizer(ruleResolver rulevalidation.AuthorizationRuleResolver, forbiddenMessageMaker ForbiddenMessageMaker) (authorizer.Authorizer, SubjectLocator) {
+	ret := &openshiftAuthorizer{ruleResolver, forbiddenMessageMaker}
+	return ret, ret
 }
 
-func (a *openshiftAuthorizer) Authorize(ctx kapi.Context, passedAttributes AuthorizationAttributes) (bool, string, error) {
-	attributes := CoerceToDefaultAuthorizationAttributes(passedAttributes)
-
-	// keep track of errors in case we are unable to authorize the action.
-	// It is entirely possible to get an error and be able to continue determine authorization status in spite of it.
-	// This is most common when a bound role is missing, but enough roles are still present and bound to authorize the request.
-	errs := []error{}
-
-	masterContext := kapi.WithNamespace(ctx, kapi.NamespaceNone)
-	globalAllowed, globalReason, err := a.authorizeWithNamespaceRules(masterContext, attributes)
-	if globalAllowed {
-		return true, globalReason, nil
+func (a *openshiftAuthorizer) Authorize(attributes authorizer.Attributes) (bool, string, error) {
+	if attributes.GetUser() == nil {
+		return false, "", errors.New("no user available on context")
 	}
+	allowed, reason, err := a.authorizeWithNamespaceRules(attributes)
+	if allowed {
+		return true, reason, nil
+	}
+	// errors are allowed to occur
 	if err != nil {
-		errs = append(errs, err)
+		return false, "", err
 	}
 
-	namespace, _ := kapi.NamespaceFrom(ctx)
-	if len(namespace) != 0 {
-		namespaceAllowed, namespaceReason, err := a.authorizeWithNamespaceRules(ctx, attributes)
-		if namespaceAllowed {
-			return true, namespaceReason, nil
-		}
-		if err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	if len(errs) > 0 {
-		return false, "", kerrors.NewAggregate(errs)
-	}
-
-	user, _ := kapi.UserFrom(ctx)
-	denyReason, err := a.forbiddenMessageMaker.MakeMessage(MessageContext{user, namespace, attributes})
+	denyReason, err := a.forbiddenMessageMaker.MakeMessage(attributes)
 	if err != nil {
 		denyReason = err.Error()
 	}
@@ -63,38 +45,16 @@ func (a *openshiftAuthorizer) Authorize(ctx kapi.Context, passedAttributes Autho
 // If we got an error, then the list of subjects may not be complete, but it does not contain any incorrect names.
 // This is done because policy rules are purely additive and policy determinations
 // can be made on the basis of those rules that are found.
-func (a *openshiftAuthorizer) GetAllowedSubjects(ctx kapi.Context, attributes AuthorizationAttributes) (sets.String, sets.String, error) {
-	errs := []error{}
-
-	masterContext := kapi.WithNamespace(ctx, kapi.NamespaceNone)
-	globalUsers, globalGroups, err := a.getAllowedSubjectsFromNamespaceBindings(masterContext, attributes)
-	if err != nil {
-		errs = append(errs, err)
-	}
-	localUsers, localGroups, err := a.getAllowedSubjectsFromNamespaceBindings(ctx, attributes)
-	if err != nil {
-		errs = append(errs, err)
-	}
-
-	users := sets.String{}
-	users.Insert(globalUsers.List()...)
-	users.Insert(localUsers.List()...)
-
-	groups := sets.String{}
-	groups.Insert(globalGroups.List()...)
-	groups.Insert(localGroups.List()...)
-
-	return users, groups, kerrors.NewAggregate(errs)
+func (a *openshiftAuthorizer) GetAllowedSubjects(attributes authorizer.Attributes) (sets.String, sets.String, error) {
+	return a.getAllowedSubjectsFromNamespaceBindings(attributes)
 }
 
-func (a *openshiftAuthorizer) getAllowedSubjectsFromNamespaceBindings(ctx kapi.Context, passedAttributes AuthorizationAttributes) (sets.String, sets.String, error) {
-	attributes := CoerceToDefaultAuthorizationAttributes(passedAttributes)
+func (a *openshiftAuthorizer) getAllowedSubjectsFromNamespaceBindings(attributes authorizer.Attributes) (sets.String, sets.String, error) {
+	var errs []error
 
-	errs := []error{}
-
-	roleBindings, err := a.ruleResolver.GetRoleBindings(ctx)
+	roleBindings, err := a.ruleResolver.GetRoleBindings(attributes.GetNamespace())
 	if err != nil {
-		return nil, nil, err
+		errs = append(errs, err)
 	}
 
 	users := sets.String{}
@@ -110,7 +70,7 @@ func (a *openshiftAuthorizer) getAllowedSubjectsFromNamespaceBindings(ctx kapi.C
 		}
 
 		for _, rule := range role.Rules() {
-			matches, err := attributes.RuleMatches(rule)
+			matches, err := RuleMatches(attributes, rule)
 			if err != nil {
 				errs = append(errs, err)
 				continue
@@ -129,57 +89,30 @@ func (a *openshiftAuthorizer) getAllowedSubjectsFromNamespaceBindings(ctx kapi.C
 // authorizeWithNamespaceRules returns isAllowed, reason, and error.  If an error is returned, isAllowed and reason are still valid.  This seems strange
 // but errors are not always fatal to the authorization process.  It is entirely possible to get an error and be able to continue determine authorization
 // status in spite of it.  This is most common when a bound role is missing, but enough roles are still present and bound to authorize the request.
-func (a *openshiftAuthorizer) authorizeWithNamespaceRules(ctx kapi.Context, passedAttributes AuthorizationAttributes) (bool, string, error) {
-	attributes := CoerceToDefaultAuthorizationAttributes(passedAttributes)
+func (a *openshiftAuthorizer) authorizeWithNamespaceRules(attributes authorizer.Attributes) (bool, string, error) {
+	allRules, ruleRetrievalError := a.ruleResolver.RulesFor(attributes.GetUser(), attributes.GetNamespace())
 
-	allRules, ruleRetrievalError := a.ruleResolver.GetEffectivePolicyRules(ctx)
-
+	var errs []error
 	for _, rule := range allRules {
-		matches, err := attributes.RuleMatches(rule)
+		matches, err := RuleMatches(attributes, rule)
 		if err != nil {
-			return false, "", err
+			errs = append(errs, err)
+			continue
 		}
 		if matches {
-			namespace := kapi.NamespaceValue(ctx)
-			if len(namespace) == 0 {
+			if len(attributes.GetNamespace()) == 0 {
 				return true, "allowed by cluster rule", nil
 			}
-			return true, "allowed by rule in " + namespace, nil
+			// not 100% accurate, because the rule may have been provided by a cluster rule. we no longer have
+			// this distinction upstream in practice.
+			return true, "allowed by rule in " + attributes.GetNamespace(), nil
 		}
 	}
-
-	return false, "", ruleRetrievalError
-}
-
-// TODO this may or may not be the behavior we want for managing rules.  As a for instance, a verb might be specified
-// that our attributes builder will never satisfy.  For now, I think gets us close.  Maybe a warning message of some kind?
-func CoerceToDefaultAuthorizationAttributes(passedAttributes AuthorizationAttributes) *DefaultAuthorizationAttributes {
-	attributes, ok := passedAttributes.(*DefaultAuthorizationAttributes)
-	if !ok {
-		attributes = &DefaultAuthorizationAttributes{
-			APIGroup:          passedAttributes.GetAPIGroup(),
-			Verb:              passedAttributes.GetVerb(),
-			RequestAttributes: passedAttributes.GetRequestAttributes(),
-			Resource:          passedAttributes.GetResource(),
-			ResourceName:      passedAttributes.GetResourceName(),
-			NonResourceURL:    passedAttributes.IsNonResourceURL(),
-			URL:               passedAttributes.GetURL(),
-		}
+	if len(errs) == 0 {
+		return false, "", ruleRetrievalError
 	}
-
-	return attributes
-}
-
-func doesApplyToUser(ruleUsers, ruleGroups sets.String, user user.Info) bool {
-	if ruleUsers.Has(user.GetName()) {
-		return true
+	if ruleRetrievalError != nil {
+		errs = append(errs, ruleRetrievalError)
 	}
-
-	for _, currGroup := range user.GetGroups() {
-		if ruleGroups.Has(currGroup) {
-			return true
-		}
-	}
-
-	return false
+	return false, "", kerrors.NewAggregate(errs)
 }

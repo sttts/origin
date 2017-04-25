@@ -1,18 +1,10 @@
 #!/bin/bash
 
 # Script to create latest swagger spec.
-
-set -o errexit
-set -o nounset
-set -o pipefail
-
-OS_ROOT=$(dirname "${BASH_SOURCE}")/..
-source "${OS_ROOT}/hack/lib/init.sh"
-
-os::log::stacktrace::install
+source "$(dirname "${BASH_SOURCE}")/lib/init.sh"
 
 # Open port scanning
-echo "[INFO] Checking open ports ('sudo openshift start' should already be running)"
+os::log::info "Checking open ports ('sudo openshift start' should already be running)"
 
 # 53 (DNS)
 # 4001,7001 (etcd)

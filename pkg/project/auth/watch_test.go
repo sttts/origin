@@ -4,30 +4,31 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apiserver/pkg/authentication/user"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/auth/user"
-	"k8s.io/kubernetes/pkg/client/unversioned/testclient"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/sets"
-	"k8s.io/kubernetes/pkg/util/wait"
-	"k8s.io/kubernetes/pkg/watch"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 
 	projectapi "github.com/openshift/origin/pkg/project/api"
 	projectcache "github.com/openshift/origin/pkg/project/cache"
 )
 
-func newTestWatcher(user string, groups []string, namespaces ...*kapi.Namespace) (*userProjectWatcher, *fakeAuthCache) {
+func newTestWatcher(username string, groups []string, namespaces ...*kapi.Namespace) (*userProjectWatcher, *fakeAuthCache) {
 	objects := []runtime.Object{}
 	for i := range namespaces {
 		objects = append(objects, namespaces[i])
 	}
-	mockClient := testclient.NewSimpleFake(objects...)
+	mockClient := fake.NewSimpleClientset(objects...)
 
-	projectCache := projectcache.NewProjectCache(mockClient.Namespaces(), "")
+	projectCache := projectcache.NewProjectCache(mockClient.Core().Namespaces(), "")
 	projectCache.Run()
 	fakeAuthCache := &fakeAuthCache{}
 
-	return NewUserProjectWatcher(user, groups, projectCache, fakeAuthCache, false), fakeAuthCache
+	return NewUserProjectWatcher(&user.DefaultInfo{Name: username, Groups: groups}, sets.NewString("*"), projectCache, fakeAuthCache, false), fakeAuthCache
 }
 
 type fakeAuthCache struct {
@@ -180,7 +181,7 @@ func TestAddModifyDeleteEventsByGroup(t *testing.T) {
 func newNamespaces(names ...string) []*kapi.Namespace {
 	ret := []*kapi.Namespace{}
 	for _, name := range names {
-		ret = append(ret, &kapi.Namespace{ObjectMeta: kapi.ObjectMeta{Name: name}})
+		ret = append(ret, &kapi.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}})
 	}
 
 	return ret

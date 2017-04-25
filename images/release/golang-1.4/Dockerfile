@@ -6,21 +6,27 @@
 #
 FROM openshift/origin-base
 
-ENV VERSION=1.4.2 \
+ENV VERSION=1.4.3 \
     GOARM=5 \
     GOPATH=/go \
-    GOROOT=/usr/lib/golang \
+    GOROOT=/usr/local/go \
     OS_VERSION_FILE=/go/src/github.com/openshift/origin/os-version-defs \
     TMPDIR=/openshifttmp
 ENV PATH=$PATH:$GOROOT/bin:$GOPATH/bin
 
+ADD *.rpm /tmp/origin-rpm/
 RUN mkdir $TMPDIR && \
-    INSTALL_PKGS="make gcc zip mercurial krb5-devel golang golang-vet golang-cover golang-pkg-darwin-amd64 golang-pkg-windows-amd64 golang-pkg-linux-386" && \
-    yum install -y $INSTALL_PKGS && \
+    INSTALL_PKGS="make gcc zip mercurial krb5-devel bsdtar bc rsync bind-utils file jq tito createrepo openssl gpgme gpgme-devel libassuan libassuan-devel" && \
+    yum install -y $INSTALL_PKGS /tmp/origin-rpm/*.rpm && \
     rpm -V $INSTALL_PKGS && \
     yum clean all && \
-    go get github.com/tools/godep && \
-    touch /os-build-image
+    curl -L https://github.com/google/protobuf/releases/download/v3.0.0-beta-4/protoc-3.0.0-beta-4-linux-x86_64.zip | bsdtar -C /usr/local -xf - && \
+    chmod uga+x /usr/local/bin/protoc && \
+    curl https://storage.googleapis.com/golang/go$VERSION.linux-amd64.tar.gz | tar -C /usr/local -xzf - && \
+    go get github.com/openshift/imagebuilder/cmd/imagebuilder && \
+    touch /os-build-image && \
+    git config --system user.name origin-release-container && \
+    git config --system user.email none@nowhere.com
 
 WORKDIR /go/src/github.com/openshift/origin
 LABEL io.k8s.display-name="OpenShift Origin Release Environment (golang-$VERSION)" \

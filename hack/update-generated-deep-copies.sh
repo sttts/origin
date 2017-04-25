@@ -1,27 +1,8 @@
 #!/bin/bash
+source "$(dirname "${BASH_SOURCE}")/lib/init.sh"
 
-set -o errexit
-set -o nounset
-set -o pipefail
-
-OS_ROOT=$(dirname "${BASH_SOURCE}")/..
-source "${OS_ROOT}/hack/lib/init.sh"
-
-# Go to the top of the tree.
-cd "${OS_ROOT}"
-
-# Do not allow a synthetic GOPATH for these checks
 os::build::setup_env
 
-"${OS_ROOT}/hack/build-go.sh" tools/gendeepcopy
-gendeepcopy="$( os::build::find-binary gendeepcopy )"
+os::util::ensure::built_binary_exists 'gendeepcopy'
 
-if [[ -z "${gendeepcopy}" ]]; then
-	echo "It looks as if you don't have a compiled gendeepcopy binary."
-	echo
-	echo "If you are running from a clone of the git repo, please run"
-	echo "'./hack/build-go.sh tools/gendeepcopy'."
-	exit 1
-fi
-
-${gendeepcopy} --output-base="${GOPATH}/src" "$@"
+gendeepcopy --output-base="${GOPATH}/src" "$@"

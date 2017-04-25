@@ -17,13 +17,14 @@ The Dockerfile built by this example is published as openshift/origin-gitserver
 Persistent and ephemeral templates are provided. For OpenShift Online you need to use
 the persistent one.
 
+
 Quick Start
 -----------
 
 Prerequisites:
 
 * You have an OpenShift v3 server running
-* You are logged in and have access to a project
+* You are logged in as a standard user (not as system:admin) and have access to a project
 * You have the `gitserver-ephemeral.yaml` or `gitserver-persistent.yaml` from this directory
 * You can create externally accessible routes on your server
 
@@ -59,13 +60,14 @@ a 'git clone' of the repository.
    If you have a working router, determine the host name of your git server by getting its route:
 
    ```sh
-   $ oc get route git
+   $ GITSERVER=http://$(oc get route git -o template --template '{{.spec.host}}')
    ```
 
    In this case, the URL of your git server will be the host name used by the route; something like: 
    
-   ```
-   http://git-myproject.infra.openshift.com
+   ```sh
+   $ echo $GITSERVER
+   http://git-myproject.router.default.svc.cluster.local
    ```
   
    Alternatively, if your router is not functional, you can port-forward the git-server pod to your local machine.
@@ -79,8 +81,8 @@ a 'git clone' of the repository.
 
    In this case, the URL of your git server will be your local host:
 
-   ```
-   http://localhost:8080
+   ```sh
+   $ GITSERVER=http://localhost:8080
    ```
 
 
@@ -90,24 +92,25 @@ a 'git clone' of the repository.
    the project namespace to create and push code to the Git Server. The easiest way to 
    provide credentials to the Git Server is by using a custom credential helper that will 
    send your OpenShift token by default to the server.
-   ```sh
-   $ git config --global credential.http://git-myproject.infra.openshift.com.helper \
-         '!f() { echo "username=$(oc whoami)"; echo "password=$(oc whoami -t)"; }; f'
-   ```
 
    **NOTE:** the config key is `credential.[git server URL].helper`
+
+   ```sh
+   $ git config --global credential.$GITSERVER.helper \
+         '!f() { echo "username=$(oc whoami)"; echo "password=$(oc whoami -t)"; }; f'
+   ```
 
 3. Push a repository to your git server
 
    In an existing repository, add a remote that points to the git server and push to it
    
-   ```
+   ```sh
    # clone a public repository
    $ git clone https://github.com/openshift/ruby-hello-world.git
 
    # add a remote for your git server
    $ cd ruby-hello-world
-   $ git remote add openshift http://git-myproject.infra.openshift.com/ruby-hello-world.git  
+   $ git remote add openshift $GITSERVER/ruby-hello-world.git
 
    # push the code to the git server
    $ git push openshift master
@@ -139,7 +142,7 @@ protocol to avoid transmission of source in plain text.
    metadata:
      name: git
    spec:
-     host: git-myproject.infra.openshift.com
+     host: git-myproject.router.default.svc.cluster.local
      tls:
        termination: edge
      to:
@@ -150,7 +153,7 @@ protocol to avoid transmission of source in plain text.
 2. If using a private certificate authority, configure your git client to use the private ca.crt file:
 
    ```sh
-   $ git config --global http.https://git-myproject.infra.openshift.com.sslCAInfo /path/to/ca.crt
+   $ git config --global http.https://git-myproject.router.default.svc.cluster.local.sslCAInfo /path/to/ca.crt
    ```
 
    where the key is http.[git server URL].sslCAInfo
@@ -166,6 +169,7 @@ protocol to avoid transmission of source in plain text.
    **NOTE:** changing environment variables on the git server will cause a redeploy of the git server. If using
    the default ephemeral storage for it, all repositories that have been pushed previously will be wiped out.
    They will need to be pushed to the server again to restore.
+
 
 Authentication
 --------------
@@ -221,6 +225,7 @@ metadata:
 **NOTE**: A build will be started for the BuildConfig matching the name of the repository and for any BuildConfig 
 that has an annotation pointing to the source repository. If there is a BuildConfig that has a matching name but
 has an annotation pointing to a different repository, a build will not be invoked for it.
+
 
 Build Strategy
 --------------

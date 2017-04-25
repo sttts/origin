@@ -1,6 +1,7 @@
 package validation
 
 import (
+	"bytes"
 	"fmt"
 	"regexp"
 	"strings"
@@ -8,13 +9,15 @@ import (
 	"github.com/docker/distribution/reference"
 	"github.com/golang/glog"
 
+	"k8s.io/apimachinery/pkg/api/validation/path"
+	"k8s.io/apimachinery/pkg/util/diff"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/validation"
-	"k8s.io/kubernetes/pkg/util/diff"
-	"k8s.io/kubernetes/pkg/util/validation/field"
 
-	oapi "github.com/openshift/origin/pkg/api"
+	serverapi "github.com/openshift/origin/pkg/cmd/server/api"
 	"github.com/openshift/origin/pkg/image/api"
+	stringsutil "github.com/openshift/origin/pkg/util/strings"
 )
 
 // RepositoryNameComponentRegexp restricts registry path component names to
@@ -34,7 +37,7 @@ var RepositoryNameComponentAnchoredRegexp = regexp.MustCompile(`^` + RepositoryN
 var RepositoryNameRegexp = regexp.MustCompile(`(?:` + RepositoryNameComponentRegexp.String() + `/)*` + RepositoryNameComponentRegexp.String())
 
 func ValidateImageStreamName(name string, prefix bool) []string {
-	if reasons := oapi.MinimalNameRequirements(name, prefix); len(reasons) != 0 {
+	if reasons := path.ValidatePathSegmentName(name, prefix); len(reasons) != 0 {
 		return reasons
 	}
 
@@ -50,7 +53,7 @@ func ValidateImage(image *api.Image) field.ErrorList {
 }
 
 func validateImage(image *api.Image, fldPath *field.Path) field.ErrorList {
-	result := validation.ValidateObjectMeta(&image.ObjectMeta, false, oapi.MinimalNameRequirements, fldPath.Child("metadata"))
+	result := validation.ValidateObjectMeta(&image.ObjectMeta, false, path.ValidatePathSegmentName, fldPath.Child("metadata"))
 
 	if len(image.DockerImageReference) == 0 {
 		result = append(result, field.Required(fldPath.Child("dockerImageReference"), ""))
@@ -67,9 +70,30 @@ func validateImage(image *api.Image, fldPath *field.Path) field.ErrorList {
 	return result
 }
 
-func validateImageSignature(signature *api.ImageSignature, fldPath *field.Path) field.ErrorList {
-	allErrs := field.ErrorList{}
+func ValidateImageUpdate(newImage, oldImage *api.Image) field.ErrorList {
+	result := validation.ValidateObjectMetaUpdate(&newImage.ObjectMeta, &oldImage.ObjectMeta, field.NewPath("metadata"))
+	result = append(result, ValidateImage(newImage)...)
 
+	return result
+}
+
+// ValidateImageSignature ensures that given signatures is valid.
+func ValidateImageSignature(signature *api.ImageSignature) field.ErrorList {
+	return validateImageSignature(signature, nil)
+}
+
+func validateImageSignature(signature *api.ImageSignature, fldPath *field.Path) field.ErrorList {
+	allErrs := validation.ValidateObjectMeta(&signature.ObjectMeta, false, path.ValidatePathSegmentName, fldPath.Child("metadata"))
+	if len(signature.Labels) > 0 {
+		allErrs = append(allErrs, field.Forbidden(fldPath.Child("metadata").Child("labels"), "signature labels cannot be set"))
+	}
+	if len(signature.Annotations) > 0 {
+		allErrs = append(allErrs, field.Forbidden(fldPath.Child("metadata").Child("annotations"), "signature annotations cannot be set"))
+	}
+
+	if _, _, err := api.SplitImageSignatureName(signature.Name); err != nil {
+		allErrs = append(allErrs, field.Invalid(fldPath.Child("metadata").Child("name"), signature.Name, "name must be of format <imageName>@<signatureName>"))
+	}
 	if len(signature.Type) == 0 {
 		allErrs = append(allErrs, field.Required(fldPath.Child("type"), ""))
 	}
@@ -113,11 +137,19 @@ func validateImageSignature(signature *api.ImageSignature, fldPath *field.Path) 
 	return allErrs
 }
 
-func ValidateImageUpdate(newImage, oldImage *api.Image) field.ErrorList {
-	result := validation.ValidateObjectMetaUpdate(&newImage.ObjectMeta, &oldImage.ObjectMeta, field.NewPath("metadata"))
-	result = append(result, ValidateImage(newImage)...)
+// ValidateImageSignatureUpdate ensures that the new ImageSignature is valid.
+func ValidateImageSignatureUpdate(newImageSignature, oldImageSignature *api.ImageSignature) field.ErrorList {
+	allErrs := validation.ValidateObjectMetaUpdate(&newImageSignature.ObjectMeta, &oldImageSignature.ObjectMeta, field.NewPath("metadata"))
+	allErrs = append(allErrs, ValidateImageSignature(newImageSignature)...)
 
-	return result
+	if newImageSignature.Type != oldImageSignature.Type {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("type"), "cannot change signature type"))
+	}
+	if !bytes.Equal(newImageSignature.Content, oldImageSignature.Content) {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("content"), "cannot change signature content"))
+	}
+
+	return allErrs
 }
 
 // ValidateImageStream tests required fields for an ImageStream.
@@ -162,11 +194,13 @@ func ValidateImageStreamTagReference(tagRef api.TagReference, fldPath *field.Pat
 	var errs field.ErrorList
 	if tagRef.From != nil {
 		if len(tagRef.From.Name) == 0 {
-			errs = append(errs, field.Required(fldPath.Child("from", "name"), "name is required"))
+			errs = append(errs, field.Required(fldPath.Child("from", "name"), ""))
 		}
 		switch tagRef.From.Kind {
 		case "DockerImage":
-			if ref, err := api.ParseDockerImageReference(tagRef.From.Name); err == nil && tagRef.ImportPolicy.Scheduled && len(ref.ID) > 0 {
+			if ref, err := api.ParseDockerImageReference(tagRef.From.Name); err != nil && len(tagRef.From.Name) > 0 {
+				errs = append(errs, field.Invalid(fldPath.Child("from", "name"), tagRef.From.Name, err.Error()))
+			} else if len(ref.ID) > 0 && tagRef.ImportPolicy.Scheduled {
 				errs = append(errs, field.Invalid(fldPath.Child("from", "name"), tagRef.From.Name, "only tags can be scheduled for import"))
 			}
 		case "ImageStreamImage", "ImageStreamTag":
@@ -176,6 +210,11 @@ func ValidateImageStreamTagReference(tagRef api.TagReference, fldPath *field.Pat
 		default:
 			errs = append(errs, field.Required(fldPath.Child("from", "kind"), "valid values are 'DockerImage', 'ImageStreamImage', 'ImageStreamTag'"))
 		}
+	}
+	switch tagRef.ReferencePolicy.Type {
+	case api.SourceTagReferencePolicy, api.LocalTagReferencePolicy:
+	default:
+		errs = append(errs, field.Invalid(fldPath.Child("referencePolicy", "type"), tagRef.ReferencePolicy.Type, fmt.Sprintf("valid values are %q, %q", api.SourceTagReferencePolicy, api.LocalTagReferencePolicy)))
 	}
 	return errs
 }
@@ -195,7 +234,7 @@ func ValidateImageStreamStatusUpdate(newStream, oldStream *api.ImageStream) fiel
 
 // ValidateImageStreamMapping tests required fields for an ImageStreamMapping.
 func ValidateImageStreamMapping(mapping *api.ImageStreamMapping) field.ErrorList {
-	result := validation.ValidateObjectMeta(&mapping.ObjectMeta, true, oapi.MinimalNameRequirements, field.NewPath("metadata"))
+	result := validation.ValidateObjectMeta(&mapping.ObjectMeta, true, path.ValidatePathSegmentName, field.NewPath("metadata"))
 
 	hasRepository := len(mapping.DockerImageRepository) != 0
 	hasName := len(mapping.Name) != 0
@@ -224,7 +263,7 @@ func ValidateImageStreamMapping(mapping *api.ImageStreamMapping) field.ErrorList
 
 // ValidateImageStreamTag validates a mutation of an image stream tag, which can happen on PUT
 func ValidateImageStreamTag(ist *api.ImageStreamTag) field.ErrorList {
-	result := validation.ValidateObjectMeta(&ist.ObjectMeta, true, oapi.MinimalNameRequirements, field.NewPath("metadata"))
+	result := validation.ValidateObjectMeta(&ist.ObjectMeta, true, path.ValidatePathSegmentName, field.NewPath("metadata"))
 	if ist.Tag != nil {
 		result = append(result, ValidateImageStreamTagReference(*ist.Tag, field.NewPath("tag"))...)
 		if ist.Tag.Annotations != nil && !kapi.Semantic.DeepEqual(ist.Tag.Annotations, ist.ObjectMeta.Annotations) {
@@ -260,6 +299,37 @@ func ValidateImageStreamTagUpdate(newIST, oldIST *api.ImageStreamTag) field.Erro
 	return result
 }
 
+func ValidateRegistryAllowedForImport(path *field.Path, name, registryHost, registryPort string, allowedRegistries *serverapi.AllowedRegistries) field.ErrorList {
+	errs := field.ErrorList{}
+	if allowedRegistries == nil {
+		return errs
+	}
+	allowedRegistriesForHumans := []string{}
+	for _, registry := range *allowedRegistries {
+		allowedRegistryHost, allowedRegistryPort := "", ""
+		parts := strings.Split(registry.DomainName, ":")
+		switch len(parts) {
+		case 1:
+			allowedRegistryHost = parts[0]
+			if registry.Insecure {
+				allowedRegistryPort = "80"
+			} else {
+				allowedRegistryPort = "443"
+			}
+		case 2:
+			allowedRegistryHost, allowedRegistryPort = parts[0], parts[1]
+		default:
+			continue
+		}
+		if stringsutil.IsWildcardMatch(registryHost, allowedRegistryHost) && stringsutil.IsWildcardMatch(registryPort, allowedRegistryPort) {
+			return errs
+		}
+		allowedRegistriesForHumans = append(allowedRegistriesForHumans, registry.DomainName)
+	}
+	return append(errs, field.Invalid(path, name,
+		fmt.Sprintf("importing images from registry %q is forbidden, only images from %q are allowed", registryHost+":"+registryPort, strings.Join(allowedRegistriesForHumans, ","))))
+}
+
 func ValidateImageStreamImport(isi *api.ImageStreamImport) field.ErrorList {
 	specPath := field.NewPath("spec")
 	imagesPath := specPath.Child("images")
@@ -276,6 +346,13 @@ func ValidateImageStreamImport(isi *api.ImageStreamImport) field.ErrorList {
 			if len(spec.From.Name) == 0 {
 				errs = append(errs, field.Required(imagesPath.Index(i).Child("from", "name"), ""))
 			} else {
+				// The ParseDockerImageReference qualifies '*' as a wrong name.
+				// The legacy clients use this character to look up imagestreams.
+				// TODO: This should be removed in 1.6
+				// See for more info: https://github.com/openshift/origin/pull/11774#issuecomment-258905994
+				if spec.From.Name == "*" {
+					continue
+				}
 				if ref, err := api.ParseDockerImageReference(spec.From.Name); err != nil {
 					errs = append(errs, field.Invalid(imagesPath.Index(i).Child("from", "name"), spec.From.Name, err.Error()))
 				} else {
@@ -294,7 +371,7 @@ func ValidateImageStreamImport(isi *api.ImageStreamImport) field.ErrorList {
 		switch from.Kind {
 		case "DockerImage":
 			if len(spec.From.Name) == 0 {
-				errs = append(errs, field.Required(repoPath.Child("from", "name"), ""))
+				errs = append(errs, field.Required(repoPath.Child("from", "name"), "Docker image references require a name"))
 			} else {
 				if ref, err := api.ParseDockerImageReference(from.Name); err != nil {
 					errs = append(errs, field.Invalid(repoPath.Child("from", "name"), from.Name, err.Error()))

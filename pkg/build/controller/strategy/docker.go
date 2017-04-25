@@ -3,11 +3,11 @@ package strategy
 import (
 	"fmt"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/runtime"
 
 	buildapi "github.com/openshift/origin/pkg/build/api"
-	cmdutil "github.com/openshift/origin/pkg/cmd/util"
 )
 
 // DockerBuildStrategy creates a Docker build using a Docker builder image.
@@ -32,7 +32,6 @@ func (bs *DockerBuildStrategy) CreateBuildPod(build *buildapi.Build) (*kapi.Pod,
 
 	containerEnv := []kapi.EnvVar{
 		{Name: "BUILD", Value: string(data)},
-		{Name: "BUILD_LOGLEVEL", Value: fmt.Sprintf("%d", cmdutil.GetLogLevel())},
 	}
 
 	addSourceEnvVars(build.Spec.Source, &containerEnv)
@@ -43,7 +42,7 @@ func (bs *DockerBuildStrategy) CreateBuildPod(build *buildapi.Build) (*kapi.Pod,
 	}
 
 	pod := &kapi.Pod{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      buildapi.GetBuildPodName(build),
 			Namespace: build.Namespace,
 			Labels:    getPodLabels(build),
@@ -55,7 +54,7 @@ func (bs *DockerBuildStrategy) CreateBuildPod(build *buildapi.Build) (*kapi.Pod,
 					Name:  "docker-build",
 					Image: bs.Image,
 					Env:   containerEnv,
-					Args:  []string{"--loglevel=" + getContainerVerbosity(containerEnv)},
+					Args:  []string{},
 					// TODO: run unprivileged https://github.com/openshift/origin/issues/662
 					SecurityContext: &kapi.SecurityContext{
 						Privileged: &privileged,
@@ -63,6 +62,7 @@ func (bs *DockerBuildStrategy) CreateBuildPod(build *buildapi.Build) (*kapi.Pod,
 				},
 			},
 			RestartPolicy: kapi.RestartPolicyNever,
+			NodeSelector:  build.Spec.NodeSelector,
 		},
 	}
 	pod.Spec.Containers[0].ImagePullPolicy = kapi.PullIfNotPresent

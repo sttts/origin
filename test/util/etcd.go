@@ -1,21 +1,24 @@
 package util
 
 import (
+	"encoding/json"
 	"flag"
-	"fmt"
-	"io/ioutil"
-	"log"
-	"math/rand"
 	"os"
+	goruntime "runtime"
+	"strings"
 	"testing"
+
+	"golang.org/x/net/context"
 
 	"github.com/coreos/pkg/capnslog"
 
-	newetcdclient "github.com/coreos/etcd/client"
-	"github.com/coreos/go-etcd/etcd"
+	etcdclient "github.com/coreos/etcd/client"
+	etcdclientv3 "github.com/coreos/etcd/clientv3"
 
+	etcdtest "k8s.io/apiserver/pkg/storage/etcd/testing"
+	"k8s.io/apiserver/pkg/storage/storagebackend"
+	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/capabilities"
-	etcdtest "k8s.io/kubernetes/pkg/storage/etcd/testing"
 
 	serveretcd "github.com/openshift/origin/pkg/cmd/server/etcd"
 )
@@ -44,27 +47,46 @@ func RequireEtcd(t *testing.T) *etcdtest.EtcdTestServer {
 	return s
 }
 
-func NewEtcdClient() *etcd.Client {
-	etcdServers := []string{GetEtcdURL()}
+func RequireEtcd3(t *testing.T) (*etcdtest.EtcdTestServer, *storagebackend.Config) {
+	s, c := etcdtest.NewUnsecuredEtcd3TestClientServer(t, kapi.Scheme)
+	url = s.V3Client.Endpoints()[0]
+	return s, c
+}
 
-	client := etcd.NewClient(etcdServers)
-	if err := serveretcd.TestEtcdClient(client); err != nil {
-		panic(err)
-	}
+func NewEtcdClient() etcdclient.Client {
+	client, _ := MakeNewEtcdClient()
 	return client
 }
 
-func MakeNewEtcdClient() (newetcdclient.Client, error) {
+func MakeNewEtcdClient() (etcdclient.Client, error) {
 	etcdServers := []string{GetEtcdURL()}
 
-	cfg := newetcdclient.Config{
+	cfg := etcdclient.Config{
 		Endpoints: etcdServers,
 	}
-	client, err := newetcdclient.New(cfg)
+	client, err := etcdclient.New(cfg)
 	if err != nil {
 		return nil, err
 	}
-	return client, serveretcd.TestNewEtcdClient(client)
+	return client, serveretcd.TestEtcdClient(client)
+}
+
+func NewEtcd3Client() *etcdclientv3.Client {
+	client, _ := MakeNewEtcd3Client()
+	return client
+}
+
+func MakeNewEtcd3Client() (*etcdclientv3.Client, error) {
+	etcdServers := []string{GetEtcdURL()}
+
+	cfg := etcdclientv3.Config{
+		Endpoints: etcdServers,
+	}
+	client, err := etcdclientv3.New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return client, serveretcd.TestEtcdClientV3(client)
 }
 
 func GetEtcdURL() string {
@@ -74,30 +96,44 @@ func GetEtcdURL() string {
 	return url
 }
 
-func logEtcd() {
-	etcd.SetLogger(log.New(os.Stderr, "go-etcd", log.LstdFlags))
-}
-
-func withEtcdKey(f func(string)) {
-	prefix := fmt.Sprintf("/test-%d", rand.Int63())
-	defer NewEtcdClient().Delete(prefix, true)
-	f(prefix)
-}
-
-func DumpEtcdOnFailure(t *testing.T, name string) {
+func DumpEtcdOnFailure(t *testing.T) {
 	if !t.Failed() {
 		return
 	}
 
+	pc := make([]uintptr, 10)
+	goruntime.Callers(2, pc)
+	f := goruntime.FuncForPC(pc[0])
+	last := strings.LastIndex(f.Name(), "Test")
+	if last == -1 {
+		last = 0
+	}
+	name := f.Name()[last:]
 	client := NewEtcdClient()
-	etcdResponse, err := client.RawGet("/", false, true)
+	keyClient := etcdclient.NewKeysAPI(client)
+
+	response, err := keyClient.Get(context.Background(), "/", &etcdclient.GetOptions{Recursive: true, Sort: true})
 	if err != nil {
 		t.Logf("error dumping etcd: %v", err)
 		return
 	}
-
-	if err := ioutil.WriteFile(GetBaseDir()+"/etcd-dump-"+name+".json", etcdResponse.Body, os.FileMode(0444)); err != nil {
-		t.Logf("error dumping etcd: %v", err)
+	jsonResponse, err := json.Marshal(response.Node)
+	if err != nil {
+		t.Logf("error encoding etcd dump: %v", err)
 		return
 	}
+
+	t.Logf("dumping etcd to %q", GetBaseDir()+"/etcd-dump-"+name+".json")
+	dumpFile, err := os.OpenFile(GetBaseDir()+"/etcd-dump-"+name+".json", os.O_WRONLY|os.O_CREATE, 0444)
+	if err != nil {
+		t.Logf("error writing etcd dump: %v", err)
+		return
+	}
+	defer dumpFile.Close()
+	_, err = dumpFile.Write(jsonResponse)
+	if err != nil {
+		t.Logf("error writing etcd dump: %v", err)
+		return
+	}
+
 }

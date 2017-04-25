@@ -11,59 +11,61 @@ import (
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/api/unversioned"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
-	"k8s.io/kubernetes/pkg/runtime"
 
 	buildapi "github.com/openshift/origin/pkg/build/api"
 	buildutil "github.com/openshift/origin/pkg/build/util"
+	"github.com/openshift/origin/pkg/cmd/templates"
 	cmdutil "github.com/openshift/origin/pkg/cmd/util"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	"github.com/openshift/origin/pkg/generate/app"
 	imageapi "github.com/openshift/origin/pkg/image/api"
-	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/sets"
 )
 
-const (
-	triggersLong = `
-Set or remove triggers for build configs and deployment configs
+var (
+	triggersLong = templates.LongDesc(`
+		Set or remove triggers for build configs and deployment configs
 
-All build configs and deployment configs may have a set of triggers that result in a new deployment
-or build being created. This command enables you to alter those triggers - making them automatic or
-manual, adding new entries, or changing existing entries.
+		All build configs and deployment configs may have a set of triggers that result in a new deployment
+		or build being created. This command enables you to alter those triggers - making them automatic or
+		manual, adding new entries, or changing existing entries.
 
-Deployments support triggering off of image changes and on config changes. Config changes are any
-alterations to the pod template, while image changes will result in the container image value being
-updated whenever an image stream tag is updated.
+		Deployments support triggering off of image changes and on config changes. Config changes are any
+		alterations to the pod template, while image changes will result in the container image value being
+		updated whenever an image stream tag is updated.
 
-Build configs support triggering off of image changes, config changes, and webhooks (both GitHub-specific
-and generic). The config change trigger for a build config will only trigger the first build.`
+		Build configs support triggering off of image changes, config changes, and webhooks (both GitHub-specific
+		and generic). The config change trigger for a build config will only trigger the first build.`)
 
-	triggersExample = `  # Print the triggers on the registry
-  %[1]s triggers dc/registry
+	triggersExample = templates.Examples(`
+		# Print the triggers on the registry
+	  %[1]s triggers dc/registry
 
-  # Set all triggers to manual
-  %[1]s triggers dc/registry --manual
+	  # Set all triggers to manual
+	  %[1]s triggers dc/registry --manual
 
-  # Enable all automatic triggers
-  %[1]s triggers dc/registry --auto
+	  # Enable all automatic triggers
+	  %[1]s triggers dc/registry --auto
 
-  # Reset the GitHub webhook on a build to a new, generated secret
-  %[1]s triggers bc/webapp --from-github
-  %[1]s triggers bc/webapp --from-webhook
+	  # Reset the GitHub webhook on a build to a new, generated secret
+	  %[1]s triggers bc/webapp --from-github
+	  %[1]s triggers bc/webapp --from-webhook
 
-  # Remove all triggers
-  %[1]s triggers bc/webapp --remove-all
+	  # Remove all triggers
+	  %[1]s triggers bc/webapp --remove-all
 
-  # Stop triggering on config change
-  %[1]s triggers dc/registry --from-config --remove
+	  # Stop triggering on config change
+	  %[1]s triggers dc/registry --from-config --remove
 
-  # Add an image trigger to a build config
-  %[1]s triggers bc/webapp --from-image=namespace1/image:latest`
+	  # Add an image trigger to a build config
+	  %[1]s triggers bc/webapp --from-image=namespace1/image:latest`)
 )
 
 type TriggersOptions struct {
@@ -79,12 +81,11 @@ type TriggersOptions struct {
 
 	Encoder runtime.Encoder
 
-	ShortOutput   bool
-	Mapper        meta.RESTMapper
-	OutputVersion unversioned.GroupVersion
+	ShortOutput bool
+	Mapper      meta.RESTMapper
 
 	PrintTable  bool
-	PrintObject func(runtime.Object) error
+	PrintObject func([]*resource.Info) error
 
 	Remove    bool
 	RemoveAll bool
@@ -97,6 +98,8 @@ type TriggersOptions struct {
 	FromGitHub          *bool
 	FromWebHook         *bool
 	FromWebHookAllowEnv *bool
+	FromGitLab          *bool
+	FromBitbucket       *bool
 	FromImage           string
 	// FromImageNamespace is the namespace for the FromImage
 	FromImageNamespace string
@@ -117,7 +120,7 @@ func NewCmdTriggers(fullName string, f *clientcmd.Factory, out, errOut io.Writer
 			kcmdutil.CheckErr(options.Complete(f, cmd, args))
 			kcmdutil.CheckErr(options.Validate())
 			if err := options.Run(); err != nil {
-				// TODO: move met to kcmdutil
+				// TODO: move me to kcmdutil
 				if err == cmdutil.ErrExit {
 					os.Exit(1)
 				}
@@ -128,20 +131,22 @@ func NewCmdTriggers(fullName string, f *clientcmd.Factory, out, errOut io.Writer
 
 	kcmdutil.AddPrinterFlags(cmd)
 	cmd.Flags().StringVarP(&options.Selector, "selector", "l", options.Selector, "Selector (label query) to filter on")
-	cmd.Flags().BoolVar(&options.All, "all", options.All, "Select all resources in the namespace of the specified resource types")
+	cmd.Flags().BoolVar(&options.All, "all", options.All, "If true, select all resources in the namespace of the specified resource types")
 	cmd.Flags().StringSliceVarP(&options.Filenames, "filename", "f", options.Filenames, "Filename, directory, or URL to file to use to edit the resource.")
 
 	cmd.Flags().BoolVar(&options.Remove, "remove", options.Remove, "If true, remove the specified trigger(s).")
 	cmd.Flags().BoolVar(&options.RemoveAll, "remove-all", options.RemoveAll, "If true, remove all triggers.")
-	cmd.Flags().BoolVar(&options.Auto, "auto", options.Auto, "Enable all triggers, or just the specified trigger")
-	cmd.Flags().BoolVar(&options.Manual, "manual", options.Manual, "Set all triggers to manual, or just the specified trigger")
+	cmd.Flags().BoolVar(&options.Auto, "auto", options.Auto, "If true, enable all triggers, or just the specified trigger")
+	cmd.Flags().BoolVar(&options.Manual, "manual", options.Manual, "If true, set all triggers to manual, or just the specified trigger")
 
 	cmd.Flags().BoolVar(&options.FromConfig, "from-config", options.FromConfig, "If set, configuration changes will result in a change")
 	cmd.Flags().StringVarP(&options.ContainerNames, "containers", "c", options.ContainerNames, "Comma delimited list of container names this trigger applies to on deployments; defaults to the name of the only container")
 	cmd.Flags().StringVar(&options.FromImage, "from-image", options.FromImage, "An image stream tag to trigger off of")
-	options.FromGitHub = cmd.Flags().Bool("from-github", false, "A GitHub webhook - a secret value will be generated automatically")
-	options.FromWebHook = cmd.Flags().Bool("from-webhook", false, "A generic webhook - a secret value will be generated automatically")
-	options.FromWebHookAllowEnv = cmd.Flags().Bool("from-webhook-allow-env", false, "A generic webhook which can provide environment variables - a secret value will be generated automatically")
+	options.FromGitHub = cmd.Flags().Bool("from-github", false, "If true, a GitHub webhook - a secret value will be generated automatically")
+	options.FromWebHook = cmd.Flags().Bool("from-webhook", false, "If true, a generic webhook - a secret value will be generated automatically")
+	options.FromWebHookAllowEnv = cmd.Flags().Bool("from-webhook-allow-env", false, "If true, a generic webhook which can provide environment variables - a secret value will be generated automatically")
+	options.FromGitLab = cmd.Flags().Bool("from-gitlab", false, "If true, a GitLab webhook - a secret value will be generated automatically")
+	options.FromBitbucket = cmd.Flags().Bool("from-bitbucket", false, "If true, a Bitbucket webhook - a secret value will be generated automatically")
 
 	cmd.MarkFlagFilename("filename", "yaml", "yml", "json")
 
@@ -154,16 +159,6 @@ func (o *TriggersOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, arg
 		return err
 	}
 
-	clientConfig, err := f.ClientConfig()
-	if err != nil {
-		return err
-	}
-
-	o.OutputVersion, err = kcmdutil.OutputVersion(cmd, clientConfig.GroupVersion)
-	if err != nil {
-		return err
-	}
-
 	if !cmd.Flags().Lookup("from-github").Changed {
 		o.FromGitHub = nil
 	}
@@ -172,6 +167,12 @@ func (o *TriggersOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, arg
 	}
 	if !cmd.Flags().Lookup("from-webhook-allow-env").Changed {
 		o.FromWebHookAllowEnv = nil
+	}
+	if !cmd.Flags().Lookup("from-gitlab").Changed {
+		o.FromGitLab = nil
+	}
+	if !cmd.Flags().Lookup("from-bitbucket").Changed {
+		o.FromBitbucket = nil
 	}
 
 	if len(o.FromImage) > 0 {
@@ -198,18 +199,20 @@ func (o *TriggersOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, arg
 		o.Auto = true
 	}
 
-	mapper, typer := f.Object(false)
+	mapper, typer := f.Object()
 	o.Builder = resource.NewBuilder(mapper, typer, resource.ClientMapperFunc(f.ClientForMapping), kapi.Codecs.UniversalDecoder()).
 		ContinueOnError().
 		NamespaceParam(cmdNamespace).DefaultNamespace().
-		FilenameParam(explicit, false, o.Filenames...).
+		FilenameParam(explicit, &resource.FilenameOptions{Recursive: false, Filenames: o.Filenames}).
 		SelectorParam(o.Selector).
 		ResourceTypeOrNameArgs(o.All, args...).
 		Flatten()
 
 	output := kcmdutil.GetFlagString(cmd, "output")
-	if len(output) != 0 {
-		o.PrintObject = func(obj runtime.Object) error { return f.PrintObject(cmd, mapper, obj, o.Out) }
+	if len(output) > 0 {
+		o.PrintObject = func(infos []*resource.Info) error {
+			return f.PrintResourceInfos(cmd, infos, o.Out)
+		}
 	}
 
 	o.Encoder = f.JSONEncoder()
@@ -231,6 +234,12 @@ func (o *TriggersOptions) count() int {
 		count++
 	}
 	if o.FromWebHookAllowEnv != nil {
+		count++
+	}
+	if o.FromGitLab != nil {
+		count++
+	}
+	if o.FromBitbucket != nil {
 		count++
 	}
 	if len(o.FromImage) > 0 {
@@ -260,9 +269,9 @@ func (o *TriggersOptions) Validate() error {
 
 func (o *TriggersOptions) Run() error {
 	infos := o.Infos
-	singular := len(o.Infos) <= 1
+	singleItemImplied := len(o.Infos) <= 1
 	if o.Builder != nil {
-		loaded, err := o.Builder.Do().IntoSingular(&singular).Infos()
+		loaded, err := o.Builder.Do().IntoSingleItemImplied(&singleItemImplied).Infos()
 		if err != nil {
 			return err
 		}
@@ -280,15 +289,11 @@ func (o *TriggersOptions) Run() error {
 	patches := CalculatePatches(infos, o.Encoder, func(info *resource.Info) (bool, error) {
 		return UpdateTriggersForObject(info.Object, updateTriggerFn)
 	})
-	if singular && len(patches) == 0 {
+	if singleItemImplied && len(patches) == 0 {
 		return fmt.Errorf("%s/%s is not a deployment config or build config", infos[0].Mapping.Resource, infos[0].Name)
 	}
 	if o.PrintObject != nil {
-		object, err := resource.AsVersionedObject(infos, !singular, o.OutputVersion, kapi.Codecs.LegacyCodec(o.OutputVersion))
-		if err != nil {
-			return err
-		}
-		return o.PrintObject(object)
+		return o.PrintObject(infos)
 	}
 
 	failed := false
@@ -307,7 +312,7 @@ func (o *TriggersOptions) Run() error {
 
 		glog.V(4).Infof("Calculated patch %s", patch.Patch)
 
-		obj, err := resource.NewHelper(info.Client, info.Mapping).Patch(info.Namespace, info.Name, kapi.StrategicMergePatchType, patch.Patch)
+		obj, err := resource.NewHelper(info.Client, info.Mapping).Patch(info.Namespace, info.Name, types.StrategicMergePatchType, patch.Patch)
 		if err != nil {
 			handlePodUpdateError(o.Err, err, "triggered")
 			failed = true
@@ -315,7 +320,7 @@ func (o *TriggersOptions) Run() error {
 		}
 
 		info.Refresh(obj, true)
-		kcmdutil.PrintSuccess(o.Mapper, o.ShortOutput, o.Out, info.Mapping.Resource, info.Name, "updated")
+		kcmdutil.PrintSuccess(o.Mapper, o.ShortOutput, o.Out, info.Mapping.Resource, info.Name, false, "updated")
 	}
 	if failed {
 		return cmdutil.ErrExit
@@ -352,6 +357,12 @@ func (o *TriggersOptions) printTriggers(infos []*resource.Info) error {
 			}
 			for _, s := range triggers.GitHubWebHooks {
 				fmt.Fprintf(w, "%s/%s\t%s\t%s\t%s\n", info.Mapping.Resource, info.Name, "github", s, "")
+			}
+			for _, s := range triggers.GitLabWebHooks {
+				fmt.Fprintf(w, "%s/%s\t%s\t%s\t%s\n", info.Mapping.Resource, info.Name, "gitlab", s, "")
+			}
+			for _, s := range triggers.BitbucketWebHooks {
+				fmt.Fprintf(w, "%s/%s\t%s\t%s\t%s\n", info.Mapping.Resource, info.Name, "bitbucket", s, "")
 			}
 			return nil
 		})
@@ -393,6 +404,12 @@ func (o *TriggersOptions) updateTriggers(triggers *TriggerDefinition) {
 		}
 		if o.FromGitHub != nil && *o.FromGitHub {
 			triggers.GitHubWebHooks = nil
+		}
+		if o.FromGitLab != nil && *o.FromGitLab {
+			triggers.GitLabWebHooks = nil
+		}
+		if o.FromBitbucket != nil && *o.FromBitbucket {
+			triggers.BitbucketWebHooks = nil
 		}
 		return
 	}
@@ -443,6 +460,12 @@ func (o *TriggersOptions) updateTriggers(triggers *TriggerDefinition) {
 	if o.FromGitHub != nil && *o.FromGitHub {
 		triggers.GitHubWebHooks = []string{app.GenerateSecret(20)}
 	}
+	if o.FromGitLab != nil && *o.FromGitLab {
+		triggers.GitLabWebHooks = []string{app.GenerateSecret(20)}
+	}
+	if o.FromBitbucket != nil && *o.FromBitbucket {
+		triggers.BitbucketWebHooks = []string{app.GenerateSecret(20)}
+	}
 }
 
 // ImageChangeTrigger represents the capabilities present in deployment config and build
@@ -460,11 +483,13 @@ type ImageChangeTrigger struct {
 
 // TriggerDefinition is the abstract representation of triggers for builds and deploymnet configs.
 type TriggerDefinition struct {
-	ConfigChange     bool
-	ImageChange      []ImageChangeTrigger
-	WebHooks         []string
-	WebHooksAllowEnv bool
-	GitHubWebHooks   []string
+	ConfigChange      bool
+	ImageChange       []ImageChangeTrigger
+	WebHooks          []string
+	WebHooksAllowEnv  bool
+	GitHubWebHooks    []string
+	GitLabWebHooks    []string
+	BitbucketWebHooks []string
 }
 
 // defaultNamespace returns an empty string if the provided namespace matches the default namespace, or
@@ -508,6 +533,10 @@ func NewBuildConfigTriggers(config *buildapi.BuildConfig) *TriggerDefinition {
 			t.WebHooksAllowEnv = trigger.GenericWebHook.AllowEnv
 		case buildapi.GitHubWebHookBuildTriggerType:
 			t.GitHubWebHooks = append(t.GitHubWebHooks, trigger.GitHubWebHook.Secret)
+		case buildapi.GitLabWebHookBuildTriggerType:
+			t.GitLabWebHooks = append(t.GitLabWebHooks, trigger.GitLabWebHook.Secret)
+		case buildapi.BitbucketWebHookBuildTriggerType:
+			t.BitbucketWebHooks = append(t.BitbucketWebHooks, trigger.BitbucketWebHook.Secret)
 		case buildapi.ImageChangeBuildTriggerType:
 			if trigger.ImageChange.From == nil {
 				if strategyTrigger := strategyTrigger(config); strategyTrigger != nil {
@@ -543,6 +572,12 @@ func (t *TriggerDefinition) Apply(obj runtime.Object) error {
 		}
 		if len(t.WebHooks) > 0 {
 			return fmt.Errorf("deployment configs do not support web hooks")
+		}
+		if len(t.GitLabWebHooks) > 0 {
+			return fmt.Errorf("deployment configs do not support GitLab web hooks")
+		}
+		if len(t.BitbucketWebHooks) > 0 {
+			return fmt.Errorf("deployment configs do not support Bitbucket web hooks")
 		}
 
 		existingTriggers := filterDeploymentTriggers(c.Spec.Triggers, deployapi.DeploymentTriggerOnConfigChange)
@@ -598,6 +633,22 @@ func (t *TriggerDefinition) Apply(obj runtime.Object) error {
 			triggers = append(triggers, buildapi.BuildTriggerPolicy{
 				Type: buildapi.GitHubWebHookBuildTriggerType,
 				GitHubWebHook: &buildapi.WebHookTrigger{
+					Secret: trigger,
+				},
+			})
+		}
+		for _, trigger := range t.GitLabWebHooks {
+			triggers = append(triggers, buildapi.BuildTriggerPolicy{
+				Type: buildapi.GitLabWebHookBuildTriggerType,
+				GitLabWebHook: &buildapi.WebHookTrigger{
+					Secret: trigger,
+				},
+			})
+		}
+		for _, trigger := range t.BitbucketWebHooks {
+			triggers = append(triggers, buildapi.BuildTriggerPolicy{
+				Type: buildapi.BitbucketWebHookBuildTriggerType,
+				BitbucketWebHook: &buildapi.WebHookTrigger{
 					Secret: trigger,
 				},
 			})

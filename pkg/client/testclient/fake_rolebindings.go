@@ -1,8 +1,9 @@
 package testclient
 
 import (
-	kapi "k8s.io/kubernetes/pkg/api"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	clientgotesting "k8s.io/client-go/testing"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 )
@@ -14,8 +15,10 @@ type FakeRoleBindings struct {
 	Namespace string
 }
 
-func (c *FakeRoleBindings) Get(name string) (*authorizationapi.RoleBinding, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewGetAction("rolebindings", c.Namespace, name), &authorizationapi.RoleBinding{})
+var roleBindingsResource = schema.GroupVersionResource{Group: "", Version: "", Resource: "rolebindings"}
+
+func (c *FakeRoleBindings) Get(name string, options metav1.GetOptions) (*authorizationapi.RoleBinding, error) {
+	obj, err := c.Fake.Invokes(clientgotesting.NewGetAction(roleBindingsResource, c.Namespace, name), &authorizationapi.RoleBinding{})
 	if obj == nil {
 		return nil, err
 	}
@@ -23,8 +26,8 @@ func (c *FakeRoleBindings) Get(name string) (*authorizationapi.RoleBinding, erro
 	return obj.(*authorizationapi.RoleBinding), err
 }
 
-func (c *FakeRoleBindings) List(opts kapi.ListOptions) (*authorizationapi.RoleBindingList, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewListAction("rolebindings", c.Namespace, opts), &authorizationapi.RoleBindingList{})
+func (c *FakeRoleBindings) List(opts metav1.ListOptions) (*authorizationapi.RoleBindingList, error) {
+	obj, err := c.Fake.Invokes(clientgotesting.NewListAction(roleBindingsResource, c.Namespace, opts), &authorizationapi.RoleBindingList{})
 	if obj == nil {
 		return nil, err
 	}
@@ -33,7 +36,7 @@ func (c *FakeRoleBindings) List(opts kapi.ListOptions) (*authorizationapi.RoleBi
 }
 
 func (c *FakeRoleBindings) Create(inObj *authorizationapi.RoleBinding) (*authorizationapi.RoleBinding, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewCreateAction("rolebindings", c.Namespace, inObj), inObj)
+	obj, err := c.Fake.Invokes(clientgotesting.NewCreateAction(roleBindingsResource, c.Namespace, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -42,7 +45,7 @@ func (c *FakeRoleBindings) Create(inObj *authorizationapi.RoleBinding) (*authori
 }
 
 func (c *FakeRoleBindings) Update(inObj *authorizationapi.RoleBinding) (*authorizationapi.RoleBinding, error) {
-	obj, err := c.Fake.Invokes(ktestclient.NewUpdateAction("rolebindings", c.Namespace, inObj), inObj)
+	obj, err := c.Fake.Invokes(clientgotesting.NewUpdateAction(roleBindingsResource, c.Namespace, inObj), inObj)
 	if obj == nil {
 		return nil, err
 	}
@@ -51,6 +54,6 @@ func (c *FakeRoleBindings) Update(inObj *authorizationapi.RoleBinding) (*authori
 }
 
 func (c *FakeRoleBindings) Delete(name string) error {
-	_, err := c.Fake.Invokes(ktestclient.NewDeleteAction("rolebindings", c.Namespace, name), &authorizationapi.RoleBinding{})
+	_, err := c.Fake.Invokes(clientgotesting.NewDeleteAction(roleBindingsResource, c.Namespace, name), &authorizationapi.RoleBinding{})
 	return err
 }

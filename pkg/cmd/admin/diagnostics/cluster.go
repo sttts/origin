@@ -5,22 +5,33 @@ import (
 	"regexp"
 	"strings"
 
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
-	clientcmd "k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
-	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
-	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/sets"
+	clientcmd "k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	"github.com/openshift/origin/pkg/client"
 	osclientcmd "github.com/openshift/origin/pkg/cmd/util/clientcmd"
 	clustdiags "github.com/openshift/origin/pkg/diagnostics/cluster"
+	agldiags "github.com/openshift/origin/pkg/diagnostics/cluster/aggregated_logging"
 	"github.com/openshift/origin/pkg/diagnostics/types"
 )
 
 var (
 	// availableClusterDiagnostics contains the names of cluster diagnostics that can be executed
 	// during a single run of diagnostics. Add more diagnostics to the list as they are defined.
-	availableClusterDiagnostics = sets.NewString(clustdiags.NodeDefinitionsName, clustdiags.ClusterRegistryName, clustdiags.ClusterRouterName, clustdiags.ClusterRolesName, clustdiags.ClusterRoleBindingsName, clustdiags.MasterNodeName, clustdiags.MetricsApiProxyName, clustdiags.ServiceExternalIPsName)
+	availableClusterDiagnostics = sets.NewString(
+		agldiags.AggregatedLoggingName,
+		clustdiags.ClusterRegistryName,
+		clustdiags.ClusterRouterName,
+		clustdiags.ClusterRolesName,
+		clustdiags.ClusterRoleBindingsName,
+		clustdiags.MasterNodeName,
+		clustdiags.MetricsApiProxyName,
+		clustdiags.NodeDefinitionsName,
+		clustdiags.ServiceExternalIPsName,
+	)
 )
 
 // buildClusterDiagnostics builds cluster Diagnostic objects if a cluster-admin client can be extracted from the rawConfig passed in.
@@ -33,7 +44,7 @@ func (o DiagnosticsOptions) buildClusterDiagnostics(rawConfig *clientcmdapi.Conf
 
 	var (
 		clusterClient  *client.Client
-		kclusterClient *kclient.Client
+		kclusterClient kclientset.Interface
 	)
 
 	clusterClient, kclusterClient, found, serverUrl, err := o.findClusterClients(rawConfig)
@@ -46,6 +57,8 @@ func (o DiagnosticsOptions) buildClusterDiagnostics(rawConfig *clientcmdapi.Conf
 	for _, diagnosticName := range requestedDiagnostics {
 		var d types.Diagnostic
 		switch diagnosticName {
+		case agldiags.AggregatedLoggingName:
+			d = agldiags.NewAggregatedLogging(o.MasterConfigLocation, kclusterClient, clusterClient)
 		case clustdiags.NodeDefinitionsName:
 			d = &clustdiags.NodeDefinitions{KubeClient: kclusterClient, OsClient: clusterClient}
 		case clustdiags.MasterNodeName:
@@ -71,7 +84,7 @@ func (o DiagnosticsOptions) buildClusterDiagnostics(rawConfig *clientcmdapi.Conf
 }
 
 // attempts to find which context in the config might be a cluster-admin for the server in the current context.
-func (o DiagnosticsOptions) findClusterClients(rawConfig *clientcmdapi.Config) (*client.Client, *kclient.Client, bool, string, error) {
+func (o DiagnosticsOptions) findClusterClients(rawConfig *clientcmdapi.Config) (*client.Client, kclientset.Interface, bool, string, error) {
 	if o.ClientClusterContext != "" { // user has specified cluster context to use
 		if context, exists := rawConfig.Contexts[o.ClientClusterContext]; exists {
 			configErr := fmt.Errorf("Specified '%s' as cluster-admin context, but it was not found in your client configuration.", o.ClientClusterContext)
@@ -107,7 +120,7 @@ func (o DiagnosticsOptions) findClusterClients(rawConfig *clientcmdapi.Config) (
 }
 
 // makes the client from the specified context and determines whether it is a cluster-admin.
-func (o DiagnosticsOptions) makeClusterClients(rawConfig *clientcmdapi.Config, contextName string, context *clientcmdapi.Context) (*client.Client, *kclient.Client, bool, string, error) {
+func (o DiagnosticsOptions) makeClusterClients(rawConfig *clientcmdapi.Config, contextName string, context *clientcmdapi.Context) (*client.Client, kclientset.Interface, bool, string, error) {
 	overrides := &clientcmd.ConfigOverrides{Context: *context}
 	clientConfig := clientcmd.NewDefaultClientConfig(*rawConfig, overrides)
 	serverUrl := rawConfig.Clusters[context.Cluster].Server
@@ -117,7 +130,7 @@ func (o DiagnosticsOptions) makeClusterClients(rawConfig *clientcmdapi.Config, c
 		o.Logger.Debug("CED1006", fmt.Sprintf("Error creating client for context '%s':\n%v", contextName, err))
 		return nil, nil, false, "", nil
 	} else {
-		subjectAccessReview := authorizationapi.SubjectAccessReview{Action: authorizationapi.AuthorizationAttributes{
+		subjectAccessReview := authorizationapi.SubjectAccessReview{Action: authorizationapi.Action{
 			// if you can do everything, you're the cluster admin.
 			Verb:     "*",
 			Group:    "*",

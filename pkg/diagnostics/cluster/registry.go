@@ -7,10 +7,11 @@ import (
 	"regexp"
 	"strings"
 
+	kerrs "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kerrs "k8s.io/kubernetes/pkg/api/errors"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/labels"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	osclient "github.com/openshift/origin/pkg/client"
@@ -20,7 +21,7 @@ import (
 
 // ClusterRegistry is a Diagnostic to check that there is a working Docker registry.
 type ClusterRegistry struct {
-	KubeClient          *kclient.Client
+	KubeClient          kclientset.Interface
 	OsClient            *osclient.Client
 	PreventModification bool
 }
@@ -60,6 +61,11 @@ ephemeral storage. These are likely to have inconsistent stores of
 images. Builds and deployments that use images from the registry may
 fail sporadically. Use a single registry or add a shared storage volume
 to the registries.`
+
+	clRegMultiCustomCfg = `
+The "%s" service has multiple associated pods each mounted with
+ephemeral storage, but also has a custom config %s
+mounted; assuming storage config is as desired.`
 
 	clRegPodDown = `
 The "%s" pod for the "%s" service is not running.
@@ -156,8 +162,8 @@ func (d *ClusterRegistry) CanRun() (bool, error) {
 	if d.OsClient == nil || d.KubeClient == nil {
 		return false, fmt.Errorf("must have kube and os clients")
 	}
-	return userCan(d.OsClient, authorizationapi.AuthorizationAttributes{
-		Namespace:    kapi.NamespaceDefault,
+	return userCan(d.OsClient, authorizationapi.Action{
+		Namespace:    metav1.NamespaceDefault,
 		Verb:         "get",
 		Group:        kapi.GroupName,
 		Resource:     "services",
@@ -170,7 +176,8 @@ func (d *ClusterRegistry) Check() types.DiagnosticResult {
 	if service := d.getRegistryService(r); service != nil {
 		// Check that it actually has pod(s) selected and running
 		if runningPods := d.getRegistryPods(service, r); len(runningPods) == 0 {
-			r.Error("DClu1001", nil, fmt.Sprintf(clRegNoRunningPods, registryName))
+			// not reporting an error here, if there are no running pods an error
+			// is reported by getRegistryPods
 			return r
 		} else if d.checkRegistryEndpoints(runningPods, r) { // Check that matching endpoint exists on the service
 			// attempt to create an imagestream and see if it gets the same registry service IP from the service cache
@@ -181,9 +188,9 @@ func (d *ClusterRegistry) Check() types.DiagnosticResult {
 }
 
 func (d *ClusterRegistry) getRegistryService(r types.DiagnosticResult) *kapi.Service {
-	service, err := d.KubeClient.Services(kapi.NamespaceDefault).Get(registryName)
+	service, err := d.KubeClient.Core().Services(metav1.NamespaceDefault).Get(registryName, metav1.GetOptions{})
 	if err != nil && reflect.TypeOf(err) == reflect.TypeOf(&kerrs.StatusError{}) {
-		r.Warn("DClu1002", err, fmt.Sprintf(clGetRegNone, registryName, kapi.NamespaceDefault))
+		r.Warn("DClu1002", err, fmt.Sprintf(clGetRegNone, registryName, metav1.NamespaceDefault))
 		return nil
 	} else if err != nil {
 		r.Error("DClu1003", err, fmt.Sprintf(clGetRegFailed, err))
@@ -195,7 +202,7 @@ func (d *ClusterRegistry) getRegistryService(r types.DiagnosticResult) *kapi.Ser
 
 func (d *ClusterRegistry) getRegistryPods(service *kapi.Service, r types.DiagnosticResult) []*kapi.Pod {
 	runningPods := []*kapi.Pod{}
-	pods, err := d.KubeClient.Pods(kapi.NamespaceDefault).List(kapi.ListOptions{LabelSelector: labels.SelectorFromSet(service.Spec.Selector)})
+	pods, err := d.KubeClient.Core().Pods(metav1.NamespaceDefault).List(metav1.ListOptions{LabelSelector: labels.SelectorFromSet(service.Spec.Selector).String()})
 	if err != nil {
 		r.Error("DClu1005", err, fmt.Sprintf("Finding pods for '%s' service failed. This should never happen. Error: (%T) %[2]v", registryName, err))
 		return runningPods
@@ -203,11 +210,32 @@ func (d *ClusterRegistry) getRegistryPods(service *kapi.Service, r types.Diagnos
 		r.Error("DClu1006", nil, fmt.Sprintf(clRegNoPods, registryName))
 		return runningPods
 	} else if len(pods.Items) > 1 {
-		// multiple registry pods using EmptyDir will be inconsistent
-		for _, volume := range pods.Items[0].Spec.Volumes {
+		emptyDir := false     // multiple registry pods using EmptyDir will be inconsistent
+		customConfig := false // ... unless the user has configured them for e.g. S3
+		configPath := "/config.yml"
+		// look through the pod volumes to see if that might be a problem
+		podSpec := pods.Items[0].Spec
+		container := podSpec.Containers[0]
+		for _, volume := range podSpec.Volumes {
 			if volume.Name == registryVolume && volume.EmptyDir != nil {
+				emptyDir = true
+			}
+		}
+		for _, env := range container.Env {
+			if env.Name == "REGISTRY_CONFIGURATION_PATH" {
+				configPath = env.Value // look for custom config here
+			}
+		}
+		for _, vmount := range container.VolumeMounts {
+			if strings.HasPrefix(configPath, vmount.MountPath) {
+				customConfig = true // if something's mounted there, assume custom config.
+			}
+		}
+		if emptyDir {
+			if customConfig { // assume they know what they're doing
+				r.Info("DClu1020", fmt.Sprintf(clRegMultiCustomCfg, registryName, configPath))
+			} else { // assume they scaled up with ephemeral storage
 				r.Error("DClu1007", nil, fmt.Sprintf(clRegMultiPods, registryName))
-				break
 			}
 		}
 	}
@@ -226,7 +254,7 @@ func (d *ClusterRegistry) getRegistryPods(service *kapi.Service, r types.Diagnos
 
 func (d *ClusterRegistry) checkRegistryLogs(pod *kapi.Pod, r types.DiagnosticResult) {
 	// pull out logs from the pod
-	readCloser, err := d.KubeClient.RESTClient.Get().
+	readCloser, err := d.KubeClient.Core().RESTClient().Get().
 		Namespace("default").Name(pod.ObjectMeta.Name).
 		Resource("pods").SubResource("log").
 		Param("follow", "false").
@@ -276,7 +304,7 @@ func (d *ClusterRegistry) checkRegistryLogs(pod *kapi.Pod, r types.DiagnosticRes
 }
 
 func (d *ClusterRegistry) checkRegistryEndpoints(pods []*kapi.Pod, r types.DiagnosticResult) bool {
-	endPoint, err := d.KubeClient.Endpoints(kapi.NamespaceDefault).Get(registryName)
+	endPoint, err := d.KubeClient.Core().Endpoints(metav1.NamespaceDefault).Get(registryName, metav1.GetOptions{})
 	if err != nil {
 		r.Error("DClu1013", err, fmt.Sprintf(`Finding endpoints for "%s" service failed. This should never happen. Error: (%[2]T) %[2]v`, registryName, err))
 		return false
@@ -297,17 +325,17 @@ func (d *ClusterRegistry) verifyRegistryImageStream(service *kapi.Service, r typ
 		r.Info("DClu1021", "Skipping creating an ImageStream to test registry service address, because you requested no API modifications.")
 		return
 	}
-	imgStream, err := d.OsClient.ImageStreams(kapi.NamespaceDefault).Create(&osapi.ImageStream{ObjectMeta: kapi.ObjectMeta{GenerateName: "diagnostic-test"}})
+	imgStream, err := d.OsClient.ImageStreams(metav1.NamespaceDefault).Create(&osapi.ImageStream{ObjectMeta: metav1.ObjectMeta{GenerateName: "diagnostic-test"}})
 	if err != nil {
 		r.Error("DClu1015", err, fmt.Sprintf("Creating test ImageStream failed. Error: (%T) %[1]v", err))
 		return
 	}
 	defer func() { // delete what we created, or notify that we couldn't
-		if err := d.OsClient.ImageStreams(kapi.NamespaceDefault).Delete(imgStream.ObjectMeta.Name); err != nil {
+		if err := d.OsClient.ImageStreams(metav1.NamespaceDefault).Delete(imgStream.ObjectMeta.Name); err != nil {
 			r.Warn("DClu1016", err, fmt.Sprintf(clRegISDelFail, imgStream.ObjectMeta.Name, fmt.Sprintf("(%T) %[1]s", err)))
 		}
 	}()
-	imgStream, err = d.OsClient.ImageStreams(kapi.NamespaceDefault).Get(imgStream.ObjectMeta.Name) // status is filled in post-create
+	imgStream, err = d.OsClient.ImageStreams(metav1.NamespaceDefault).Get(imgStream.ObjectMeta.Name, metav1.GetOptions{}) // status is filled in post-create
 	if err != nil {
 		r.Error("DClu1017", err, fmt.Sprintf("Getting created test ImageStream failed. Error: (%T) %[1]v", err))
 		return

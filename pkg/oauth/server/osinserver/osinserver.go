@@ -7,7 +7,7 @@ import (
 
 	"github.com/RangelReale/osin"
 
-	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 )
 
 const (
@@ -82,7 +82,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 		} else {
 
-			handled, err := s.authorize.HandleAuthorize(ar, w)
+			handled, err := s.authorize.HandleAuthorize(ar, resp, w)
 			if err != nil {
 				s.errorHandler.HandleError(err, w, r)
 				return

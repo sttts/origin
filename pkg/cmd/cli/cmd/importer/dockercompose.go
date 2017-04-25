@@ -8,14 +8,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/apimachinery/registered"
 	"k8s.io/kubernetes/pkg/kubectl"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
-	"k8s.io/kubernetes/pkg/runtime"
 
 	"github.com/openshift/origin/pkg/client"
+	"github.com/openshift/origin/pkg/cmd/templates"
 	cmdutil "github.com/openshift/origin/pkg/cmd/util"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 	configcmd "github.com/openshift/origin/pkg/config/cmd"
@@ -24,28 +24,28 @@ import (
 	"github.com/openshift/origin/pkg/generate/dockercompose"
 )
 
-const (
-	dockerComposeLong = `
-Import a Docker Compose file as OpenShift objects
+const DockerComposeV1GeneratorName = "docker-compose/v1"
 
-Docker Compose files offer a container centric build and deploy pattern for simple applications.
-This command will transform a provided docker-compose.yml application into its OpenShift equivalent.
-During transformation fields in the compose syntax that are not relevant when running on top of
-a containerized platform will be ignored and a warning printed.
+var (
+	dockerComposeLong = templates.LongDesc(`
+		Import a Docker Compose file as OpenShift objects
 
-The command will create objects unless you pass the -o yaml or --as-template flags to generate a
-configuration file for later use.
+		Docker Compose files offer a container centric build and deploy pattern for simple applications.
+		This command will transform a provided docker-compose.yml application into its OpenShift equivalent.
+		During transformation fields in the compose syntax that are not relevant when running on top of
+		a containerized platform will be ignored and a warning printed.
 
-Experimental: This command is under active development and may change without notice.`
+		The command will create objects unless you pass the -o yaml or --as-template flags to generate a
+		configuration file for later use.
 
-	dockerComposeExample = `  # Import a docker-compose.yml file into OpenShift
-  %[1]s docker-compose -f ./docker-compose.yml
+		Experimental: This command is under active development and may change without notice.`)
 
-	# Turn a docker-compose.yml file into a template
-  %[1]s docker-compose -f ./docker-compose.yml -o yaml --as-template
-`
+	dockerComposeExample = templates.Examples(`
+		# Import a docker-compose.yml file into OpenShift
+	  %[1]s docker-compose -f ./docker-compose.yml
 
-	DockerComposeV1GeneratorName = "docker-compose/v1"
+		# Turn a docker-compose.yml file into a template
+	  %[1]s docker-compose -f ./docker-compose.yml -o yaml --as-template`)
 )
 
 type DockerComposeOptions struct {
@@ -58,7 +58,7 @@ type DockerComposeOptions struct {
 	AsTemplate string
 
 	PrintObject    func(runtime.Object) error
-	OutputVersions []unversioned.GroupVersion
+	OutputVersions []schema.GroupVersion
 
 	Namespace string
 	Client    client.TemplateConfigsNamespacer
@@ -83,7 +83,7 @@ func NewCmdDockerCompose(fullName string, f *clientcmd.Factory, in io.Reader, ou
 			kcmdutil.CheckErr(options.Complete(f, cmd, args))
 			kcmdutil.CheckErr(options.Validate())
 			if err := options.Run(); err != nil {
-				// TODO: move met to kcmdutil
+				// TODO: move me to kcmdutil
 				if err == cmdutil.ErrExit {
 					os.Exit(1)
 				}
@@ -107,17 +107,17 @@ func NewCmdDockerCompose(fullName string, f *clientcmd.Factory, in io.Reader, ou
 func (o *DockerComposeOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, args []string) error {
 	version, _ := cmd.Flags().GetString("output-version")
 	for _, v := range strings.Split(version, ",") {
-		gv, err := unversioned.ParseGroupVersion(v)
+		gv, err := schema.ParseGroupVersion(v)
 		if err != nil {
 			return fmt.Errorf("provided output-version %q is not valid: %v", v, err)
 		}
 		o.OutputVersions = append(o.OutputVersions, gv)
 	}
-	o.OutputVersions = append(o.OutputVersions, registered.EnabledVersions()...)
+	o.OutputVersions = append(o.OutputVersions, kapi.Registry.EnabledVersions()...)
 
 	o.Action.Bulk.Mapper = clientcmd.ResourceMapper(f)
 	o.Action.Bulk.Op = configcmd.Create
-	mapper, _ := f.Object(false)
+	mapper, _ := f.Object()
 	o.PrintObject = cmdutil.VersionedPrintObject(f.PrintObject, cmd, mapper, o.Action.Out)
 
 	o.Generator, _ = cmd.Flags().GetString("generator")

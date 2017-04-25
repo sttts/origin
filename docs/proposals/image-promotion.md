@@ -3,7 +3,7 @@
 ## Abstract
 
 This proposal describes the best practices and defines patterns for promoting Docker
-images between different stages (eg. from *development* to *production*).
+images between different stages (e.g. from *development* to *production*).
 This proposal also describes a way how to configure OpenShift to serve as
 a Continuous Delivery tool.
 
@@ -14,8 +14,8 @@ This document describes the following ways to promote images:
 * **Based on human intervention**
   * using the `oc` and `docker` commands manually
 * **Automated by the OpenShift platform**
-  * using enhanced *DeploymentConfig* [lifecycle hooks](https://docs.openshift.org/latest/dev_guide/deployments.html#lifecycle-hooks)
-  * using [ImageChangeTrigger](https://docs.openshift.org/latest/dev_guide/deployments.html#image-change-trigger)
+  * using enhanced *DeploymentConfig* [lifecycle hooks](https://docs.openshift.org/latest/dev_guide/deployments/deployment_strategies.html#lifecycle-hooks)
+  * using [ImageChangeTrigger](https://docs.openshift.org/latest/dev_guide/deployments/basic_deployment_operations.html#image-change-trigger)
   * using [Projects](https://docs.openshift.org/latest/dev_guide/projects.html) for different "stages"
 * **Based on external Continuous Delivery tool**
   * [Jenkins](https://jenkins-ci.org)
@@ -29,8 +29,8 @@ Docker images can be promoted (and the use-cases are valid for):
 * **Between multiple Clusters**
 
 The Docker image promotion can be done using the Docker [image
-tags](https://docs.docker.com/userguide/dockerimages/#setting-tags-on-an-image)
-or Docker image [labels](https://docs.docker.com/userguide/labels-custom-metadata/).
+tags](https://docs.docker.com/engine/reference/commandline/tag/)
+or Docker image [labels](https://docs.docker.com/engine/userguide/labels-custom-metadata/).
 OpenShift also provides more features to add metadata, such as annotations or labels.
 Using them might allow users to develop complex conditional promotion scenarios, but
 this document does not describe them.
@@ -152,7 +152,7 @@ and tests.
 ```
 
 Based on the result of the `verify-deployment` command, which runs in the container based on the
-application image, the command will promote the image by tagging it as *production-ready* (eg. using
+application image, the command will promote the image by tagging it as *production-ready* (e.g. using
 the `oc tag` command). The command might also notify me about the verification failure.
 
 The *frontend-production* DeploymentConfig has the ImageChangeTrigger set to watch changes

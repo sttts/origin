@@ -7,10 +7,10 @@ import (
 
 	"github.com/golang/glog"
 
+	utilwait "k8s.io/apimachinery/pkg/util/wait"
 	utildbus "k8s.io/kubernetes/pkg/util/dbus"
 	kexec "k8s.io/kubernetes/pkg/util/exec"
 	"k8s.io/kubernetes/pkg/util/iptables"
-	utilwait "k8s.io/kubernetes/pkg/util/wait"
 )
 
 type FirewallRule struct {
@@ -82,18 +82,21 @@ func (n *NodeIPTables) syncIPTableRules() error {
 	for _, rule := range rules {
 		_, err := n.ipt.EnsureRule(iptables.Prepend, iptables.Table(rule.table), iptables.Chain(rule.chain), rule.args...)
 		if err != nil {
-			return fmt.Errorf("Failed to ensure rule %v exists: %v", rule, err)
+			return fmt.Errorf("failed to ensure rule %v exists: %v", rule, err)
 		}
 	}
 	return nil
 }
 
+const VXLAN_PORT = "4789"
+
 // Get openshift iptables rules
 func (n *NodeIPTables) getStaticNodeIPTablesRules() []FirewallRule {
 	return []FirewallRule{
-		{"nat", "POSTROUTING", []string{"-s", n.clusterNetworkCIDR, "!", "-d", n.clusterNetworkCIDR, "-j", "MASQUERADE"}},
+		{"nat", "POSTROUTING", []string{"-s", n.clusterNetworkCIDR, "-j", "MASQUERADE"}},
 		{"filter", "INPUT", []string{"-p", "udp", "-m", "multiport", "--dports", VXLAN_PORT, "-m", "comment", "--comment", "001 vxlan incoming", "-j", "ACCEPT"}},
-		{"filter", "INPUT", []string{"-i", TUN, "-m", "comment", "--comment", "traffic from docker for internet", "-j", "ACCEPT"}},
+		{"filter", "INPUT", []string{"-i", TUN, "-m", "comment", "--comment", "traffic from SDN", "-j", "ACCEPT"}},
+		{"filter", "INPUT", []string{"-i", "docker0", "-m", "comment", "--comment", "traffic from docker", "-j", "ACCEPT"}},
 		{"filter", "FORWARD", []string{"-d", n.clusterNetworkCIDR, "-j", "ACCEPT"}},
 		{"filter", "FORWARD", []string{"-s", n.clusterNetworkCIDR, "-j", "ACCEPT"}},
 	}

@@ -7,25 +7,29 @@ import (
 
 	"github.com/spf13/cobra"
 
+	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
-	kerrors "k8s.io/kubernetes/pkg/util/errors"
 
+	"github.com/openshift/origin/pkg/cmd/templates"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
+
+	sdnapi "github.com/openshift/origin/pkg/sdn/api"
 )
 
-const (
-	JoinProjectsNetworkCommandName = "join-projects"
+const JoinProjectsNetworkCommandName = "join-projects"
 
-	joinProjectsNetworkLong = `
-Join project network
+var (
+	joinProjectsNetworkLong = templates.LongDesc(`
+		Join project network
 
-Allows projects to join existing project network when using the %[1]s network plugin.`
+		Allows projects to join existing project network when using the %[1]s network plugin.`)
 
-	joinProjectsNetworkExample = `	# Allow project p2 to use project p1 network
-	%[1]s --to=<p1> <p2>
+	joinProjectsNetworkExample = templates.Examples(`
+		# Allow project p2 to use project p1 network
+		%[1]s --to=<p1> <p2>
 
-	# Allow all projects with label name=top-secret to use project p1 network
-	%[1]s --to=<p1> --selector='name=top-secret'`
+		# Allow all projects with label name=top-secret to use project p1 network
+		%[1]s --to=<p1> --selector='name=top-secret'`)
 )
 
 type JoinOptions struct {
@@ -41,7 +45,7 @@ func NewCmdJoinProjectsNetwork(commandName, fullName string, f *clientcmd.Factor
 	cmd := &cobra.Command{
 		Use:     commandName,
 		Short:   "Join project network",
-		Long:    fmt.Sprintf(joinProjectsNetworkLong, ovsPluginName),
+		Long:    fmt.Sprintf(joinProjectsNetworkLong, sdnapi.MultiTenantPluginName),
 		Example: fmt.Sprintf(joinProjectsNetworkExample, fullName),
 		Run: func(c *cobra.Command, args []string) {
 			if err := opts.Complete(f, c, args, out); err != nil {
@@ -79,10 +83,6 @@ func (j *JoinOptions) Validate() error {
 }
 
 func (j *JoinOptions) Run() error {
-	netID, err := j.Options.GetNetID(j.joinProjectName)
-	if err != nil {
-		return err
-	}
 	projects, err := j.Options.GetProjects()
 	if err != nil {
 		return err
@@ -90,9 +90,10 @@ func (j *JoinOptions) Run() error {
 
 	errList := []error{}
 	for _, project := range projects {
-		err = j.Options.CreateOrUpdateNetNamespace(project.ObjectMeta.Name, netID)
-		if err != nil {
-			errList = append(errList, fmt.Errorf("Project '%s' failed to join '%s', error: %v", project.ObjectMeta.Name, j.joinProjectName, err))
+		if project.Name != j.joinProjectName {
+			if err = j.Options.UpdatePodNetwork(project.Name, sdnapi.JoinPodNetwork, j.joinProjectName); err != nil {
+				errList = append(errList, fmt.Errorf("Project %q failed to join %q, error: %v", project.Name, j.joinProjectName, err))
+			}
 		}
 	}
 	return kerrors.NewAggregate(errList)

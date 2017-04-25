@@ -1,14 +1,5 @@
 #!/bin/bash
-
-set -e
-
-set -o errexit
-set -o nounset
-set -o pipefail
-
-OS_ROOT=$(dirname "${BASH_SOURCE}")/..
-source "${OS_ROOT}/hack/lib/init.sh"
-os::log::stacktrace::install
+source "$(dirname "${BASH_SOURCE}")/lib/init.sh"
 
 etcd_version=$(go run ${OS_ROOT}/tools/godepversion/godepversion.go ${OS_ROOT}/Godeps/Godeps.json github.com/coreos/etcd/etcdserver)
 
@@ -32,10 +23,6 @@ fi
 
 # setup a private GOPATH so the build can succeed
 export GOPATH="${PWD}/gopath"
-rm -f "${GOPATH}/src/github.com/coreos/etcd"
-mkdir -p "${GOPATH}/src/github.com/coreos"
-ln -s "${PWD}" "${GOPATH}/src/github.com/coreos/etcd"
-
 ./build
 
 echo

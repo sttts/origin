@@ -8,12 +8,14 @@ import (
 	"testing"
 
 	"github.com/golang/glog"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/yaml"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/meta"
 	kvalidation "k8s.io/kubernetes/pkg/api/validation"
 	"k8s.io/kubernetes/pkg/capabilities"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/yaml"
 
 	"github.com/openshift/origin/pkg/api/validation"
 	buildapi "github.com/openshift/origin/pkg/build/api"
@@ -21,6 +23,7 @@ import (
 	imageapi "github.com/openshift/origin/pkg/image/api"
 	projectapi "github.com/openshift/origin/pkg/project/api"
 	routeapi "github.com/openshift/origin/pkg/route/api"
+	sdnapi "github.com/openshift/origin/pkg/sdn/api"
 	templateapi "github.com/openshift/origin/pkg/template/api"
 
 	// install all APIs
@@ -31,7 +34,7 @@ import (
 
 type mockService struct{}
 
-func (mockService) ListServices(kapi.Context) (*kapi.ServiceList, error) {
+func (mockService) ListServices(apirequest.Context) (*kapi.ServiceList, error) {
 	return &kapi.ServiceList{}, nil
 }
 
@@ -100,9 +103,13 @@ func TestExampleObjectSchemas(t *testing.T) {
 			"mysql-persistent-template":      &templateapi.Template{},
 			"postgresql-persistent-template": &templateapi.Template{},
 			"mongodb-persistent-template":    &templateapi.Template{},
+			"mariadb-persistent-template":    &templateapi.Template{},
+			"redis-persistent-template":      &templateapi.Template{},
 			"mysql-ephemeral-template":       &templateapi.Template{},
 			"postgresql-ephemeral-template":  &templateapi.Template{},
 			"mongodb-ephemeral-template":     &templateapi.Template{},
+			"mariadb-ephemeral-template":     &templateapi.Template{},
+			"redis-ephemeral-template":       &templateapi.Template{},
 		},
 		"../test/extended/testdata/ldap": {
 			"ldapserver-buildconfig":         &buildapi.BuildConfig{},
@@ -120,8 +127,10 @@ func TestExampleObjectSchemas(t *testing.T) {
 			"test-image-stream-mapping":           nil, // skip &imageapi.ImageStreamMapping{},
 			"test-route":                          &routeapi.Route{},
 			"test-service":                        &kapi.Service{},
+			"test-service-with-finalizer":         &kapi.Service{},
 			"test-buildcli":                       &kapi.List{},
 			"test-buildcli-beta2":                 &kapi.List{},
+			"test-egress-network-policy":          &sdnapi.EgressNetworkPolicy{},
 		},
 		"../test/templates/testdata": {
 			"crunchydata-pod": nil, // Explicitly fails validation, but should pass transformation
@@ -170,13 +179,13 @@ func validateObject(path string, obj runtime.Object, t *testing.T) {
 		}
 
 		if namespaceRequired {
-			objectMeta, objectMetaErr := kapi.ObjectMetaFor(obj)
+			objectMeta, objectMetaErr := metav1.ObjectMetaFor(obj)
 			if objectMetaErr != nil {
 				t.Errorf("Expected no error, Got %v", objectMetaErr)
 				return
 			}
 
-			objectMeta.Namespace = kapi.NamespaceDefault
+			objectMeta.Namespace = metav1.NamespaceDefault
 		}
 	}
 

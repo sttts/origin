@@ -1,8 +1,9 @@
 package controller
 
 import (
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
 
 	osclient "github.com/openshift/origin/pkg/client"
 	projectutil "github.com/openshift/origin/pkg/project/util"
@@ -65,6 +66,10 @@ func deleteAllContent(client osclient.Interface, namespace string) (err error) {
 	if err != nil {
 		return err
 	}
+	err = deleteEgressNetworkPolicies(client, namespace)
+	if err != nil {
+		return err
+	}
 	err = deleteImageStreams(client, namespace)
 	if err != nil {
 		return err
@@ -93,11 +98,29 @@ func deleteAllContent(client osclient.Interface, namespace string) (err error) {
 	if err != nil {
 		return err
 	}
+	err = deleteRoleBindingRestrictions(client, namespace)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func deleteRoleBindingRestrictions(client osclient.Interface, ns string) error {
+	items, err := client.RoleBindingRestrictions(ns).List(metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+	for i := range items.Items {
+		err := client.RoleBindingRestrictions(ns).Delete(items.Items[i].Name)
+		if err != nil && !errors.IsNotFound(err) {
+			return err
+		}
+	}
 	return nil
 }
 
 func deleteTemplates(client osclient.Interface, ns string) error {
-	items, err := client.Templates(ns).List(kapi.ListOptions{})
+	items, err := client.Templates(ns).List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -111,7 +134,7 @@ func deleteTemplates(client osclient.Interface, ns string) error {
 }
 
 func deleteRoutes(client osclient.Interface, ns string) error {
-	items, err := client.Routes(ns).List(kapi.ListOptions{})
+	items, err := client.Routes(ns).List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -125,7 +148,7 @@ func deleteRoutes(client osclient.Interface, ns string) error {
 }
 
 func deleteRoles(client osclient.Interface, ns string) error {
-	items, err := client.Roles(ns).List(kapi.ListOptions{})
+	items, err := client.Roles(ns).List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -139,7 +162,7 @@ func deleteRoles(client osclient.Interface, ns string) error {
 }
 
 func deleteRoleBindings(client osclient.Interface, ns string) error {
-	items, err := client.RoleBindings(ns).List(kapi.ListOptions{})
+	items, err := client.RoleBindings(ns).List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -153,7 +176,7 @@ func deleteRoleBindings(client osclient.Interface, ns string) error {
 }
 
 func deletePolicyBindings(client osclient.Interface, ns string) error {
-	items, err := client.PolicyBindings(ns).List(kapi.ListOptions{})
+	items, err := client.PolicyBindings(ns).List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -167,7 +190,7 @@ func deletePolicyBindings(client osclient.Interface, ns string) error {
 }
 
 func deletePolicies(client osclient.Interface, ns string) error {
-	items, err := client.Policies(ns).List(kapi.ListOptions{})
+	items, err := client.Policies(ns).List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -181,7 +204,7 @@ func deletePolicies(client osclient.Interface, ns string) error {
 }
 
 func deleteImageStreams(client osclient.Interface, ns string) error {
-	items, err := client.ImageStreams(ns).List(kapi.ListOptions{})
+	items, err := client.ImageStreams(ns).List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -194,8 +217,22 @@ func deleteImageStreams(client osclient.Interface, ns string) error {
 	return nil
 }
 
+func deleteEgressNetworkPolicies(client osclient.Interface, ns string) error {
+	items, err := client.EgressNetworkPolicies(ns).List(metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+	for i := range items.Items {
+		err := client.EgressNetworkPolicies(ns).Delete(items.Items[i].Name)
+		if err != nil && !errors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 func deleteDeploymentConfigs(client osclient.Interface, ns string) error {
-	items, err := client.DeploymentConfigs(ns).List(kapi.ListOptions{})
+	items, err := client.DeploymentConfigs(ns).List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -209,7 +246,7 @@ func deleteDeploymentConfigs(client osclient.Interface, ns string) error {
 }
 
 func deleteBuilds(client osclient.Interface, ns string) error {
-	items, err := client.Builds(ns).List(kapi.ListOptions{})
+	items, err := client.Builds(ns).List(metav1.ListOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return nil
@@ -226,7 +263,7 @@ func deleteBuilds(client osclient.Interface, ns string) error {
 }
 
 func deleteBuildConfigs(client osclient.Interface, ns string) error {
-	items, err := client.BuildConfigs(ns).List(kapi.ListOptions{})
+	items, err := client.BuildConfigs(ns).List(metav1.ListOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return nil

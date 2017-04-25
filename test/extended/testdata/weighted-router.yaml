@@ -1,6 +1,9 @@
 apiVersion: v1
-kind: List
-items:
+kind: Template
+parameters:
+- name: IMAGE
+  value: openshift/origin-haproxy-router:latest
+objects:
 # a weighted router
 - apiVersion: v1
   kind: Pod
@@ -9,9 +12,11 @@ items:
     labels:
       test: weighted-router
   spec:
+    terminationGracePeriodSeconds: 1
     containers:
     - name: router
-      image: openshift/origin-haproxy-router
+      image: ${IMAGE}
+      imagePullPolicy: IfNotPresent
       env:
       - name: POD_NAMESPACE
         valueFrom:
@@ -46,8 +51,6 @@ items:
     labels:
       test: router
       select: weighted
-    annotations:
-      router.openshift.io/haproxy.balance: roundrobin
   spec:
     host: weighted.example.com
     to:
@@ -58,6 +61,27 @@ items:
     - name: weightedendpoints2
       kind: Service
       weight: 10
+    ports:
+    - targetPort: 8080
+
+# a route that has multiple services but all weights are zero
+- apiVersion: v1
+  kind: Route
+  metadata:
+    name: zeroweightroute
+    labels:
+      test: router
+      select: weighted
+  spec:
+    host: zeroweight.example.com
+    to:
+      name: weightedendpoints1
+      kind: Service
+      weight: 0
+    alternateBackends:
+    - name: weightedendpoints2
+      kind: Service
+      weight: 0
     ports:
     - targetPort: 8080
 
@@ -95,6 +119,7 @@ items:
       test: weightedrouter1
       endpoints: weightedrouter1
   spec:
+    terminationGracePeriodSeconds: 1
     containers:
     - name: test
       image: openshift/hello-openshift
@@ -111,6 +136,7 @@ items:
       test: weightedrouter2
       endpoints: weightedrouter2
   spec:
+    terminationGracePeriodSeconds: 1
     containers:
     - name: test
       image: openshift/hello-openshift

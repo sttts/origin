@@ -3,12 +3,15 @@ package etcd
 import (
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/registry/rest"
+	etcdtesting "k8s.io/apiserver/pkg/storage/etcd/testing"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/rest"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/registrytest"
-	etcdtesting "k8s.io/kubernetes/pkg/storage/etcd/testing"
 
 	"github.com/openshift/origin/pkg/api/latest"
 	"github.com/openshift/origin/pkg/image/api"
@@ -35,7 +38,7 @@ func TestStorage(t *testing.T) {
 
 func validImage() *api.Image {
 	return &api.Image{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:         "foo",
 			GenerateName: "foo",
 		},
@@ -46,6 +49,7 @@ func validImage() *api.Image {
 func TestCreate(t *testing.T) {
 	storage, server := newStorage(t)
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 	test := registrytest.New(t, storage.Store).ClusterScope()
 	valid := validImage()
 	valid.Name = ""
@@ -57,9 +61,32 @@ func TestCreate(t *testing.T) {
 	)
 }
 
+func TestUpdate(t *testing.T) {
+	storage, server := newStorage(t)
+	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
+	test := registrytest.New(t, storage.Store).ClusterScope()
+	test.TestUpdate(
+		validImage(),
+		// updateFunc
+		func(obj runtime.Object) runtime.Object {
+			object := obj.(*api.Image)
+			object.DockerImageReference = "openshift/origin"
+			return object
+		},
+		// invalid updateFunc
+		func(obj runtime.Object) runtime.Object {
+			object := obj.(*api.Image)
+			object.DockerImageReference = "\\"
+			return object
+		},
+	)
+}
+
 func TestList(t *testing.T) {
 	storage, server := newStorage(t)
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 	test := registrytest.New(t, storage.Store).ClusterScope()
 	test.TestList(
 		validImage(),
@@ -69,6 +96,7 @@ func TestList(t *testing.T) {
 func TestGet(t *testing.T) {
 	storage, server := newStorage(t)
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 	test := registrytest.New(t, storage.Store).ClusterScope()
 	test.TestGet(
 		validImage(),
@@ -78,9 +106,10 @@ func TestGet(t *testing.T) {
 func TestDelete(t *testing.T) {
 	storage, server := newStorage(t)
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 	test := registrytest.New(t, storage.Store).ClusterScope()
 	image := validImage()
-	image.ObjectMeta = kapi.ObjectMeta{GenerateName: "foo"}
+	image.ObjectMeta = metav1.ObjectMeta{GenerateName: "foo"}
 	test.TestDelete(
 		validImage(),
 	)
@@ -89,6 +118,7 @@ func TestDelete(t *testing.T) {
 func TestWatch(t *testing.T) {
 	storage, server := newStorage(t)
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 	test := registrytest.New(t, storage.Store)
 
 	valid := validImage()
@@ -203,7 +233,7 @@ func TestCreateSetsMetadata(t *testing.T) {
 	}{
 		{
 			image: &api.Image{
-				ObjectMeta:           kapi.ObjectMeta{Name: "foo"},
+				ObjectMeta:           metav1.ObjectMeta{Name: "foo"},
 				DockerImageReference: "openshift/ruby-19-centos",
 			},
 		},
@@ -220,7 +250,7 @@ func TestCreateSetsMetadata(t *testing.T) {
 				return true
 			},
 			image: &api.Image{
-				ObjectMeta:           kapi.ObjectMeta{Name: "foo"},
+				ObjectMeta:           metav1.ObjectMeta{Name: "foo"},
 				DockerImageReference: "openshift/ruby-19-centos",
 				DockerImageManifest:  etcdManifest,
 			},
@@ -230,8 +260,9 @@ func TestCreateSetsMetadata(t *testing.T) {
 	for i, test := range testCases {
 		storage, server := newStorage(t)
 		defer server.Terminate(t)
+		defer storage.Store.DestroyFunc()
 
-		obj, err := storage.Create(kapi.NewDefaultContext(), test.image)
+		obj, err := storage.Create(apirequest.NewDefaultContext(), test.image)
 		if obj == nil {
 			t.Errorf("%d: Expected nil obj, got %v", i, obj)
 			continue
@@ -287,13 +318,13 @@ func TestUpdateResetsMetadata(t *testing.T) {
 				return true
 			},
 			existing: &api.Image{
-				ObjectMeta:           kapi.ObjectMeta{Name: "foo", ResourceVersion: "1"},
+				ObjectMeta:           metav1.ObjectMeta{Name: "foo", ResourceVersion: "1"},
 				DockerImageReference: "openshift/ruby-19-centos-2",
 				DockerImageLayers:    []api.ImageLayer{{Name: "test", LayerSize: 10}},
 				DockerImageMetadata:  api.DockerImage{ID: "foo"},
 			},
 			image: &api.Image{
-				ObjectMeta:           kapi.ObjectMeta{Name: "foo", ResourceVersion: "1", Labels: map[string]string{"a": "b"}},
+				ObjectMeta:           metav1.ObjectMeta{Name: "foo", ResourceVersion: "1", Labels: map[string]string{"a": "b"}},
 				DockerImageReference: "openshift/ruby-19-centos",
 				DockerImageManifest:  etcdManifest,
 			},
@@ -301,8 +332,8 @@ func TestUpdateResetsMetadata(t *testing.T) {
 		// existing manifest is preserved, and unpacked
 		{
 			expect: func(image *api.Image) bool {
-				if image.DockerImageManifest != etcdManifest {
-					t.Errorf("unexpected manifest: %s", image.DockerImageManifest)
+				if len(image.DockerImageManifest) != 0 {
+					t.Errorf("unexpected not empty manifest")
 					return false
 				}
 				if image.DockerImageMetadata.ID != "fe50ac14986497fa6b5d2cc24feb4a561d01767bc64413752c0988cb70b0b8b9" {
@@ -324,13 +355,13 @@ func TestUpdateResetsMetadata(t *testing.T) {
 				return true
 			},
 			existing: &api.Image{
-				ObjectMeta:           kapi.ObjectMeta{Name: "foo", ResourceVersion: "1"},
+				ObjectMeta:           metav1.ObjectMeta{Name: "foo", ResourceVersion: "1"},
 				DockerImageReference: "openshift/ruby-19-centos-2",
 				DockerImageLayers:    []api.ImageLayer{},
 				DockerImageManifest:  etcdManifest,
 			},
 			image: &api.Image{
-				ObjectMeta:           kapi.ObjectMeta{Name: "foo", ResourceVersion: "1"},
+				ObjectMeta:           metav1.ObjectMeta{Name: "foo", ResourceVersion: "1"},
 				DockerImageReference: "openshift/ruby-19-centos",
 				DockerImageMetadata:  api.DockerImage{ID: "foo"},
 			},
@@ -361,13 +392,13 @@ func TestUpdateResetsMetadata(t *testing.T) {
 				return true
 			},
 			existing: &api.Image{
-				ObjectMeta:           kapi.ObjectMeta{Name: "sha256:958608f8ecc1dc62c93b6c610f3a834dae4220c9642e6e8b4e0f2b3ad7cbd238", ResourceVersion: "1"},
+				ObjectMeta:           metav1.ObjectMeta{Name: "sha256:958608f8ecc1dc62c93b6c610f3a834dae4220c9642e6e8b4e0f2b3ad7cbd238", ResourceVersion: "1"},
 				DockerImageReference: "openshift/ruby-19-centos-2",
 				DockerImageLayers:    []api.ImageLayer{},
 				DockerImageManifest:  etcdManifestNoSignature,
 			},
 			image: &api.Image{
-				ObjectMeta:           kapi.ObjectMeta{Name: "sha256:958608f8ecc1dc62c93b6c610f3a834dae4220c9642e6e8b4e0f2b3ad7cbd238", ResourceVersion: "1"},
+				ObjectMeta:           metav1.ObjectMeta{Name: "sha256:958608f8ecc1dc62c93b6c610f3a834dae4220c9642e6e8b4e0f2b3ad7cbd238", ResourceVersion: "1"},
 				DockerImageReference: "openshift/ruby-19-centos",
 				DockerImageMetadata:  api.DockerImage{ID: "foo"},
 				DockerImageManifest:  etcdManifest,
@@ -377,10 +408,11 @@ func TestUpdateResetsMetadata(t *testing.T) {
 	for i, test := range testCases {
 		storage, server := newStorage(t)
 		defer server.Terminate(t)
+		defer storage.Store.DestroyFunc()
 
 		// Clear the resource version before creating
 		test.existing.ResourceVersion = ""
-		created, err := storage.Create(kapi.NewDefaultContext(), test.existing)
+		created, err := storage.Create(apirequest.NewDefaultContext(), test.existing)
 		if err != nil {
 			t.Errorf("%d: Unexpected non-nil error: %#v", i, err)
 			continue
@@ -388,7 +420,7 @@ func TestUpdateResetsMetadata(t *testing.T) {
 
 		// Copy the resource version into our update object
 		test.image.ResourceVersion = created.(*api.Image).ResourceVersion
-		obj, _, err := storage.Update(kapi.NewDefaultContext(), test.image.Name, rest.DefaultUpdatedObjectInfo(test.image, kapi.Scheme))
+		obj, _, err := storage.Update(apirequest.NewDefaultContext(), test.image.Name, rest.DefaultUpdatedObjectInfo(test.image, kapi.Scheme))
 		if err != nil {
 			t.Errorf("%d: Unexpected non-nil error: %#v", i, err)
 			continue

@@ -6,27 +6,29 @@ import (
 
 	"github.com/spf13/cobra"
 
+	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
-	kerrors "k8s.io/kubernetes/pkg/util/errors"
 
+	"github.com/openshift/origin/pkg/cmd/templates"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
+
+	sdnapi "github.com/openshift/origin/pkg/sdn/api"
 )
 
-const (
-	globalVNID = uint32(0)
+const MakeGlobalProjectsNetworkCommandName = "make-projects-global"
 
-	MakeGlobalProjectsNetworkCommandName = "make-projects-global"
+var (
+	makeGlobalProjectsNetworkLong = templates.LongDesc(`
+		Make project network global
 
-	makeGlobalProjectsNetworkLong = `
-Make project network global
+		Allows projects to access all pods in the cluster and vice versa when using the %[1]s network plugin.`)
 
-Allows projects to access all pods in the cluster and vice versa when using the %[1]s network plugin.`
+	makeGlobalProjectsNetworkExample = templates.Examples(`
+		# Allow project p1 to access all pods in the cluster and vice versa
+		%[1]s <p1>
 
-	makeGlobalProjectsNetworkExample = `	# Allow project p1 to access all pods in the cluster and vice versa
-	%[1]s <p1>
-
-	# Allow all projects with label name=share to access all pods in the cluster and vice versa
-	%[1]s --selector='name=share'`
+		# Allow all projects with label name=share to access all pods in the cluster and vice versa
+		%[1]s --selector='name=share'`)
 )
 
 type MakeGlobalOptions struct {
@@ -40,7 +42,7 @@ func NewCmdMakeGlobalProjectsNetwork(commandName, fullName string, f *clientcmd.
 	cmd := &cobra.Command{
 		Use:     commandName,
 		Short:   "Make project network global",
-		Long:    fmt.Sprintf(makeGlobalProjectsNetworkLong, ovsPluginName),
+		Long:    fmt.Sprintf(makeGlobalProjectsNetworkLong, sdnapi.MultiTenantPluginName),
 		Example: fmt.Sprintf(makeGlobalProjectsNetworkExample, fullName),
 		Run: func(c *cobra.Command, args []string) {
 			if err := opts.Complete(f, c, args, out); err != nil {
@@ -71,9 +73,8 @@ func (m *MakeGlobalOptions) Run() error {
 
 	errList := []error{}
 	for _, project := range projects {
-		err = m.Options.CreateOrUpdateNetNamespace(project.ObjectMeta.Name, globalVNID)
-		if err != nil {
-			errList = append(errList, fmt.Errorf("Removing network isolation for project '%s' failed, error: %v", project.ObjectMeta.Name, err))
+		if err = m.Options.UpdatePodNetwork(project.Name, sdnapi.GlobalPodNetwork, ""); err != nil {
+			errList = append(errList, fmt.Errorf("Removing network isolation for project %q failed, error: %v", project.Name, err))
 		}
 	}
 	return kerrors.NewAggregate(errList)

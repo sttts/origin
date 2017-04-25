@@ -5,9 +5,9 @@ import (
 	"reflect"
 
 	"github.com/golang/glog"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/watch"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/util/sets"
-	"k8s.io/kubernetes/pkg/watch"
 
 	routeapi "github.com/openshift/origin/pkg/route/api"
 	"github.com/openshift/origin/pkg/route/api/validation"
@@ -27,7 +27,7 @@ type ExtendedValidator struct {
 	invalidRoutes map[string]routeapi.Route
 }
 
-// ExtendedValidator creates a plugin wrapper that ensures only routes that
+// NewExtendedValidator creates a plugin wrapper that ensures only routes that
 // pass extended validation are relayed to the next plugin in the chain.
 // Recorder is an interface for indicating why a route was rejected.
 func NewExtendedValidator(plugin router.Plugin, recorder RejectionRecorder) *ExtendedValidator {
@@ -36,6 +36,11 @@ func NewExtendedValidator(plugin router.Plugin, recorder RejectionRecorder) *Ext
 		recorder:      recorder,
 		invalidRoutes: make(map[string]routeapi.Route),
 	}
+}
+
+// HandleNode processes watch events on the node resource
+func (p *ExtendedValidator) HandleNode(eventType watch.EventType, node *kapi.Node) error {
+	return p.plugin.HandleNode(eventType, node)
 }
 
 // HandleEndpoints processes watch events on the Endpoints resource.
@@ -68,12 +73,12 @@ func (p *ExtendedValidator) HandleRoute(eventType watch.EventType, route *routea
 	return p.plugin.HandleRoute(eventType, route)
 }
 
-// HandleAllowedNamespaces limits the scope of valid routes to only those that match
+// HandleNamespaces limits the scope of valid routes to only those that match
 // the provided namespace list.
 func (p *ExtendedValidator) HandleNamespaces(namespaces sets.String) error {
 	return p.plugin.HandleNamespaces(namespaces)
 }
 
-func (p *ExtendedValidator) SetLastSyncProcessed(processed bool) error {
-	return p.plugin.SetLastSyncProcessed(processed)
+func (p *ExtendedValidator) Commit() error {
+	return p.plugin.Commit()
 }

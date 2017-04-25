@@ -1,14 +1,14 @@
 package api
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
 )
 
 // ProjectList is a list of Project objects.
 type ProjectList struct {
-	unversioned.TypeMeta
-	unversioned.ListMeta
+	metav1.TypeMeta
+	metav1.ListMeta
 	Items []Project
 }
 
@@ -29,29 +29,26 @@ type ProjectStatus struct {
 }
 
 // +genclient=true
+// +nonNamespaced=true
 
 // Project is a logical top-level container for a set of origin resources
 type Project struct {
-	unversioned.TypeMeta
-	kapi.ObjectMeta
+	metav1.TypeMeta
+	metav1.ObjectMeta
 
 	Spec   ProjectSpec
 	Status ProjectStatus
 }
 
 type ProjectRequest struct {
-	unversioned.TypeMeta
-	kapi.ObjectMeta
+	metav1.TypeMeta
+	metav1.ObjectMeta
 	DisplayName string
 	Description string
 }
 
 // These constants represent annotations keys affixed to projects
 const (
-	// ProjectDisplayName is an annotation that stores the name displayed when querying for projects
-	ProjectDisplayName = "openshift.io/display-name"
-	// ProjectDescription is an annotatoion that holds the description of the project
-	ProjectDescription = "openshift.io/description"
 	// ProjectNodeSelector is an annotation that holds the node selector;
 	// the node selector annotation determines which nodes will have pods from this project scheduled to them
 	ProjectNodeSelector = "openshift.io/node-selector"

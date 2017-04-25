@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ package volumehelper
 import (
 	"fmt"
 
-	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/volume/util/types"
 )
@@ -38,7 +38,7 @@ const (
 )
 
 // GetUniquePodName returns a unique identifier to reference a pod by
-func GetUniquePodName(pod *api.Pod) types.UniquePodName {
+func GetUniquePodName(pod *v1.Pod) types.UniquePodName {
 	return types.UniquePodName(pod.UID)
 }
 
@@ -48,8 +48,16 @@ func GetUniquePodName(pod *api.Pod) types.UniquePodName {
 // The returned name can be used to uniquely reference the volume, for example,
 // to prevent operations (attach/detach or mount/unmount) from being triggered
 // on the same volume.
-func GetUniqueVolumeName(pluginName, volumeName string) api.UniqueVolumeName {
-	return api.UniqueVolumeName(fmt.Sprintf("%s/%s", pluginName, volumeName))
+func GetUniqueVolumeName(pluginName, volumeName string) v1.UniqueVolumeName {
+	return v1.UniqueVolumeName(fmt.Sprintf("%s/%s", pluginName, volumeName))
+}
+
+// GetUniqueVolumeNameForNonAttachableVolume returns the unique volume name
+// for a non-attachable volume.
+func GetUniqueVolumeNameForNonAttachableVolume(
+	podName types.UniquePodName, volumePlugin volume.VolumePlugin, volumeSpec *volume.Spec) v1.UniqueVolumeName {
+	return v1.UniqueVolumeName(
+		fmt.Sprintf("%s/%v-%s", volumePlugin.GetPluginName(), podName, volumeSpec.Name()))
 }
 
 // GetUniqueVolumeNameFromSpec uses the given VolumePlugin to generate a unique
@@ -59,7 +67,7 @@ func GetUniqueVolumeName(pluginName, volumeName string) api.UniqueVolumeName {
 // If the given plugin does not support the volume spec, this returns an error.
 func GetUniqueVolumeNameFromSpec(
 	volumePlugin volume.VolumePlugin,
-	volumeSpec *volume.Spec) (api.UniqueVolumeName, error) {
+	volumeSpec *volume.Spec) (v1.UniqueVolumeName, error) {
 	if volumePlugin == nil {
 		return "", fmt.Errorf(
 			"volumePlugin should not be nil. volumeSpec.Name=%q",

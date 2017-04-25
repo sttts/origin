@@ -1,12 +1,13 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"path/filepath"
 	"strings"
+	"time"
 
-	docker "github.com/fsouza/go-dockerclient"
 	utilglog "github.com/openshift/source-to-image/pkg/util/glog"
 
 	"github.com/openshift/source-to-image/pkg/util/user"
@@ -22,7 +23,7 @@ const (
 
 // invalidFilenameCharacters contains a list of character we consider malicious
 // when injecting the directories into containers.
-const invalidFilenameCharacters = `\:;*?"<>|%#$!+{}&[],"'` + "`"
+const invalidFilenameCharacters = `;*?"<>|%#$!+{}&[],"'` + "`"
 
 const (
 	// PullAlways means that we always attempt to pull the latest image.
@@ -36,6 +37,9 @@ const (
 
 	// DefaultBuilderPullPolicy specifies the default pull policy to use
 	DefaultBuilderPullPolicy = PullIfNotPresent
+
+	// DefaultRuntimeImagePullPolicy specifies the default pull policy to use.
+	DefaultRuntimeImagePullPolicy = PullIfNotPresent
 
 	// DefaultPreviousImagePullPolicy specifies policy for pulling the previously
 	// build Docker image when doing incremental build
@@ -61,6 +65,28 @@ type Config struct {
 	// BuilderBaseImageVersion provides optional version information about the builder base image.
 	BuilderBaseImageVersion string
 
+	// RuntimeImage specifies the image that will be a base for resulting image
+	// and will be used for running an application. By default, BuilderImage is
+	// used for building and running, but the latter may be overridden.
+	RuntimeImage string
+
+	// RuntimeImagePullPolicy specifies when to pull a runtime image.
+	RuntimeImagePullPolicy PullPolicy
+
+	// RuntimeAuthentication holds the authentication information for pulling the
+	// runtime Docker images from private repositories.
+	RuntimeAuthentication AuthConfig
+
+	// RuntimeArtifacts specifies a list of source/destination pairs that will
+	// be copied from builder to a runtime image. Source can be a file or
+	// directory. Destination must be a directory. Regardless whether it
+	// is an absolute or relative path, it will be placed into image's WORKDIR.
+	// Destination also can be empty or equals to ".", in this case it just
+	// refers to a root of WORKDIR.
+	// In case it's empty, S2I will try to get this list from
+	// io.openshift.s2i.assemble-input-files label on a RuntimeImage.
+	RuntimeArtifacts VolumeList
+
 	// DockerConfig describes how to access host docker daemon.
 	DockerConfig *DockerConfig
 
@@ -69,11 +95,11 @@ type Config struct {
 
 	// PullAuthentication holds the authentication information for pulling the
 	// Docker images from private repositories
-	PullAuthentication docker.AuthConfiguration
+	PullAuthentication AuthConfig
 
 	// IncrementalAuthentication holds the authentication information for pulling the
 	// previous image from private repositories
-	IncrementalAuthentication docker.AuthConfiguration
+	IncrementalAuthentication AuthConfig
 
 	// DockerNetworkMode is used to set the docker network setting to --net=container:<id>
 	// when the builder is invoked from a container.
@@ -82,9 +108,9 @@ type Config struct {
 	// PreserveWorkingDir describes if working directory should be left after processing.
 	PreserveWorkingDir bool
 
-	// DisableRecursive disables the --recursive option for the git clone that
-	// allows to use the Git without requiring the git submodule to be called.
-	DisableRecursive bool
+	// IgnoreSubmodules determines whether we will attempt to pull in submodules
+	// (via --recursive or submodule init)
+	IgnoreSubmodules bool
 
 	// Source URL describing the location of sources used to build the result image.
 	Source string
@@ -101,12 +127,6 @@ type Config struct {
 	// PreviousImagePullPolicy specifies when to pull the previously build image
 	// when doing incremental build
 	PreviousImagePullPolicy PullPolicy
-
-	// ForcePull defines if the builder image should be always pulled or not.
-	// This is now deprecated by BuilderPullPolicy and will be removed soon.
-	// Setting this to 'true' equals setting BuilderPullPolicy to 'PullAlways'.
-	// Setting this to 'false' equals setting BuilderPullPolicy to 'PullIfNotPresent'
-	ForcePull bool
 
 	// Incremental describes whether to try to perform incremental build.
 	Incremental bool
@@ -162,8 +182,8 @@ type Config struct {
 	ContextDir string
 
 	// AllowedUIDs is a list of user ranges of users allowed to run the builder image.
-	// If a range is specified and the builder image uses a non-numeric user or a user
-	// that is outside the specified range, then the build fails.
+	// If a range is specified and the builder (or runtime) image uses a non-numeric
+	// user or a user that is outside the specified range, then the build fails.
 	AllowedUIDs user.RangeList
 
 	// AssembleUser specifies the user to run the assemble script in container
@@ -207,7 +227,16 @@ type Config struct {
 
 	// BuildVolumes specifies a list of volumes to mount to container running the
 	// build.
-	BuildVolumes VolumeList
+	BuildVolumes []string
+
+	// Labels specify labels and their values to be applied to the resulting image. Label keys
+	// must have non-zero length. The labels defined here override generated labels in case
+	// they have the same name.
+	Labels map[string]string
+
+	// SourceInfo provides the info about the source to be built rather than relying
+	// on the Downloader to retrieve it.
+	SourceInfo *SourceInfo
 }
 
 // EnvironmentSpec specifies a single environment variable.
@@ -256,6 +285,36 @@ type DockerConfig struct {
 
 	// CAFile is the certificate authority file path for a TLS connection
 	CAFile string
+
+	// UseTLS indicates if TLS must be used
+	UseTLS bool
+
+	// TLSVerify indicates if TLS peer must be verified
+	TLSVerify bool
+}
+
+// AuthConfig is our abstraction of the Registry authorization information for whatever
+// docker client we happen to be based on
+type AuthConfig struct {
+	Username      string
+	Password      string
+	Email         string
+	ServerAddress string
+}
+
+// ContainerConfig is the abstraction of the docker client provider (formerly go-dockerclient, now either
+// engine-api or kube docker client) container.Config type that is leveraged by s2i or origin
+type ContainerConfig struct {
+	Labels map[string]string
+	Env    []string
+}
+
+// Image is the abstraction of the docker client provider (formerly go-dockerclient, now either
+// engine-api or kube docker client) Image type that is leveraged by s2i or origin
+type Image struct {
+	ID string
+	*ContainerConfig
+	Config *ContainerConfig
 }
 
 // Result structure contains information from build process.
@@ -272,6 +331,109 @@ type Result struct {
 
 	// ImageID describes resulting image ID.
 	ImageID string
+
+	// BuildInfo holds information about the result of a build.
+	BuildInfo BuildInfo
+}
+
+// BuildInfo contains information about the build process.
+type BuildInfo struct {
+	// Stages contains details about each build stage.
+	Stages []StageInfo
+
+	// FailureReason is a camel case reason that is used by the machine to reply
+	// back to the OpenShift builder with information why any of the steps in the
+	// build failed.
+	FailureReason FailureReason
+}
+
+// StageInfo contains details about a build stage.
+type StageInfo struct {
+	// Name is the identifier for each build stage.
+	Name StageName
+
+	// StartTime identifies when this stage started.
+	StartTime time.Time
+
+	// DurationMilliseconds identifies how long this stage ran.
+	DurationMilliseconds int64
+
+	// Steps contains details about each build step within a build stage.
+	Steps []StepInfo
+}
+
+// StageName is the identifier for each build stage.
+type StageName string
+
+// Valid StageNames
+const (
+	// StagePullImages pulls the docker images.
+	StagePullImages StageName = "PullImages"
+
+	//StageAssemble runs the assemble steps.
+	StageAssemble StageName = "Assemble"
+
+	// StageBuild builds the source.
+	StageBuild StageName = "Build"
+
+	// StageCommit commits the container.
+	StageCommit StageName = "CommitContainer"
+
+	// StageRetrieve retrieves artifacts.
+	StageRetrieve StageName = "RetrieveArtifacts"
+)
+
+// StepInfo contains details about a build step.
+type StepInfo struct {
+	// Name is the identifier for each build step.
+	Name StepName
+
+	// StartTime identifies when this step started.
+	StartTime time.Time
+
+	// DurationMilliseconds identifies how long this step ran.
+	DurationMilliseconds int64
+}
+
+// StepName is the identifier for each build step.
+type StepName string
+
+// Valid StepNames
+const (
+	// StepPullBuilderImage pulls the builder image.
+	StepPullBuilderImage StepName = "PullBuilderImage"
+
+	// StepPullPreviousImage pulls the previous image for an incremental build.
+	StepPullPreviousImage StepName = "PullPreviousImage"
+
+	// StepPullRuntimeImage pull the runtime image.
+	StepPullRuntimeImage StepName = "PullRuntimeImage"
+
+	// StepAssembleBuildScripts runs the assemble scripts.
+	StepAssembleBuildScripts StepName = "AssembleBuildScripts"
+
+	// StepBuildDockerImage builds the Docker image for layered builds.
+	StepBuildDockerImage StepName = "BuildDockerImage"
+
+	// StepCommitContainer commits the container to the builder image.
+	StepCommitContainer StepName = "CommitContainer"
+
+	// StepRetrievePreviousArtifacts restores archived artifacts from the previous build.
+	StepRetrievePreviousArtifacts StepName = "RetrievePreviousArtifacts"
+)
+
+// StepFailureReason holds the type of failure that occurred during the build
+// process.
+type StepFailureReason string
+
+// StepFailureMessage holds the detailed message of a failure.
+type StepFailureMessage string
+
+// FailureReason holds the type of failure that occurred during the build
+// process.
+type FailureReason struct {
+	Reason  StepFailureReason
+	Message StepFailureMessage
 }
 
 // InstallResult structure describes the result of install operation
@@ -413,20 +575,18 @@ func IsInvalidFilename(name string) bool {
 // working directory in container.
 func (l *VolumeList) Set(value string) error {
 	if len(value) == 0 {
-		return fmt.Errorf("invalid format, must be source:destination")
+		return errors.New("invalid format, must be source:destination")
 	}
-	mount := strings.Split(value, ":")
-	switch len(mount) {
-	case 1:
-		mount = append(mount, "")
-		fallthrough
-	case 2:
-		mount[0] = strings.Trim(mount[0], `"'`)
-		mount[1] = strings.Trim(mount[1], `"'`)
-	default:
-		return fmt.Errorf("invalid source:path definition")
+	var mount []string
+	pos := strings.LastIndex(value, ":")
+	if pos == -1 {
+		mount = []string{value, ""}
+	} else {
+		mount = []string{value[:pos], value[pos+1:]}
 	}
-	s := VolumeSpec{Source: filepath.Clean(mount[0]), Destination: filepath.Clean(mount[1])}
+	mount[0] = strings.Trim(mount[0], `"'`)
+	mount[1] = strings.Trim(mount[1], `"'`)
+	s := VolumeSpec{Source: filepath.Clean(mount[0]), Destination: filepath.ToSlash(filepath.Clean(mount[1]))}
 	if IsInvalidFilename(s.Source) || IsInvalidFilename(s.Destination) {
 		return fmt.Errorf("invalid characters in filename: %q", value)
 	}

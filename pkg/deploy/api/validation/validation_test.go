@@ -3,9 +3,10 @@ package validation
 import (
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/util/intstr"
-	"k8s.io/kubernetes/pkg/util/validation/field"
 
 	"github.com/openshift/origin/pkg/deploy/api"
 	"github.com/openshift/origin/pkg/deploy/api/test"
@@ -23,7 +24,7 @@ func manualTrigger() []api.DeploymentTriggerPolicy {
 
 func rollingConfig(interval, updatePeriod, timeout int) api.DeploymentConfig {
 	return api.DeploymentConfig{
-		ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 		Spec: api.DeploymentConfigSpec{
 			Triggers: manualTrigger(),
 			Strategy: api.DeploymentStrategy{
@@ -34,6 +35,7 @@ func rollingConfig(interval, updatePeriod, timeout int) api.DeploymentConfig {
 					TimeoutSeconds:      mkint64p(timeout),
 					MaxSurge:            intstr.FromInt(1),
 				},
+				ActiveDeadlineSeconds: mkint64p(3600),
 			},
 			Template: test.OkPodTemplate(),
 			Selector: test.OkSelector(),
@@ -43,7 +45,7 @@ func rollingConfig(interval, updatePeriod, timeout int) api.DeploymentConfig {
 
 func rollingConfigMax(maxSurge, maxUnavailable intstr.IntOrString) api.DeploymentConfig {
 	return api.DeploymentConfig{
-		ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 		Spec: api.DeploymentConfigSpec{
 			Triggers: manualTrigger(),
 			Strategy: api.DeploymentStrategy{
@@ -55,6 +57,7 @@ func rollingConfigMax(maxSurge, maxUnavailable intstr.IntOrString) api.Deploymen
 					MaxSurge:            maxSurge,
 					MaxUnavailable:      maxUnavailable,
 				},
+				ActiveDeadlineSeconds: mkint64p(3600),
 			},
 			Template: test.OkPodTemplate(),
 			Selector: test.OkSelector(),
@@ -64,7 +67,7 @@ func rollingConfigMax(maxSurge, maxUnavailable intstr.IntOrString) api.Deploymen
 
 func TestValidateDeploymentConfigOK(t *testing.T) {
 	errs := ValidateDeploymentConfig(&api.DeploymentConfig{
-		ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 		Spec: api.DeploymentConfigSpec{
 			Replicas: 1,
 			Triggers: manualTrigger(),
@@ -75,13 +78,13 @@ func TestValidateDeploymentConfigOK(t *testing.T) {
 	})
 
 	if len(errs) > 0 {
-		t.Errorf("Unxpected non-empty error list: %#v", errs)
+		t.Errorf("Unxpected non-empty error list: %s", errs)
 	}
 }
 
 func TestValidateDeploymentConfigICTMissingImage(t *testing.T) {
 	dc := &api.DeploymentConfig{
-		ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 		Spec: api.DeploymentConfigSpec{
 			Replicas: 1,
 			Triggers: []api.DeploymentTriggerPolicy{test.OkImageChangeTrigger()},
@@ -111,7 +114,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 	}{
 		"empty container field": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Triggers: []api.DeploymentTriggerPolicy{test.OkConfigChangeTrigger()},
@@ -125,7 +128,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"missing name": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "", Namespace: "bar"},
 				Spec:       test.OkDeploymentConfigSpec(),
 			},
 			field.ErrorTypeRequired,
@@ -133,7 +136,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"missing namespace": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: ""},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ""},
 				Spec:       test.OkDeploymentConfigSpec(),
 			},
 			field.ErrorTypeRequired,
@@ -141,7 +144,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"invalid name": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "-foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "-foo", Namespace: "bar"},
 				Spec:       test.OkDeploymentConfigSpec(),
 			},
 			field.ErrorTypeInvalid,
@@ -149,7 +152,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"invalid namespace": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "-bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "-bar"},
 				Spec:       test.OkDeploymentConfigSpec(),
 			},
 			field.ErrorTypeInvalid,
@@ -158,7 +161,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 
 		"missing trigger.type": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Triggers: []api.DeploymentTriggerPolicy{
@@ -178,7 +181,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"missing Trigger imageChangeParams.from": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Triggers: []api.DeploymentTriggerPolicy{
@@ -199,7 +202,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"invalid Trigger imageChangeParams.from.kind": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Triggers: []api.DeploymentTriggerPolicy{
@@ -224,7 +227,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"missing Trigger imageChangeParams.containerNames": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Triggers: []api.DeploymentTriggerPolicy{
@@ -248,13 +251,14 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"missing strategy.type": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Triggers: manualTrigger(),
 					Selector: test.OkSelector(),
 					Strategy: api.DeploymentStrategy{
-						CustomParams: test.OkCustomParams(),
+						CustomParams:          test.OkCustomParams(),
+						ActiveDeadlineSeconds: mkint64p(3600),
 					},
 					Template: test.OkPodTemplate(),
 				},
@@ -264,13 +268,14 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"missing strategy.customParams": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Triggers: manualTrigger(),
 					Selector: test.OkSelector(),
 					Strategy: api.DeploymentStrategy{
 						Type: api.DeploymentStrategyTypeCustom,
+						ActiveDeadlineSeconds: mkint64p(3600),
 					},
 					Template: test.OkPodTemplate(),
 				},
@@ -280,7 +285,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"invalid spec.strategy.customParams.environment": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Triggers: manualTrigger(),
@@ -292,6 +297,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 								{Name: "A=B"},
 							},
 						},
+						ActiveDeadlineSeconds: mkint64p(3600),
 					},
 					Template: test.OkPodTemplate(),
 				},
@@ -301,7 +307,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"missing spec.strategy.recreateParams.pre.failurePolicy": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Strategy: api.DeploymentStrategy{
@@ -314,6 +320,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 								},
 							},
 						},
+						ActiveDeadlineSeconds: mkint64p(3600),
 					},
 					Template: test.OkPodTemplate(),
 					Selector: test.OkSelector(),
@@ -324,7 +331,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"missing spec.strategy.recreateParams.pre.execNewPod": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Strategy: api.DeploymentStrategy{
@@ -334,6 +341,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 								FailurePolicy: api.LifecycleHookFailurePolicyRetry,
 							},
 						},
+						ActiveDeadlineSeconds: mkint64p(3600),
 					},
 					Template: test.OkPodTemplate(),
 					Selector: test.OkSelector(),
@@ -344,7 +352,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"missing spec.strategy.recreateParams.pre.execNewPod.command": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Strategy: api.DeploymentStrategy{
@@ -357,6 +365,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 								},
 							},
 						},
+						ActiveDeadlineSeconds: mkint64p(3600),
 					},
 					Template: test.OkPodTemplate(),
 					Selector: test.OkSelector(),
@@ -367,7 +376,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"missing spec.strategy.recreateParams.pre.execNewPod.containerName": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Strategy: api.DeploymentStrategy{
@@ -380,6 +389,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 								},
 							},
 						},
+						ActiveDeadlineSeconds: mkint64p(3600),
 					},
 					Template: test.OkPodTemplate(),
 					Selector: test.OkSelector(),
@@ -390,7 +400,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"invalid spec.strategy.recreateParams.pre.execNewPod.volumes": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Strategy: api.DeploymentStrategy{
@@ -405,6 +415,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 								},
 							},
 						},
+						ActiveDeadlineSeconds: mkint64p(3600),
 					},
 					Template: test.OkPodTemplate(),
 					Selector: test.OkSelector(),
@@ -415,7 +426,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"missing spec.strategy.recreateParams.mid.execNewPod": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Strategy: api.DeploymentStrategy{
@@ -425,6 +436,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 								FailurePolicy: api.LifecycleHookFailurePolicyRetry,
 							},
 						},
+						ActiveDeadlineSeconds: mkint64p(3600),
 					},
 					Template: test.OkPodTemplate(),
 					Selector: test.OkSelector(),
@@ -435,7 +447,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"missing spec.strategy.recreateParams.post.execNewPod": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Strategy: api.DeploymentStrategy{
@@ -445,6 +457,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 								FailurePolicy: api.LifecycleHookFailurePolicyRetry,
 							},
 						},
+						ActiveDeadlineSeconds: mkint64p(3600),
 					},
 					Template: test.OkPodTemplate(),
 					Selector: test.OkSelector(),
@@ -455,7 +468,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"missing spec.strategy.after.tagImages": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Strategy: api.DeploymentStrategy{
@@ -471,6 +484,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 								},
 							},
 						},
+						ActiveDeadlineSeconds: mkint64p(3600),
 					},
 					Template: test.OkPodTemplate(),
 					Selector: test.OkSelector(),
@@ -481,7 +495,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"missing spec.strategy.after.tagImages.to.kind": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Strategy: api.DeploymentStrategy{
@@ -497,6 +511,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 								},
 							},
 						},
+						ActiveDeadlineSeconds: mkint64p(3600),
 					},
 					Template: test.OkPodTemplate(),
 					Selector: test.OkSelector(),
@@ -507,7 +522,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"missing spec.strategy.after.tagImages.to.name": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Strategy: api.DeploymentStrategy{
@@ -523,6 +538,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 								},
 							},
 						},
+						ActiveDeadlineSeconds: mkint64p(3600),
 					},
 					Template: test.OkPodTemplate(),
 					Selector: test.OkSelector(),
@@ -533,7 +549,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"can't have both tag and execNewPod": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Strategy: api.DeploymentStrategy{
@@ -545,6 +561,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 								TagImages:     []api.TagImageHook{{}},
 							},
 						},
+						ActiveDeadlineSeconds: mkint64p(3600),
 					},
 					Template: test.OkPodTemplate(),
 					Selector: test.OkSelector(),
@@ -570,7 +587,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 		},
 		"missing spec.strategy.rollingParams.pre.failurePolicy": {
 			api.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 				Spec: api.DeploymentConfigSpec{
 					Replicas: 1,
 					Strategy: api.DeploymentStrategy{
@@ -587,6 +604,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 								},
 							},
 						},
+						ActiveDeadlineSeconds: mkint64p(3600),
 					},
 					Template: test.OkPodTemplate(),
 					Selector: test.OkSelector(),
@@ -638,6 +656,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 	}
 
 	for testName, v := range errorCases {
+		t.Logf("running scenario %q", testName)
 		errs := ValidateDeploymentConfig(&v.DeploymentConfig)
 		if len(v.ErrorType) == 0 {
 			if len(errs) > 0 {
@@ -663,7 +682,7 @@ func TestValidateDeploymentConfigMissingFields(t *testing.T) {
 
 func TestValidateDeploymentConfigUpdate(t *testing.T) {
 	oldConfig := &api.DeploymentConfig{
-		ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar", ResourceVersion: "1"},
+		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar", ResourceVersion: "1"},
 		Spec: api.DeploymentConfigSpec{
 			Replicas: 1,
 			Triggers: manualTrigger(),
@@ -676,7 +695,7 @@ func TestValidateDeploymentConfigUpdate(t *testing.T) {
 		},
 	}
 	newConfig := &api.DeploymentConfig{
-		ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar", ResourceVersion: "1"},
+		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar", ResourceVersion: "1"},
 		Spec: api.DeploymentConfigSpec{
 			Replicas: 1,
 			Triggers: manualTrigger(),
@@ -857,7 +876,7 @@ func TestValidateDeploymentConfigRollbackDeprecatedInvalidFields(t *testing.T) {
 
 func TestValidateDeploymentConfigDefaultImageStreamKind(t *testing.T) {
 	config := &api.DeploymentConfig{
-		ObjectMeta: kapi.ObjectMeta{Name: "foo", Namespace: "bar"},
+		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
 		Spec: api.DeploymentConfigSpec{
 			Replicas: 1,
 			Triggers: []api.DeploymentTriggerPolicy{
@@ -890,4 +909,56 @@ func mkint64p(i int) *int64 {
 
 func mkintp(i int) *int {
 	return &i
+}
+
+func TestValidateSelectorMatchesPodTemplateLabels(t *testing.T) {
+	tests := map[string]struct {
+		spec        api.DeploymentConfigSpec
+		expectedErr bool
+		errorType   field.ErrorType
+		field       string
+	}{
+		"valid template labels": {
+			spec: api.DeploymentConfigSpec{
+				Selector: test.OkSelector(),
+				Strategy: test.OkStrategy(),
+				Template: test.OkPodTemplate(),
+			},
+		},
+		"invalid template labels": {
+			spec: api.DeploymentConfigSpec{
+				Selector: test.OkSelector(),
+				Strategy: test.OkStrategy(),
+				Template: test.OkPodTemplate(),
+			},
+			expectedErr: true,
+			errorType:   field.ErrorTypeInvalid,
+			field:       "spec.template.metadata.labels",
+		},
+	}
+
+	for name, test := range tests {
+		if test.expectedErr {
+			test.spec.Template.Labels["a"] = "c"
+		}
+		errs := ValidateDeploymentConfigSpec(test.spec)
+		if len(errs) == 0 && test.expectedErr {
+			t.Errorf("%s: expected failure", name)
+			continue
+		}
+		if !test.expectedErr {
+			continue
+		}
+		if len(errs) != 1 {
+			t.Errorf("%s: expected one error, got %d", name, len(errs))
+			continue
+		}
+		err := errs[0]
+		if err.Type != test.errorType {
+			t.Errorf("%s: expected error to have type %q, got %q", name, test.errorType, err.Type)
+		}
+		if err.Field != test.field {
+			t.Errorf("%s: expected error to have field %q, got %q", name, test.field, err.Field)
+		}
+	}
 }

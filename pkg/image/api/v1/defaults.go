@@ -2,8 +2,8 @@ package v1
 
 import (
 	newer "github.com/openshift/origin/pkg/image/api"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/kubernetes/pkg/api/v1"
-	"k8s.io/kubernetes/pkg/runtime"
 )
 
 func SetDefaults_ImageImportSpec(obj *ImageImportSpec) {
@@ -16,11 +16,16 @@ func SetDefaults_ImageImportSpec(obj *ImageImportSpec) {
 	}
 }
 
-func addDefaultingFuncs(scheme *runtime.Scheme) {
-	err := scheme.AddDefaultingFuncs(
-		SetDefaults_ImageImportSpec,
-	)
-	if err != nil {
-		panic(err)
+func SetDefaults_TagReferencePolicy(obj *TagReferencePolicy) {
+	if len(obj.Type) == 0 {
+		obj.Type = SourceTagReferencePolicy
 	}
+}
+
+func addDefaultingFuncs(scheme *runtime.Scheme) error {
+	RegisterDefaults(scheme)
+	return scheme.AddDefaultingFuncs(
+		SetDefaults_ImageImportSpec,
+		SetDefaults_TagReferencePolicy,
+	)
 }

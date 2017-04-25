@@ -8,12 +8,14 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/docker/docker/pkg/units"
+	units "github.com/docker/go-units"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/labels"
-	"k8s.io/kubernetes/pkg/util/sets"
 
+	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	buildapi "github.com/openshift/origin/pkg/build/api"
 	"github.com/openshift/origin/pkg/client"
 	imageapi "github.com/openshift/origin/pkg/image/api"
@@ -64,7 +66,12 @@ func formatEnv(env api.EnvVar) string {
 }
 
 func formatString(out *tabwriter.Writer, label string, v interface{}) {
-	fmt.Fprintf(out, fmt.Sprintf("%s:\t%s\n", label, toString(v)))
+	labelVals := strings.Split(toString(v), "\n")
+
+	fmt.Fprintf(out, fmt.Sprintf("%s:", label))
+	for _, lval := range labelVals {
+		fmt.Fprintf(out, fmt.Sprintf("\t%s\n", lval))
+	}
 }
 
 func formatTime(out *tabwriter.Writer, label string, t time.Time) {
@@ -106,7 +113,7 @@ func formatMapStringString(out *tabwriter.Writer, label string, items map[string
 	}
 }
 
-func formatAnnotations(out *tabwriter.Writer, m api.ObjectMeta, prefix string) {
+func formatAnnotations(out *tabwriter.Writer, m metav1.ObjectMeta, prefix string) {
 	values, annotations := extractAnnotations(m.Annotations, "description")
 	if len(values[0]) > 0 {
 		formatString(out, prefix+"Description", values[0])
@@ -133,7 +140,7 @@ func FormatRelativeTime(t time.Time) string {
 	return formatRelativeTime(t)
 }
 
-func formatMeta(out *tabwriter.Writer, m api.ObjectMeta) {
+func formatMeta(out *tabwriter.Writer, m metav1.ObjectMeta) {
 	formatString(out, "Name", m.Name)
 	formatString(out, "Namespace", m.Namespace)
 	if !m.CreationTimestamp.IsZero() {
@@ -162,6 +169,12 @@ func webHooksDescribe(triggers []buildapi.BuildTriggerPolicy, name, namespace st
 		switch trigger.Type {
 		case buildapi.GitHubWebHookBuildTriggerType:
 			webHookTrigger = trigger.GitHubWebHook.Secret
+
+		case buildapi.GitLabWebHookBuildTriggerType:
+			webHookTrigger = trigger.GitLabWebHook.Secret
+
+		case buildapi.BitbucketWebHookBuildTriggerType:
+			webHookTrigger = trigger.BitbucketWebHook.Secret
 
 		case buildapi.GenericWebHookBuildTriggerType:
 			webHookTrigger = trigger.GenericWebHook.Secret
@@ -202,7 +215,7 @@ var reLongImageID = regexp.MustCompile(`[a-f0-9]{60,}$`)
 // for users.
 func shortenImagePullSpec(spec string) string {
 	if reLongImageID.MatchString(spec) {
-		return spec[:len(spec)-50] + "..."
+		return spec[:len(spec)-50]
 	}
 	return spec
 }
@@ -212,127 +225,234 @@ func formatImageStreamTags(out *tabwriter.Writer, stream *imageapi.ImageStream) 
 		fmt.Fprintf(out, "Tags:\t<none>\n")
 		return
 	}
-	fmt.Fprint(out, "\nTag\tSpec\tCreated\tPullSpec\tImage\n")
+
+	now := timeNowFn()
+
+	images := make(map[string]string)
+	for tag, tags := range stream.Status.Tags {
+		for _, item := range tags.Items {
+			switch {
+			case len(item.Image) > 0:
+				if _, ok := images[item.Image]; !ok {
+					images[item.Image] = tag
+				}
+			case len(item.DockerImageReference) > 0:
+				if _, ok := images[item.DockerImageReference]; !ok {
+					images[item.Image] = item.DockerImageReference
+				}
+			}
+		}
+	}
+
 	sortedTags := []string{}
 	for k := range stream.Status.Tags {
 		sortedTags = append(sortedTags, k)
 	}
+	var localReferences sets.String
+	var referentialTags map[string]sets.String
 	for k := range stream.Spec.Tags {
+		if target, _, ok, multiple := imageapi.FollowTagReference(stream, k); ok && multiple {
+			if referentialTags == nil {
+				referentialTags = make(map[string]sets.String)
+			}
+			if localReferences == nil {
+				localReferences = sets.NewString()
+			}
+			localReferences.Insert(k)
+			v := referentialTags[target]
+			if v == nil {
+				v = sets.NewString()
+				referentialTags[target] = v
+			}
+			v.Insert(k)
+		}
 		if _, ok := stream.Status.Tags[k]; !ok {
 			sortedTags = append(sortedTags, k)
 		}
 	}
-	hasScheduled, hasInsecure := false, false
+	fmt.Fprintf(out, "Unique Images:\t%d\nTags:\t%d\n\n", len(images), len(sortedTags))
+
+	first := true
 	imageapi.PrioritizeTags(sortedTags)
 	for _, tag := range sortedTags {
-		tagRef, ok := stream.Spec.Tags[tag]
-		specTag := ""
+		if localReferences.Has(tag) {
+			continue
+		}
+		if first {
+			first = false
+		} else {
+			fmt.Fprintf(out, "\n")
+		}
+		taglist, _ := stream.Status.Tags[tag]
+		tagRef, hasSpecTag := stream.Spec.Tags[tag]
 		scheduled := false
 		insecure := false
-		if ok {
-			if tagRef.From != nil {
-				namePair := ""
-				if len(tagRef.From.Namespace) > 0 && tagRef.From.Namespace != stream.Namespace {
-					namePair = fmt.Sprintf("%s/%s", tagRef.From.Namespace, tagRef.From.Name)
-				} else {
-					namePair = tagRef.From.Name
-				}
+		importing := false
 
-				switch tagRef.From.Kind {
-				case "ImageStreamTag", "ImageStreamImage":
-					specTag = namePair
-				case "DockerImage":
-					specTag = tagRef.From.Name
-				default:
-					specTag = fmt.Sprintf("<unknown %s> %s", tagRef.From.Kind, namePair)
-				}
+		var name string
+		if hasSpecTag && tagRef.From != nil {
+			if len(tagRef.From.Namespace) > 0 && tagRef.From.Namespace != stream.Namespace {
+				name = fmt.Sprintf("%s/%s", tagRef.From.Namespace, tagRef.From.Name)
+			} else {
+				name = tagRef.From.Name
 			}
 			scheduled, insecure = tagRef.ImportPolicy.Scheduled, tagRef.ImportPolicy.Insecure
-			hasScheduled = hasScheduled || scheduled
-			hasInsecure = hasInsecure || insecure
-		} else {
-			specTag = "<pushed>"
+			gen := imageapi.LatestObservedTagGeneration(stream, tag)
+			importing = !tagRef.Reference && tagRef.Generation != nil && *tagRef.Generation != gen
 		}
-		if taglist, ok := stream.Status.Tags[tag]; ok {
-			if len(taglist.Conditions) > 0 {
-				var lastTime time.Time
-				summary := []string{}
-				for _, condition := range taglist.Conditions {
-					if condition.LastTransitionTime.After(lastTime) {
-						lastTime = condition.LastTransitionTime.Time
-					}
-					switch condition.Type {
-					case imageapi.ImportSuccess:
-						if condition.Status == api.ConditionFalse {
-							summary = append(summary, fmt.Sprintf("import failed: %s", condition.Message))
-						}
-					default:
-						summary = append(summary, string(condition.Type))
-					}
-				}
-				if len(summary) > 0 {
-					description := strings.Join(summary, ", ")
-					if len(description) > 70 {
-						description = strings.TrimSpace(description[:70-3]) + "..."
-					}
-					d := timeNowFn().Sub(lastTime)
-					fmt.Fprintf(out, "%s\t%s\t%s ago\t%s\t%v\n",
-						tag,
-						shortenImagePullSpec(specTag),
-						units.HumanDuration(d),
-						"",
-						description)
-				}
-			}
-			for i, event := range taglist.Items {
-				d := timeNowFn().Sub(event.Created.Time)
-				image := event.Image
-				ref, err := imageapi.ParseDockerImageReference(event.DockerImageReference)
-				if err == nil {
-					if ref.ID == image {
-						image = "<same>"
-					}
-				}
-				pullSpec := event.DockerImageReference
-				if pullSpec == specTag {
-					pullSpec = "<same>"
-				} else {
-					pullSpec = shortenImagePullSpec(pullSpec)
-				}
-				specTag = shortenImagePullSpec(specTag)
-				if i != 0 {
-					tag, specTag = "", ""
-				} else {
-					extra := ""
-					if scheduled {
-						extra += "*"
-					}
-					if insecure {
-						extra += "!"
-					}
-					if len(extra) > 0 {
-						specTag += " " + extra
-					}
-				}
-				fmt.Fprintf(out, "%s\t%s\t%s ago\t%s\t%v\n",
-					tag,
-					specTag,
-					units.HumanDuration(d),
-					pullSpec,
-					image)
-			}
-		} else {
-			fmt.Fprintf(out, "%s\t%s\t\t<not available>\t<not available>\n", tag, specTag)
-		}
-	}
 
-	if hasInsecure || hasScheduled {
-		fmt.Fprintln(out)
-		if hasScheduled {
-			fmt.Fprintf(out, "  * tag is scheduled for periodic import\n")
+		//   updates whenever tag :5.2 is changed
+
+		// :latest (30 minutes ago) -> 102.205.358.453/foo/bar@sha256:abcde734
+		//   error: last import failed 20 minutes ago
+		//   updates automatically from index.docker.io/mysql/bar
+		//     will use insecure HTTPS connections or HTTP
+		//
+		//   MySQL 5.5
+		//   ---------
+		//   Describes a system for updating based on practical changes to a database system
+		//   with some other data involved
+		//
+		//   20 minutes ago  <import failed>
+		//	  	Failed to locate the server in time
+		//   30 minutes ago  102.205.358.453/foo/bar@sha256:abcdef
+		//   1 hour ago      102.205.358.453/foo/bar@sha256:bfedfc
+
+		//var shortErrors []string
+		/*
+			var internalReference *imageapi.DockerImageReference
+			if value := stream.Status.DockerImageRepository; len(value) > 0 {
+				ref, err := imageapi.ParseDockerImageReference(value)
+				if err != nil {
+					internalReference = &ref
+				}
+			}
+		*/
+
+		if referentialTags[tag].Len() > 0 {
+			references := referentialTags[tag].List()
+			imageapi.PrioritizeTags(references)
+			fmt.Fprintf(out, "%s (%s)\n", tag, strings.Join(references, ", "))
+		} else {
+			fmt.Fprintf(out, "%s\n", tag)
 		}
-		if hasInsecure {
-			fmt.Fprintf(out, "  ! tag is insecure and can be imported over HTTP or self-signed HTTPS\n")
+
+		switch {
+		case !hasSpecTag || tagRef.From == nil:
+			fmt.Fprintf(out, "  pushed image\n")
+		case tagRef.From.Kind == "ImageStreamTag":
+			switch {
+			case tagRef.Reference:
+				fmt.Fprintf(out, "  reference to %s\n", name)
+			case scheduled:
+				fmt.Fprintf(out, "  updates automatically from %s\n", name)
+			default:
+				fmt.Fprintf(out, "  tagged from %s\n", name)
+			}
+		case tagRef.From.Kind == "DockerImage":
+			switch {
+			case tagRef.Reference:
+				fmt.Fprintf(out, "  reference to registry %s\n", name)
+			case scheduled:
+				fmt.Fprintf(out, "  updates automatically from registry %s\n", name)
+			default:
+				fmt.Fprintf(out, "  tagged from %s\n", name)
+			}
+		case tagRef.From.Kind == "ImageStreamImage":
+			switch {
+			case tagRef.Reference:
+				fmt.Fprintf(out, "  reference to image %s\n", name)
+			default:
+				fmt.Fprintf(out, "  tagged from %s\n", name)
+			}
+		default:
+			switch {
+			case tagRef.Reference:
+				fmt.Fprintf(out, "  reference to %s %s\n", tagRef.From.Kind, name)
+			default:
+				fmt.Fprintf(out, "  updates from %s %s\n", tagRef.From.Kind, name)
+			}
+		}
+		if insecure {
+			fmt.Fprintf(out, "    will use insecure HTTPS or HTTP connections\n")
+		}
+		switch tagRef.ReferencePolicy.Type {
+		case imageapi.LocalTagReferencePolicy:
+			fmt.Fprintf(out, "    prefer registry pullthrough when referencing this tag\n")
+		}
+
+		fmt.Fprintln(out)
+
+		extraOutput := false
+		if d := tagRef.Annotations["description"]; len(d) > 0 {
+			fmt.Fprintf(out, "  %s\n", d)
+			extraOutput = true
+		}
+		if t := tagRef.Annotations["tags"]; len(t) > 0 {
+			fmt.Fprintf(out, "  Tags: %s\n", strings.Join(strings.Split(t, ","), ", "))
+			extraOutput = true
+		}
+		if t := tagRef.Annotations["supports"]; len(t) > 0 {
+			fmt.Fprintf(out, "  Supports: %s\n", strings.Join(strings.Split(t, ","), ", "))
+			extraOutput = true
+		}
+		if t := tagRef.Annotations["sampleRepo"]; len(t) > 0 {
+			fmt.Fprintf(out, "  Example Repo: %s\n", t)
+			extraOutput = true
+		}
+		if extraOutput {
+			fmt.Fprintln(out)
+		}
+
+		if importing {
+			fmt.Fprintf(out, "  ~ importing latest image ...\n")
+		}
+
+		for i := range taglist.Conditions {
+			condition := &taglist.Conditions[i]
+			switch condition.Type {
+			case imageapi.ImportSuccess:
+				if condition.Status == api.ConditionFalse {
+					d := now.Sub(condition.LastTransitionTime.Time)
+					fmt.Fprintf(out, "  ! error: Import failed (%s): %s\n      %s ago\n", condition.Reason, condition.Message, units.HumanDuration(d))
+				}
+			}
+		}
+
+		if len(taglist.Items) == 0 {
+			continue
+		}
+
+		for i, event := range taglist.Items {
+			d := now.Sub(event.Created.Time)
+
+			if i == 0 {
+				fmt.Fprintf(out, "  * %s\n", event.DockerImageReference)
+			} else {
+				fmt.Fprintf(out, "    %s\n", event.DockerImageReference)
+			}
+
+			ref, err := imageapi.ParseDockerImageReference(event.DockerImageReference)
+			id := event.Image
+			if len(id) > 0 && err == nil && ref.ID != id {
+				fmt.Fprintf(out, "      %s ago\t%s\n", units.HumanDuration(d), id)
+			} else {
+				fmt.Fprintf(out, "      %s ago\n", units.HumanDuration(d))
+			}
 		}
 	}
+}
+
+// roleBindingRestrictionType returns a string that indicates the type of the
+// given RoleBindingRestriction.
+func roleBindingRestrictionType(rbr *authorizationapi.RoleBindingRestriction) string {
+	switch {
+	case rbr.Spec.UserRestriction != nil:
+		return "User"
+	case rbr.Spec.GroupRestriction != nil:
+		return "Group"
+	case rbr.Spec.ServiceAccountRestriction != nil:
+		return "ServiceAccount"
+	}
+	return ""
 }

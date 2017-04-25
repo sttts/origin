@@ -4,9 +4,10 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kerrors "k8s.io/kubernetes/pkg/api/errors"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
+	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
 	"k8s.io/kubernetes/pkg/kubectl"
 
 	"github.com/openshift/origin/pkg/client"
@@ -16,7 +17,7 @@ func NewGroupReaper(
 	groupClient client.GroupsInterface,
 	clusterBindingClient client.ClusterRoleBindingsInterface,
 	bindingClient client.RoleBindingsNamespacer,
-	sccClient kclient.SecurityContextConstraintsInterface,
+	sccClient kcoreclient.SecurityContextConstraintsGetter,
 ) kubectl.Reaper {
 	return &GroupReaper{
 		groupClient:          groupClient,
@@ -30,12 +31,12 @@ type GroupReaper struct {
 	groupClient          client.GroupsInterface
 	clusterBindingClient client.ClusterRoleBindingsInterface
 	bindingClient        client.RoleBindingsNamespacer
-	sccClient            kclient.SecurityContextConstraintsInterface
+	sccClient            kcoreclient.SecurityContextConstraintsGetter
 }
 
 // Stop on a reaper is actually used for deletion.  In this case, we'll delete referencing identities, clusterBindings, and bindings,
 // then delete the group
-func (r *GroupReaper) Stop(namespace, name string, timeout time.Duration, gracePeriod *kapi.DeleteOptions) error {
+func (r *GroupReaper) Stop(namespace, name string, timeout time.Duration, gracePeriod *metav1.DeleteOptions) error {
 	removedSubject := kapi.ObjectReference{Kind: "Group", Name: name}
 
 	if err := reapClusterBindings(removedSubject, r.clusterBindingClient); err != nil {
@@ -47,7 +48,7 @@ func (r *GroupReaper) Stop(namespace, name string, timeout time.Duration, graceP
 	}
 
 	// Remove the group from sccs
-	sccs, err := r.sccClient.SecurityContextConstraints().List(kapi.ListOptions{})
+	sccs, err := r.sccClient.SecurityContextConstraints().List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}

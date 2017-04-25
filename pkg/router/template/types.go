@@ -43,12 +43,18 @@ type ServiceAliasConfig struct {
 	// Hash of the route name - used to obscure cookieId
 	RoutingKeyName string
 
+	// IsWildcard indicates this service unit needs wildcarding support.
+	IsWildcard bool
+
 	// Annotations attached to this route
 	Annotations map[string]string
 
 	// ServiceUnitNames is a collection of services that support this route, keyed by service name
 	// and valued on the weight attached to it with respect to other entries in the map
 	ServiceUnitNames map[string]int32
+
+	// ActiveServiceUnits is a count of the service units with a non-zero weight
+	ActiveServiceUnits int
 }
 
 type ServiceAliasConfigStatus string
@@ -69,12 +75,13 @@ type Certificate struct {
 
 // Endpoint is an internal representation of a k8s endpoint.
 type Endpoint struct {
-	ID         string
-	IP         string
-	Port       string
-	TargetName string
-	PortName   string
-	IdHash     string
+	ID            string
+	IP            string
+	Port          string
+	TargetName    string
+	PortName      string
+	IdHash        string
+	NoHealthCheck bool
 }
 
 // certificateManager provides the ability to write certificates for a ServiceAliasConfig

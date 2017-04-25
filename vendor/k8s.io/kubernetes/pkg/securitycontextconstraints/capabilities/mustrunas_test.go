@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -253,6 +253,13 @@ func TestValidateAdds(t *testing.T) {
 		// container requests match allowed
 		"no required, allowed, container requests valid": {
 			allowedCaps: []api.Capability{"foo"},
+			containerCaps: &api.Capabilities{
+				Add: []api.Capability{"foo"},
+			},
+			shouldPass: true,
+		},
+		"no required, all allowed, container requests valid": {
+			allowedCaps: []api.Capability{api.CapabilityAll},
 			containerCaps: &api.Capabilities{
 				Add: []api.Capability{"foo"},
 			},

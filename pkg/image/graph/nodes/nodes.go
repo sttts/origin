@@ -3,7 +3,7 @@ package nodes
 import (
 	"github.com/gonum/graph"
 
-	kapi "k8s.io/kubernetes/pkg/api"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	osgraph "github.com/openshift/origin/pkg/api/graph"
 	imageapi "github.com/openshift/origin/pkg/image/api"
@@ -37,7 +37,7 @@ func EnsureAllImageStreamTagNodes(g osgraph.MutableUniqueGraph, is *imageapi.Ima
 }
 
 func FindImage(g osgraph.MutableUniqueGraph, imageName string) graph.Node {
-	return g.Find(ImageNodeName(&imageapi.Image{ObjectMeta: kapi.ObjectMeta{Name: imageName}}))
+	return g.Find(ImageNodeName(&imageapi.Image{ObjectMeta: metav1.ObjectMeta{Name: imageName}}))
 }
 
 // EnsureDockerRepositoryNode adds the named Docker repository tag reference to the graph if it does
@@ -65,7 +65,7 @@ func EnsureDockerRepositoryNode(g osgraph.MutableUniqueGraph, name, tag string) 
 // based on a full IST object.  This can be used to properly initialize the graph without having to retrieve all ISTs
 func MakeImageStreamTagObjectMeta(namespace, name, tag string) *imageapi.ImageStreamTag {
 	return &imageapi.ImageStreamTag{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: namespace,
 			Name:      imageapi.JoinImageStreamTag(name, tag),
 		},
@@ -76,7 +76,7 @@ func MakeImageStreamTagObjectMeta(namespace, name, tag string) *imageapi.ImageSt
 // based on a full IST object.  This can be used to properly initialize the graph without having to retrieve all ISTs
 func MakeImageStreamTagObjectMeta2(namespace, name string) *imageapi.ImageStreamTag {
 	return &imageapi.ImageStreamTag{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: namespace,
 			Name:      name,
 		},
@@ -107,7 +107,7 @@ func FindOrCreateSyntheticImageStreamTagNode(g osgraph.MutableUniqueGraph, ist *
 // based on a full ISI object.  This can be used to properly initialize the graph without having to retrieve all ISIs
 func MakeImageStreamImageObjectMeta(namespace, name string) *imageapi.ImageStreamImage {
 	return &imageapi.ImageStreamImage{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: namespace,
 			Name:      name,
 		},
@@ -118,7 +118,7 @@ func MakeImageStreamImageObjectMeta(namespace, name string) *imageapi.ImageStrea
 // does not already exist.
 func EnsureImageStreamImageNode(g osgraph.MutableUniqueGraph, namespace, name string) graph.Node {
 	isi := &imageapi.ImageStreamImage{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: namespace,
 			Name:      name,
 		},
@@ -161,12 +161,36 @@ func FindOrCreateSyntheticImageStreamNode(g osgraph.MutableUniqueGraph, is *imag
 	).(*ImageStreamNode)
 }
 
-// EnsureImageLayerNode adds a graph node for the layer if it does not already exist.
-func EnsureImageLayerNode(g osgraph.MutableUniqueGraph, layer string) graph.Node {
-	return osgraph.EnsureUnique(g,
-		ImageLayerNodeName(layer),
+func ensureImageComponentNode(g osgraph.MutableUniqueGraph, name string, t ImageComponentType) graph.Node {
+	node := osgraph.EnsureUnique(g,
+		ImageComponentNodeName(name),
 		func(node osgraph.Node) graph.Node {
-			return &ImageLayerNode{node, layer}
+			return &ImageComponentNode{
+				Node:      node,
+				Component: name,
+				Type:      t,
+			}
 		},
 	)
+
+	// If at least one image referers to the blob as its config, treat it as a config even if it is a layer of
+	// some other image.
+	if t == ImageComponentTypeConfig {
+		cn := node.(*ImageComponentNode)
+		if cn.Type != ImageComponentTypeConfig {
+			cn.Type = ImageComponentTypeConfig
+		}
+	}
+
+	return node
+}
+
+// EnsureImageComponentConfigNode adds a graph node for the image config if it does not already exist.
+func EnsureImageComponentConfigNode(g osgraph.MutableUniqueGraph, name string) graph.Node {
+	return ensureImageComponentNode(g, name, ImageComponentTypeConfig)
+}
+
+// EnsureImageComponentLayerNode adds a graph node for the image layer if it does not already exist.
+func EnsureImageComponentLayerNode(g osgraph.MutableUniqueGraph, name string) graph.Node {
+	return ensureImageComponentNode(g, name, ImageComponentTypeLayer)
 }

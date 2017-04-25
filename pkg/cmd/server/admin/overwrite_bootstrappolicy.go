@@ -8,13 +8,16 @@ import (
 
 	"github.com/spf13/cobra"
 
+	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	kerrors "k8s.io/apimachinery/pkg/util/errors"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/apimachinery/registered"
-	"k8s.io/kubernetes/pkg/kubectl"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
-	"k8s.io/kubernetes/pkg/runtime"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	policyregistry "github.com/openshift/origin/pkg/authorization/registry/policy"
@@ -35,7 +38,7 @@ import (
 	"github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/cmd/cli/describe"
 	configapilatest "github.com/openshift/origin/pkg/cmd/server/api/latest"
-	cmdclientcmd "github.com/openshift/origin/pkg/cmd/util/clientcmd"
+	originrest "github.com/openshift/origin/pkg/cmd/server/origin/rest"
 	templateapi "github.com/openshift/origin/pkg/template/api"
 	"github.com/openshift/origin/pkg/util/restoptions"
 )
@@ -102,7 +105,11 @@ func (o OverwriteBootstrapPolicyOptions) OverwriteBootstrapPolicy() error {
 		return err
 	}
 
-	optsGetter := restoptions.NewConfigGetter(*masterConfig)
+	// this brings in etcd server client libraries
+	optsGetter, err := originrest.StorageOptions(*masterConfig)
+	if err != nil {
+		return err
+	}
 
 	return OverwriteBootstrapPolicy(optsGetter, o.File, o.CreateBootstrapPolicyCommand, o.Force, o.Out)
 }
@@ -112,14 +119,14 @@ func OverwriteBootstrapPolicy(optsGetter restoptions.Getter, policyFile, createB
 		fmt.Fprintf(out, "Performing a dry run of policy overwrite:\n\n")
 	}
 
-	mapper := cmdclientcmd.ShortcutExpander{RESTMapper: kubectl.ShortcutExpander{RESTMapper: registered.RESTMapper()}}
+	mapper := kapi.Registry.RESTMapper()
 	typer := kapi.Scheme
 	clientMapper := resource.ClientMapperFunc(func(mapping *meta.RESTMapping) (resource.RESTClient, error) {
 		return nil, nil
 	})
 
 	r := resource.NewBuilder(mapper, typer, clientMapper, kapi.Codecs.UniversalDecoder()).
-		FilenameParam(false, false, policyFile).
+		FilenameParam(false, &resource.FilenameOptions{Recursive: false, Filenames: []string{policyFile}}).
 		Flatten().
 		Do()
 
@@ -127,25 +134,25 @@ func OverwriteBootstrapPolicy(optsGetter restoptions.Getter, policyFile, createB
 		return r.Err()
 	}
 
-	policyStorage, err := policyetcd.NewStorage(optsGetter)
+	policyStorage, err := policyetcd.NewREST(optsGetter)
 	if err != nil {
 		return err
 	}
 	policyRegistry := policyregistry.NewRegistry(policyStorage)
 
-	policyBindingStorage, err := policybindingetcd.NewStorage(optsGetter)
+	policyBindingStorage, err := policybindingetcd.NewREST(optsGetter)
 	if err != nil {
 		return err
 	}
 	policyBindingRegistry := policybindingregistry.NewRegistry(policyBindingStorage)
 
-	clusterPolicyStorage, err := clusterpolicyetcd.NewStorage(optsGetter)
+	clusterPolicyStorage, err := clusterpolicyetcd.NewREST(optsGetter)
 	if err != nil {
 		return err
 	}
 	clusterPolicyRegistry := clusterpolicyregistry.NewRegistry(clusterPolicyStorage)
 
-	clusterPolicyBindingStorage, err := clusterpolicybindingetcd.NewStorage(optsGetter)
+	clusterPolicyBindingStorage, err := clusterpolicybindingetcd.NewREST(optsGetter)
 	if err != nil {
 		return err
 	}
@@ -154,14 +161,18 @@ func OverwriteBootstrapPolicy(optsGetter restoptions.Getter, policyFile, createB
 	ruleResolver := rulevalidation.NewDefaultRuleResolver(
 		policyListerNamespacer{registry: policyRegistry},
 		policyBindingListerNamespacer{registry: policyBindingRegistry},
-		clusterpolicyregistry.ReadOnlyClusterPolicy{Registry: clusterPolicyRegistry},
-		clusterpolicybindingregistry.ReadOnlyClusterPolicyBinding{Registry: clusterPolicyBindingRegistry},
+		&clusterpolicyregistry.ReadOnlyClusterPolicyClientShim{
+			ReadOnlyClusterPolicy: clusterpolicyregistry.ReadOnlyClusterPolicy{Registry: clusterPolicyRegistry},
+		},
+		&clusterpolicybindingregistry.ReadOnlyClusterPolicyBindingClientShim{
+			ReadOnlyClusterPolicyBinding: clusterpolicybindingregistry.ReadOnlyClusterPolicyBinding{Registry: clusterPolicyBindingRegistry},
+		},
 	)
 
-	roleStorage := rolestorage.NewVirtualStorage(policyRegistry, ruleResolver)
-	roleBindingStorage := rolebindingstorage.NewVirtualStorage(policyBindingRegistry, ruleResolver)
-	clusterRoleStorage := clusterrolestorage.NewClusterRoleStorage(clusterPolicyRegistry, clusterPolicyBindingRegistry)
-	clusterRoleBindingStorage := clusterrolebindingstorage.NewClusterRoleBindingStorage(clusterPolicyRegistry, clusterPolicyBindingRegistry)
+	roleStorage := rolestorage.NewVirtualStorage(policyRegistry, ruleResolver, nil, authorizationapi.Resource("role"))
+	roleBindingStorage := rolebindingstorage.NewVirtualStorage(policyBindingRegistry, ruleResolver, nil, authorizationapi.Resource("rolebinding"))
+	clusterRoleStorage := clusterrolestorage.NewClusterRoleStorage(clusterPolicyRegistry, clusterPolicyBindingRegistry, nil)
+	clusterRoleBindingStorage := clusterrolebindingstorage.NewClusterRoleBindingStorage(clusterPolicyRegistry, clusterPolicyBindingRegistry, nil)
 
 	return r.Visit(func(info *resource.Info, err error) error {
 		if err != nil {
@@ -173,14 +184,30 @@ func OverwriteBootstrapPolicy(optsGetter restoptions.Getter, policyFile, createB
 		}
 		runtime.DecodeList(template.Objects, kapi.Codecs.UniversalDecoder())
 
+		// For each object, we attempt the following to maximize our ability to persist the desired objects, while minimizing etcd write thrashing:
+		// 1. Create the object (no-ops if the object already exists)
+		// 2. If the object already exists, attempt to update the object (no-ops if an identical object is already persisted)
+		// 3. If we encounter any error updating, delete and recreate
+		errs := []error{}
 		for _, item := range template.Objects {
 			switch t := item.(type) {
 			case *authorizationapi.Role:
-				ctx := kapi.WithNamespace(kapi.NewContext(), t.Namespace)
+				ctx := apirequest.WithNamespace(apirequest.NewContext(), t.Namespace)
 				if change {
-					roleStorage.Delete(ctx, t.Name, nil)
-					if _, err := roleStorage.CreateRoleWithEscalation(ctx, t); err != nil {
-						return err
+					// Attempt to create
+					_, err := roleStorage.CreateRoleWithEscalation(ctx, t)
+					// Unconditional replace if it already exists
+					if kapierrors.IsAlreadyExists(err) {
+						_, _, err = roleStorage.UpdateRoleWithEscalation(ctx, t)
+					}
+					// Delete and recreate as a last resort
+					if err != nil {
+						roleStorage.Delete(ctx, t.Name, nil)
+						_, err = roleStorage.CreateRoleWithEscalation(ctx, t)
+					}
+					// Gather any error
+					if err != nil {
+						errs = append(errs, err)
 					}
 				} else {
 					fmt.Fprintf(out, "Overwrite role %s/%s\n", t.Namespace, t.Name)
@@ -189,11 +216,22 @@ func OverwriteBootstrapPolicy(optsGetter restoptions.Getter, policyFile, createB
 					}
 				}
 			case *authorizationapi.RoleBinding:
-				ctx := kapi.WithNamespace(kapi.NewContext(), t.Namespace)
+				ctx := apirequest.WithNamespace(apirequest.NewContext(), t.Namespace)
 				if change {
-					roleBindingStorage.Delete(ctx, t.Name, nil)
-					if _, err := roleBindingStorage.CreateRoleBindingWithEscalation(ctx, t); err != nil {
-						return err
+					// Attempt to create
+					_, err := roleBindingStorage.CreateRoleBindingWithEscalation(ctx, t)
+					// Unconditional replace if it already exists
+					if kapierrors.IsAlreadyExists(err) {
+						_, _, err = roleBindingStorage.UpdateRoleBindingWithEscalation(ctx, t)
+					}
+					// Delete and recreate as a last resort
+					if err != nil {
+						roleBindingStorage.Delete(ctx, t.Name, nil)
+						_, err = roleBindingStorage.CreateRoleBindingWithEscalation(ctx, t)
+					}
+					// Gather any error
+					if err != nil {
+						errs = append(errs, err)
 					}
 				} else {
 					fmt.Fprintf(out, "Overwrite role binding %s/%s\n", t.Namespace, t.Name)
@@ -203,11 +241,22 @@ func OverwriteBootstrapPolicy(optsGetter restoptions.Getter, policyFile, createB
 				}
 
 			case *authorizationapi.ClusterRole:
-				ctx := kapi.WithNamespace(kapi.NewContext(), t.Namespace)
+				ctx := apirequest.WithNamespace(apirequest.NewContext(), t.Namespace)
 				if change {
-					clusterRoleStorage.Delete(ctx, t.Name, nil)
-					if _, err := clusterRoleStorage.CreateClusterRoleWithEscalation(ctx, t); err != nil {
-						return err
+					// Attempt to create
+					_, err := clusterRoleStorage.CreateClusterRoleWithEscalation(ctx, t)
+					// Unconditional replace if it already exists
+					if kapierrors.IsAlreadyExists(err) {
+						_, _, err = clusterRoleStorage.UpdateClusterRoleWithEscalation(ctx, t)
+					}
+					// Delete and recreate as a last resort
+					if err != nil {
+						clusterRoleStorage.Delete(ctx, t.Name, nil)
+						_, err = clusterRoleStorage.CreateClusterRoleWithEscalation(ctx, t)
+					}
+					// Gather any error
+					if err != nil {
+						errs = append(errs, err)
 					}
 				} else {
 					fmt.Fprintf(out, "Overwrite role %s/%s\n", t.Namespace, t.Name)
@@ -216,11 +265,22 @@ func OverwriteBootstrapPolicy(optsGetter restoptions.Getter, policyFile, createB
 					}
 				}
 			case *authorizationapi.ClusterRoleBinding:
-				ctx := kapi.WithNamespace(kapi.NewContext(), t.Namespace)
+				ctx := apirequest.WithNamespace(apirequest.NewContext(), t.Namespace)
 				if change {
-					clusterRoleBindingStorage.Delete(ctx, t.Name, nil)
-					if _, err := clusterRoleBindingStorage.CreateClusterRoleBindingWithEscalation(ctx, t); err != nil {
-						return err
+					// Attempt to create
+					_, err := clusterRoleBindingStorage.CreateClusterRoleBindingWithEscalation(ctx, t)
+					// Unconditional replace if it already exists
+					if kapierrors.IsAlreadyExists(err) {
+						_, _, err = clusterRoleBindingStorage.UpdateClusterRoleBindingWithEscalation(ctx, t)
+					}
+					// Delete and recreate as a last resort
+					if err != nil {
+						clusterRoleBindingStorage.Delete(ctx, t.Name, nil)
+						_, err = clusterRoleBindingStorage.CreateClusterRoleBindingWithEscalation(ctx, t)
+					}
+					// Gather any error
+					if err != nil {
+						errs = append(errs, err)
 					}
 				} else {
 					fmt.Fprintf(out, "Overwrite role binding %s/%s\n", t.Namespace, t.Name)
@@ -230,13 +290,13 @@ func OverwriteBootstrapPolicy(optsGetter restoptions.Getter, policyFile, createB
 				}
 
 			default:
-				return fmt.Errorf("only roles and rolebindings may be created in this mode, not: %v", reflect.TypeOf(t))
+				errs = append(errs, fmt.Errorf("only roles and rolebindings may be created in this mode, not: %v", reflect.TypeOf(t)))
 			}
 		}
 		if !change {
 			fmt.Fprintf(out, "To make the changes described above, pass --force\n")
 		}
-		return nil
+		return kerrors.NewAggregate(errs)
 	})
 }
 
@@ -253,12 +313,16 @@ type policyLister struct {
 	namespace string
 }
 
-func (s policyLister) List(options kapi.ListOptions) (*authorizationapi.PolicyList, error) {
-	return s.registry.ListPolicies(kapi.WithNamespace(kapi.NewContext(), s.namespace), &options)
+func (s policyLister) List(options metav1.ListOptions) (*authorizationapi.PolicyList, error) {
+	optint := metainternal.ListOptions{}
+	if err := metainternal.Convert_v1_ListOptions_To_internalversion_ListOptions(&options, &optint, nil); err != nil {
+		return nil, err
+	}
+	return s.registry.ListPolicies(apirequest.WithNamespace(apirequest.NewContext(), s.namespace), &optint)
 }
 
-func (s policyLister) Get(name string) (*authorizationapi.Policy, error) {
-	return s.registry.GetPolicy(kapi.WithNamespace(kapi.NewContext(), s.namespace), name)
+func (s policyLister) Get(name string, options metav1.GetOptions) (*authorizationapi.Policy, error) {
+	return s.registry.GetPolicy(apirequest.WithNamespace(apirequest.NewContext(), s.namespace), name, &options)
 }
 
 type policyBindingListerNamespacer struct {
@@ -274,10 +338,14 @@ type policyBindingLister struct {
 	namespace string
 }
 
-func (s policyBindingLister) List(options kapi.ListOptions) (*authorizationapi.PolicyBindingList, error) {
-	return s.registry.ListPolicyBindings(kapi.WithNamespace(kapi.NewContext(), s.namespace), &options)
+func (s policyBindingLister) List(options metav1.ListOptions) (*authorizationapi.PolicyBindingList, error) {
+	optint := metainternal.ListOptions{}
+	if err := metainternal.Convert_v1_ListOptions_To_internalversion_ListOptions(&options, &optint, nil); err != nil {
+		return nil, err
+	}
+	return s.registry.ListPolicyBindings(apirequest.WithNamespace(apirequest.NewContext(), s.namespace), &optint)
 }
 
-func (s policyBindingLister) Get(name string) (*authorizationapi.PolicyBinding, error) {
-	return s.registry.GetPolicyBinding(kapi.WithNamespace(kapi.NewContext(), s.namespace), name)
+func (s policyBindingLister) Get(name string, options metav1.GetOptions) (*authorizationapi.PolicyBinding, error) {
+	return s.registry.GetPolicyBinding(apirequest.WithNamespace(apirequest.NewContext(), s.namespace), name, &options)
 }

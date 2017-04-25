@@ -1,10 +1,9 @@
 package cache
 
 import (
-	kapi "k8s.io/kubernetes/pkg/api"
-	kapierrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/client/cache"
-	"k8s.io/kubernetes/pkg/controller/framework"
+	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/cache"
 
 	oapi "github.com/openshift/origin/pkg/api"
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
@@ -13,7 +12,7 @@ import (
 )
 
 type InformerToPolicyBindingNamespacer struct {
-	framework.SharedIndexInformer
+	cache.SharedIndexInformer
 }
 
 // LastSyncResourceVersion exposes the LastSyncResourceVersion of the internal reflector
@@ -30,11 +29,15 @@ type indexerToPolicyBindingLister struct {
 	namespace string
 }
 
-func (i *indexerToPolicyBindingLister) List(options kapi.ListOptions) (*authorizationapi.PolicyBindingList, error) {
+func (i *indexerToPolicyBindingLister) List(options metav1.ListOptions) (*authorizationapi.PolicyBindingList, error) {
 	policyBindingList := &authorizationapi.PolicyBindingList{}
-	matcher := policybindingregistry.Matcher(oapi.ListOptionsToSelectors(&options))
+	labelSel, fieldSel, err := oapi.ListOptionsToSelectors(&options)
+	if err != nil {
+		return nil, err
+	}
+	matcher := policybindingregistry.Matcher(labelSel, fieldSel)
 
-	if i.namespace == kapi.NamespaceAll {
+	if i.namespace == metav1.NamespaceAll {
 		returnedList := i.Indexer.List()
 		for i := range returnedList {
 			policyBinding := returnedList[i].(*authorizationapi.PolicyBinding)
@@ -45,7 +48,7 @@ func (i *indexerToPolicyBindingLister) List(options kapi.ListOptions) (*authoriz
 		return policyBindingList, nil
 	}
 
-	key := &authorizationapi.PolicyBinding{ObjectMeta: kapi.ObjectMeta{Namespace: i.namespace}}
+	key := &authorizationapi.PolicyBinding{ObjectMeta: metav1.ObjectMeta{Namespace: i.namespace}}
 	items, err := i.Indexer.Index(cache.NamespaceIndex, key)
 	if err != nil {
 		return policyBindingList, err
@@ -60,9 +63,9 @@ func (i *indexerToPolicyBindingLister) List(options kapi.ListOptions) (*authoriz
 	return policyBindingList, nil
 }
 
-func (i *indexerToPolicyBindingLister) Get(name string) (*authorizationapi.PolicyBinding, error) {
-	keyObj := &authorizationapi.PolicyBinding{ObjectMeta: kapi.ObjectMeta{Namespace: i.namespace, Name: name}}
-	key, _ := framework.DeletionHandlingMetaNamespaceKeyFunc(keyObj)
+func (i *indexerToPolicyBindingLister) Get(name string, options metav1.GetOptions) (*authorizationapi.PolicyBinding, error) {
+	keyObj := &authorizationapi.PolicyBinding{ObjectMeta: metav1.ObjectMeta{Namespace: i.namespace, Name: name}}
+	key, _ := cache.DeletionHandlingMetaNamespaceKeyFunc(keyObj)
 
 	item, exists, getErr := i.Indexer.GetByKey(key)
 	if getErr != nil {

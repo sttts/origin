@@ -5,13 +5,21 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
+	"strings"
 
 	"github.com/RangelReale/osin"
 
-	"k8s.io/kubernetes/pkg/auth/user"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apiserver/pkg/authentication/user"
 
 	"github.com/openshift/origin/pkg/auth/api"
+	scopeauthorizer "github.com/openshift/origin/pkg/authorization/authorizer/scope"
 	oauthapi "github.com/openshift/origin/pkg/oauth/api"
+	"github.com/openshift/origin/pkg/oauth/api/validation"
+	"github.com/openshift/origin/pkg/oauth/scope"
+	"github.com/openshift/origin/pkg/oauth/server/osinserver"
 )
 
 // GrantCheck implements osinserver.AuthorizeHandler to ensure requested scopes have been authorized
@@ -22,7 +30,7 @@ type GrantCheck struct {
 }
 
 // NewGrantCheck returns a new GrantCheck
-func NewGrantCheck(check GrantChecker, handler GrantHandler, errorHandler GrantErrorHandler) *GrantCheck {
+func NewGrantCheck(check GrantChecker, handler GrantHandler, errorHandler GrantErrorHandler) osinserver.AuthorizeHandler {
 	return &GrantCheck{check, handler, errorHandler}
 }
 
@@ -32,7 +40,7 @@ func NewGrantCheck(check GrantChecker, handler GrantHandler, errorHandler GrantE
 // If the requested scopes are not authorized, or an error occurs, AuthorizeRequest.Authorized is set to false.
 // If the response is written, true is returned.
 // If the response is not written, false is returned.
-func (h *GrantCheck) HandleAuthorize(ar *osin.AuthorizeRequest, w http.ResponseWriter) (bool, error) {
+func (h *GrantCheck) HandleAuthorize(ar *osin.AuthorizeRequest, resp *osin.Response, w http.ResponseWriter) (bool, error) {
 
 	// Requests must already be authorized before we will check grants
 	if !ar.Authorized {
@@ -44,7 +52,40 @@ func (h *GrantCheck) HandleAuthorize(ar *osin.AuthorizeRequest, w http.ResponseW
 
 	user, ok := ar.UserData.(user.Info)
 	if !ok || user == nil {
-		return h.errorHandler.GrantError(errors.New("the provided user data is not user.Info"), w, ar.HttpRequest)
+		utilruntime.HandleError(fmt.Errorf("the provided user data is not a user.Info object: %#v", user))
+		resp.SetError("server_error", "")
+		return false, nil
+	}
+
+	client, ok := ar.Client.GetUserData().(*oauthapi.OAuthClient)
+	if !ok || client == nil {
+		utilruntime.HandleError(fmt.Errorf("the provided client is not an *api.OAuthClient object: %#v", client))
+		resp.SetError("server_error", "")
+		return false, nil
+	}
+
+	// Normalize the scope request, and ensure all tokens contain a scope
+	scopes := scope.Split(ar.Scope)
+	if len(scopes) == 0 {
+		scopes = append(scopes, scopeauthorizer.UserFull)
+	}
+	ar.Scope = scope.Join(scopes)
+
+	// Validate the requested scopes
+	if scopeErrors := validation.ValidateScopes(scopes, nil); len(scopeErrors) > 0 {
+		resp.SetError("invalid_scope", scopeErrors.ToAggregate().Error())
+		return false, nil
+	}
+
+	invalidScopes := sets.NewString()
+	for _, scope := range scopes {
+		if err := scopeauthorizer.ValidateScopeRestrictions(client, scope); err != nil {
+			invalidScopes.Insert(scope)
+		}
+	}
+	if len(invalidScopes) > 0 {
+		resp.SetError("access_denied", fmt.Sprintf("scope denied: %s", strings.Join(invalidScopes.List(), " ")))
+		return false, nil
 	}
 
 	grant := &api.Grant{
@@ -57,7 +98,9 @@ func (h *GrantCheck) HandleAuthorize(ar *osin.AuthorizeRequest, w http.ResponseW
 	// Check if the user has already authorized this grant
 	authorized, err := h.check.HasAuthorizedClient(user, grant)
 	if err != nil {
-		return h.errorHandler.GrantError(err, w, ar.HttpRequest)
+		utilruntime.HandleError(err)
+		resp.SetError("server_error", "")
+		return false, nil
 	}
 	if authorized {
 		ar.Authorized = true
@@ -98,32 +141,50 @@ func (g *autoGrant) GrantNeeded(user user.Info, grant *api.Grant, w http.Respons
 }
 
 type redirectGrant struct {
-	url string
+	subpath string
 }
 
-// NewRedirectGrant returns a grant handler that redirects to the given URL when a grant is needed.
+// NewRedirectGrant returns a grant handler that redirects to the given subpath when a grant is needed.
 // The following query parameters are added to the URL:
 //   then - original request URL
 //   client_id - requesting client's ID
 //   scopes - grant scope requested
 //   redirect_uri - original authorize request redirect_uri
-func NewRedirectGrant(url string) GrantHandler {
-	return &redirectGrant{url}
+func NewRedirectGrant(subpath string) GrantHandler {
+	return &redirectGrant{subpath}
 }
 
 // GrantNeeded implements the GrantHandler interface
 func (g *redirectGrant) GrantNeeded(user user.Info, grant *api.Grant, w http.ResponseWriter, req *http.Request) (bool, bool, error) {
-	redirectURL, err := url.Parse(g.url)
-	if err != nil {
-		return false, false, err
+	_, lastSegment := path.Split(req.URL.Path)
+
+	// We're going to descend one dir for the approve endpoint.
+	// Make our "then" URL a relative backstep, so we can return to this URL (with no trailing slash) even via an auth proxy.
+	// Depends on any auth proxies matching the last segment of the URL we used to get here, proxying subpaths of this URL, and passing through the complete query.
+	// Example:
+	//   User -> https://auth.example.com/foo/oauth/authorize?... -> https://api.example.com/oauth/authorize?...
+	//        <- Location: authorize/approve?then=../authorize?...
+	//   User -> https://auth.example.com/foo/oauth/authorize/approve?then=../authorize?...
+	//           submits grant approval form, gets redirected to 'then' URL
+	//        <- Location: ../authorize?...
+	//   User -> https://auth.example.com/foo/oauth/authorize?...
+	reqURL := &(*req.URL)
+	reqURL.Host = ""
+	reqURL.Scheme = ""
+	reqURL.Path = path.Join("..", lastSegment)
+
+	// Make our redirect URL a relative redirect to the subpath
+	redirectURL := &url.URL{
+		Path: path.Join(lastSegment, g.subpath),
+		RawQuery: url.Values{
+			"then":         {reqURL.String()},
+			"client_id":    {grant.Client.GetId()},
+			"scope":        {grant.Scope},
+			"redirect_uri": {grant.RedirectURI},
+		}.Encode(),
 	}
-	redirectURL.RawQuery = url.Values{
-		"then":         {req.URL.String()},
-		"client_id":    {grant.Client.GetId()},
-		"scopes":       {grant.Scope},
-		"redirect_uri": {grant.RedirectURI},
-	}.Encode()
-	http.Redirect(w, req, redirectURL.String(), http.StatusFound)
+	w.Header().Set("Location", redirectURL.String())
+	w.WriteHeader(http.StatusFound)
 	return false, true, nil
 }
 

@@ -1,9 +1,9 @@
 package validation
 
 import (
-	unversionedvalidation "k8s.io/kubernetes/pkg/api/unversioned/validation"
+	unversionedvalidation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/kubernetes/pkg/api/validation"
-	"k8s.io/kubernetes/pkg/util/validation/field"
 
 	quotaapi "github.com/openshift/origin/pkg/quota/api"
 )
@@ -22,6 +22,9 @@ func ValidateClusterResourceQuota(clusterquota *quotaapi.ClusterResourceQuota) f
 		if len(clusterquota.Spec.Selector.LabelSelector.MatchLabels)+len(clusterquota.Spec.Selector.LabelSelector.MatchExpressions) == 0 {
 			allErrs = append(allErrs, field.Invalid(field.NewPath("spec", "selector", "labels"), clusterquota.Spec.Selector.LabelSelector, "must restrict the selected projects"))
 		}
+	}
+	if clusterquota.Spec.Selector.AnnotationSelector != nil {
+		allErrs = append(allErrs, validation.ValidateAnnotations(clusterquota.Spec.Selector.AnnotationSelector, field.NewPath("spec", "selector", "annotations"))...)
 	}
 
 	allErrs = append(allErrs, validation.ValidateResourceQuotaSpec(&clusterquota.Spec.Quota, field.NewPath("spec", "quota"))...)

@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"reflect"
 
-	kmeta "k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/labels"
-	"k8s.io/kubernetes/pkg/runtime"
+	kmeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 )
@@ -18,8 +19,9 @@ const (
 	ErrorOnDifferentDstKeyValue
 )
 
-// AddObjectLabels adds new label(s) to a single runtime.Object
-func AddObjectLabels(obj runtime.Object, labels labels.Set) error {
+// AddObjectLabelsWithFlags will set labels on the target object.  Label overwrite behavior
+// is controlled by the flags argument.
+func AddObjectLabelsWithFlags(obj runtime.Object, labels labels.Set, flags int) error {
 	if labels == nil {
 		return nil
 	}
@@ -27,7 +29,7 @@ func AddObjectLabels(obj runtime.Object, labels labels.Set) error {
 	accessor, err := kmeta.Accessor(obj)
 
 	if err != nil {
-		if _, ok := obj.(*runtime.Unstructured); !ok {
+		if _, ok := obj.(*unstructured.Unstructured); !ok {
 			// error out if it's not possible to get an accessor and it's also not an unstructured object
 			return err
 		}
@@ -39,12 +41,12 @@ func AddObjectLabels(obj runtime.Object, labels labels.Set) error {
 
 		switch objType := obj.(type) {
 		case *deployapi.DeploymentConfig:
-			if err := addDeploymentConfigNestedLabels(objType, labels); err != nil {
+			if err := addDeploymentConfigNestedLabels(objType, labels, flags); err != nil {
 				return fmt.Errorf("unable to add nested labels to %s/%s: %v", obj.GetObjectKind().GroupVersionKind(), accessor.GetName(), err)
 			}
 		}
 
-		if err := MergeInto(metaLabels, labels, OverwriteExistingDstKey); err != nil {
+		if err := MergeInto(metaLabels, labels, flags); err != nil {
 			return fmt.Errorf("unable to add labels to %s/%s: %v", obj.GetObjectKind().GroupVersionKind(), accessor.GetName(), err)
 		}
 
@@ -55,7 +57,7 @@ func AddObjectLabels(obj runtime.Object, labels labels.Set) error {
 
 	// handle unstructured object
 	// TODO: allow meta.Accessor to handle runtime.Unstructured
-	if unstruct, ok := obj.(*runtime.Unstructured); ok && unstruct.Object != nil {
+	if unstruct, ok := obj.(*unstructured.Unstructured); ok && unstruct.Object != nil {
 		// the presence of "metadata" is sufficient for us to apply the rules for Kube-like
 		// objects.
 		// TODO: add swagger detection to allow this to happen more effectively
@@ -68,7 +70,7 @@ func AddObjectLabels(obj runtime.Object, labels labels.Set) error {
 						existing = found
 					}
 				}
-				if err := MergeInto(existing, labels, OverwriteExistingDstKey); err != nil {
+				if err := MergeInto(existing, labels, flags); err != nil {
 					return err
 				}
 				m["labels"] = mapToGeneric(existing)
@@ -83,7 +85,7 @@ func AddObjectLabels(obj runtime.Object, labels labels.Set) error {
 			if found, ok := interfaceToStringMap(obj); ok {
 				existing = found
 			}
-			if err := MergeInto(existing, labels, OverwriteExistingDstKey); err != nil {
+			if err := MergeInto(existing, labels, flags); err != nil {
 				return err
 			}
 			unstruct.Object["labels"] = mapToGeneric(existing)
@@ -92,6 +94,13 @@ func AddObjectLabels(obj runtime.Object, labels labels.Set) error {
 	}
 
 	return nil
+
+}
+
+// AddObjectLabels adds new label(s) to a single runtime.Object, overwriting
+// existing labels that have the same key.
+func AddObjectLabels(obj runtime.Object, labels labels.Set) error {
+	return AddObjectLabelsWithFlags(obj, labels, OverwriteExistingDstKey)
 }
 
 // AddObjectAnnotations adds new annotation(s) to a single runtime.Object
@@ -103,7 +112,7 @@ func AddObjectAnnotations(obj runtime.Object, annotations map[string]string) err
 	accessor, err := kmeta.Accessor(obj)
 
 	if err != nil {
-		if _, ok := obj.(*runtime.Unstructured); !ok {
+		if _, ok := obj.(*unstructured.Unstructured); !ok {
 			// error out if it's not possible to get an accessor and it's also not an unstructured object
 			return err
 		}
@@ -128,7 +137,7 @@ func AddObjectAnnotations(obj runtime.Object, annotations map[string]string) err
 
 	// handle unstructured object
 	// TODO: allow meta.Accessor to handle runtime.Unstructured
-	if unstruct, ok := obj.(*runtime.Unstructured); ok && unstruct.Object != nil {
+	if unstruct, ok := obj.(*unstructured.Unstructured); ok && unstruct.Object != nil {
 		// the presence of "metadata" is sufficient for us to apply the rules for Kube-like
 		// objects.
 		// TODO: add swagger detection to allow this to happen more effectively
@@ -168,11 +177,11 @@ func AddObjectAnnotations(obj runtime.Object, annotations map[string]string) err
 }
 
 // addDeploymentConfigNestedLabels adds new label(s) to a nested labels of a single DeploymentConfig object
-func addDeploymentConfigNestedLabels(obj *deployapi.DeploymentConfig, labels labels.Set) error {
+func addDeploymentConfigNestedLabels(obj *deployapi.DeploymentConfig, labels labels.Set, flags int) error {
 	if obj.Spec.Template.Labels == nil {
 		obj.Spec.Template.Labels = make(map[string]string)
 	}
-	if err := MergeInto(obj.Spec.Template.Labels, labels, OverwriteExistingDstKey); err != nil {
+	if err := MergeInto(obj.Spec.Template.Labels, labels, flags); err != nil {
 		return fmt.Errorf("unable to add labels to Template.DeploymentConfig.Template.ControllerTemplate.Template: %v", err)
 	}
 	return nil

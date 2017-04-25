@@ -3,12 +3,13 @@ package etcd
 import (
 	"testing"
 
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
+	etcdtesting "k8s.io/apiserver/pkg/storage/etcd/testing"
 	"k8s.io/kubernetes/pkg/registry/registrytest"
-	"k8s.io/kubernetes/pkg/runtime"
-	etcdtesting "k8s.io/kubernetes/pkg/storage/etcd/testing"
 
 	routetypes "github.com/openshift/origin/pkg/route"
 	"github.com/openshift/origin/pkg/route/api"
@@ -44,7 +45,7 @@ func newStorage(t *testing.T, allocator routetypes.RouteAllocator) (*REST, *etcd
 
 func validRoute() *api.Route {
 	return &api.Route{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: "foo",
 		},
 		Spec: api.RouteSpec{
@@ -59,13 +60,14 @@ func validRoute() *api.Route {
 func TestCreate(t *testing.T) {
 	storage, server := newStorage(t, nil)
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 	test := registrytest.New(t, storage.Store)
 	test.TestCreate(
 		// valid
 		validRoute(),
 		// invalid
 		&api.Route{
-			ObjectMeta: kapi.ObjectMeta{Name: "_-a123-a_"},
+			ObjectMeta: metav1.ObjectMeta{Name: "_-a123-a_"},
 		},
 	)
 }
@@ -74,8 +76,9 @@ func TestCreateWithAllocation(t *testing.T) {
 	allocator := &testAllocator{Hostname: "bar"}
 	storage, server := newStorage(t, allocator)
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 
-	obj, err := storage.Create(kapi.NewDefaultContext(), validRoute())
+	obj, err := storage.Create(apirequest.NewDefaultContext(), validRoute())
 	if err != nil {
 		t.Fatalf("unable to create object: %v", err)
 	}
@@ -94,6 +97,7 @@ func TestCreateWithAllocation(t *testing.T) {
 func TestUpdate(t *testing.T) {
 	storage, server := newStorage(t, nil)
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 	test := registrytest.New(t, storage.Store)
 
 	test.TestUpdate(
@@ -119,6 +123,7 @@ func TestUpdate(t *testing.T) {
 func TestList(t *testing.T) {
 	storage, server := newStorage(t, nil)
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 	test := registrytest.New(t, storage.Store)
 	test.TestList(
 		validRoute(),
@@ -128,6 +133,7 @@ func TestList(t *testing.T) {
 func TestGet(t *testing.T) {
 	storage, server := newStorage(t, &testAllocator{})
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 	test := registrytest.New(t, storage.Store)
 	test.TestGet(
 		validRoute(),
@@ -137,6 +143,7 @@ func TestGet(t *testing.T) {
 func TestDelete(t *testing.T) {
 	storage, server := newStorage(t, nil)
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 	test := registrytest.New(t, storage.Store)
 	test.TestDelete(
 		validRoute(),
@@ -146,6 +153,7 @@ func TestDelete(t *testing.T) {
 func TestWatch(t *testing.T) {
 	storage, server := newStorage(t, nil)
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 	test := registrytest.New(t, storage.Store)
 
 	valid := validRoute()

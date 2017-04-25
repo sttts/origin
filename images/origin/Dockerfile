@@ -4,12 +4,14 @@
 #
 # While this image can be used for a simple node it does not support OVS based
 # SDN or storage plugins required for EBS, GCE, Gluster, Ceph, or iSCSI volume
-# management. For those features please use 'openshift/node' 
+# management. For those features please use 'openshift/node'
 #
 # The standard name for this image is openshift/origin
 #
 FROM openshift/origin-base
 
+COPY system-container/system-container-wrapper.sh /usr/local/bin/
+COPY system-container/config.json.template system-container/manifest.json system-container/service.template system-container/tmpfiles.template /exports/
 COPY bin/openshift /usr/bin/openshift
 RUN ln -s /usr/bin/openshift /usr/bin/oc && \
     ln -s /usr/bin/openshift /usr/bin/oadm && \
@@ -28,7 +30,7 @@ LABEL io.k8s.display-name="OpenShift Origin Application Platform" \
 ENV HOME=/root \
     OPENSHIFT_CONTAINERIZED=true \
     KUBECONFIG=/var/lib/origin/openshift.local.config/master/admin.kubeconfig
-VOLUME /var/lib/origin
 WORKDIR /var/lib/origin
 EXPOSE 8443 53
+
 ENTRYPOINT ["/usr/bin/openshift"]

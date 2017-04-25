@@ -4,9 +4,10 @@ import (
 	"reflect"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgotesting "k8s.io/client-go/testing"
 	kapi "k8s.io/kubernetes/pkg/api"
-	ktestclient "k8s.io/kubernetes/pkg/client/unversioned/testclient"
-	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 )
@@ -116,19 +117,19 @@ func TestModifySCC(t *testing.T) {
 	}
 
 	for tcName, tc := range tests {
-		fakeClient := ktestclient.NewSimpleFake()
-		fakeClient.PrependReactor("get", "securitycontextconstraints", func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
+		fakeClient := fake.NewSimpleClientset()
+		fakeClient.PrependReactor("get", "securitycontextconstraints", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
 			return true, tc.startingSCC, nil
 		})
 		var actualSCC *kapi.SecurityContextConstraints
-		fakeClient.PrependReactor("update", "securitycontextconstraints", func(action ktestclient.Action) (handled bool, ret runtime.Object, err error) {
-			actualSCC = action.(ktestclient.UpdateAction).GetObject().(*kapi.SecurityContextConstraints)
+		fakeClient.PrependReactor("update", "securitycontextconstraints", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
+			actualSCC = action.(clientgotesting.UpdateAction).GetObject().(*kapi.SecurityContextConstraints)
 			return true, actualSCC, nil
 		})
 
 		o := &SCCModificationOptions{
 			SCCName:                 "foo",
-			SCCInterface:            fakeClient,
+			SCCInterface:            fakeClient.Core(),
 			DefaultSubjectNamespace: "",
 			Subjects:                tc.subjects,
 		}

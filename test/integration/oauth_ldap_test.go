@@ -1,5 +1,3 @@
-// +build integration
-
 package integration
 
 import (
@@ -10,9 +8,10 @@ import (
 	"reflect"
 	"testing"
 
-	"k8s.io/kubernetes/pkg/client/restclient"
-	kutil "k8s.io/kubernetes/pkg/util"
-	"k8s.io/kubernetes/pkg/util/sets"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/uuid"
+	restclient "k8s.io/client-go/rest"
 
 	authapi "github.com/openshift/origin/pkg/auth/api"
 	"github.com/openshift/origin/pkg/client"
@@ -28,7 +27,7 @@ import (
 
 func TestOAuthLDAP(t *testing.T) {
 	var (
-		randomSuffix = string(kutil.NewUUID())
+		randomSuffix = string(uuid.NewUUID())
 
 		providerName = "myldapprovider"
 
@@ -82,6 +81,7 @@ func TestOAuthLDAP(t *testing.T) {
 	defer ldapServer.Stop()
 
 	testutil.RequireEtcd(t)
+	defer testutil.DumpEtcdOnFailure(t)
 	masterOptions, err := testserver.DefaultMasterOptions()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -116,7 +116,7 @@ func TestOAuthLDAP(t *testing.T) {
 			URL:    fmt.Sprintf("ldap://%s/%s?%s?%s?%s", ldapAddress, searchDN, searchAttr, searchScope, searchFilter),
 			BindDN: bindDN,
 			BindPassword: configapi.StringSource{
-				configapi.StringSourceSpec{
+				StringSourceSpec: configapi.StringSourceSpec{
 					File:    bindPasswordFile.Name(),
 					KeyFile: bindPasswordKeyFile.Name(),
 				},
@@ -246,7 +246,7 @@ func TestOAuthLDAP(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	user, err := userClient.Users().Get("~")
+	user, err := userClient.Users().Get("~", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestOAuthLDAP(t *testing.T) {
 	}
 
 	// Make sure the identity got created and contained the mapped attributes
-	identity, err := clusterAdminClient.Identities().Get(fmt.Sprintf("%s:%s", providerName, myUserDN))
+	identity, err := clusterAdminClient.Identities().Get(fmt.Sprintf("%s:%s", providerName, myUserDN), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}

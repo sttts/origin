@@ -1,11 +1,13 @@
 package util
 
 import (
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kerrors "k8s.io/kubernetes/pkg/api/errors"
 	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	"k8s.io/kubernetes/pkg/util/sets"
 
+	oapi "github.com/openshift/origin/pkg/api"
 	"github.com/openshift/origin/pkg/project/api"
 )
 
@@ -56,7 +58,7 @@ func Finalize(kubeClient clientset.Interface, namespace *kapi.Namespace) (result
 			return nil, err
 		}
 
-		namespace, err = kubeClient.Core().Namespaces().Get(namespace.Name)
+		namespace, err = kubeClient.Core().Namespaces().Get(namespace.Name, metav1.GetOptions{})
 		if err != nil {
 			return nil, err
 		}
@@ -114,7 +116,7 @@ func ConvertProject(project *api.Project) *kapi.Namespace {
 	if namespace.Annotations == nil {
 		namespace.Annotations = map[string]string{}
 	}
-	namespace.Annotations[api.ProjectDisplayName] = project.Annotations[api.ProjectDisplayName]
+	namespace.Annotations[oapi.OpenShiftDisplayName] = project.Annotations[oapi.OpenShiftDisplayName]
 	return namespace
 }
 

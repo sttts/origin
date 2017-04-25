@@ -5,6 +5,7 @@
         "name": "guestbook-example",
         "creationTimestamp": null,
         "annotations": {
+            "openshift.io/display-name": "Guestbook Example",
             "description": "Example shows how to build a simple multi-tier application using Kubernetes and Docker"
         }
     },
@@ -34,7 +35,6 @@
                 "name": "frontend-service"
             },
             "spec": {
-                "portalIP": "",
                 "ports": [
                     {
                         "nodePort": 0,
@@ -61,7 +61,6 @@
                 "name": "redis-master"
             },
             "spec": {
-                "portalIP": "",
                 "ports": [
                     {
                         "nodePort": 0,
@@ -88,7 +87,6 @@
                 "name": "redis-slave"
             },
             "spec": {
-                "portalIP": "",
                 "ports": [
                     {
                         "nodePort": 0,

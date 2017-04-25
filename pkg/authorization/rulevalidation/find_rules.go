@@ -1,13 +1,11 @@
 package rulevalidation
 
 import (
-	"errors"
-
-	kapi "k8s.io/kubernetes/pkg/api"
-	kapierror "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/auth/user"
-	kerrors "k8s.io/kubernetes/pkg/util/errors"
-	"k8s.io/kubernetes/pkg/util/sets"
+	kapierror "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apiserver/pkg/authentication/user"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	authorizationinterfaces "github.com/openshift/origin/pkg/authorization/interfaces"
@@ -27,48 +25,57 @@ func NewDefaultRuleResolver(policyGetter client.PoliciesListerNamespacer, bindin
 }
 
 type AuthorizationRuleResolver interface {
-	GetRoleBindings(ctx kapi.Context) ([]authorizationinterfaces.RoleBinding, error)
+	GetRoleBindings(namespace string) ([]authorizationinterfaces.RoleBinding, error)
 	GetRole(roleBinding authorizationinterfaces.RoleBinding) (authorizationinterfaces.Role, error)
-	// GetEffectivePolicyRules returns the list of rules that apply to a given user in a given namespace and error.  If an error is returned, the slice of
+	// RulesFor returns the list of rules that apply to a given user in a given namespace and error.  If an error is returned, the slice of
 	// PolicyRules may not be complete, but it contains all retrievable rules.  This is done because policy rules are purely additive and policy determinations
 	// can be made on the basis of those rules that are found.
-	GetEffectivePolicyRules(ctx kapi.Context) ([]authorizationapi.PolicyRule, error)
+	RulesFor(info user.Info, namespace string) ([]authorizationapi.PolicyRule, error)
 }
 
-func (a *DefaultRuleResolver) GetRoleBindings(ctx kapi.Context) ([]authorizationinterfaces.RoleBinding, error) {
-	namespace := kapi.NamespaceValue(ctx)
+func (a *DefaultRuleResolver) GetRoleBindings(namespace string) ([]authorizationinterfaces.RoleBinding, error) {
+	clusterBindings, clusterErr := a.clusterBindingLister.List(metav1.ListOptions{})
 
-	if len(namespace) == 0 {
-		policyBindingList, err := a.clusterBindingLister.List(kapi.ListOptions{})
-		if err != nil {
-			return nil, err
-		}
+	var namespaceBindings *authorizationapi.PolicyBindingList
+	var namespaceErr error
+	if a.bindingLister != nil && len(namespace) > 0 {
+		namespaceBindings, namespaceErr = a.bindingLister.PolicyBindings(namespace).List(metav1.ListOptions{})
+	}
 
-		ret := make([]authorizationinterfaces.RoleBinding, 0, len(policyBindingList.Items))
-		for _, policyBinding := range policyBindingList.Items {
+	// return all loaded bindings
+	expect := 0
+	if clusterBindings != nil {
+		expect += len(clusterBindings.Items)
+	}
+	if namespaceBindings != nil {
+		expect += len(namespaceBindings.Items)
+	}
+	bindings := make([]authorizationinterfaces.RoleBinding, 0, expect)
+	if clusterBindings != nil {
+		for _, policyBinding := range clusterBindings.Items {
 			for _, value := range policyBinding.RoleBindings {
-				ret = append(ret, authorizationinterfaces.NewClusterRoleBindingAdapter(value))
+				bindings = append(bindings, authorizationinterfaces.NewClusterRoleBindingAdapter(value))
 			}
 		}
-		return ret, nil
 	}
-
-	if a.bindingLister == nil {
-		return nil, nil
-	}
-
-	policyBindingList, err := a.bindingLister.PolicyBindings(namespace).List(kapi.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-
-	ret := make([]authorizationinterfaces.RoleBinding, 0, len(policyBindingList.Items))
-	for _, policyBinding := range policyBindingList.Items {
-		for _, value := range policyBinding.RoleBindings {
-			ret = append(ret, authorizationinterfaces.NewLocalRoleBindingAdapter(value))
+	if namespaceBindings != nil {
+		for _, policyBinding := range namespaceBindings.Items {
+			for _, value := range policyBinding.RoleBindings {
+				bindings = append(bindings, authorizationinterfaces.NewLocalRoleBindingAdapter(value))
+			}
 		}
 	}
-	return ret, nil
+
+	// return all errors
+	var errs []error
+	if clusterErr != nil {
+		errs = append(errs, clusterErr)
+	}
+	if namespaceErr != nil {
+		errs = append(errs, namespaceErr)
+	}
+
+	return bindings, kerrors.NewAggregate(errs)
 }
 
 func (a *DefaultRuleResolver) GetRole(roleBinding authorizationinterfaces.RoleBinding) (authorizationinterfaces.Role, error) {
@@ -76,7 +83,7 @@ func (a *DefaultRuleResolver) GetRole(roleBinding authorizationinterfaces.RoleBi
 	name := roleBinding.RoleRef().Name
 
 	if len(namespace) == 0 {
-		policy, err := a.clusterPolicyGetter.Get(authorizationapi.PolicyName)
+		policy, err := a.clusterPolicyGetter.Get(authorizationapi.PolicyName, metav1.GetOptions{})
 		if kapierror.IsNotFound(err) {
 			return nil, kapierror.NewNotFound(authorizationapi.Resource("role"), name)
 		}
@@ -96,7 +103,7 @@ func (a *DefaultRuleResolver) GetRole(roleBinding authorizationinterfaces.RoleBi
 		return nil, kapierror.NewNotFound(authorizationapi.Resource("role"), name)
 	}
 
-	policy, err := a.policyGetter.Policies(namespace).Get(authorizationapi.PolicyName)
+	policy, err := a.policyGetter.Policies(namespace).Get(authorizationapi.PolicyName, metav1.GetOptions{})
 	if kapierror.IsNotFound(err) {
 		return nil, kapierror.NewNotFound(authorizationapi.Resource("role"), name)
 	}
@@ -113,23 +120,20 @@ func (a *DefaultRuleResolver) GetRole(roleBinding authorizationinterfaces.RoleBi
 
 }
 
-// GetEffectivePolicyRules returns the list of rules that apply to a given user in a given namespace and error.  If an error is returned, the slice of
+// RulesFor returns the list of rules that apply to a given user in a given namespace and error.  If an error is returned, the slice of
 // PolicyRules may not be complete, but it contains all retrievable rules.  This is done because policy rules are purely additive and policy determinations
 // can be made on the basis of those rules that are found.
-func (a *DefaultRuleResolver) GetEffectivePolicyRules(ctx kapi.Context) ([]authorizationapi.PolicyRule, error) {
-	roleBindings, err := a.GetRoleBindings(ctx)
+func (a *DefaultRuleResolver) RulesFor(user user.Info, namespace string) ([]authorizationapi.PolicyRule, error) {
+	var errs []error
+
+	roleBindings, err := a.GetRoleBindings(namespace)
 	if err != nil {
-		return nil, err
-	}
-	user, exists := kapi.UserFrom(ctx)
-	if !exists {
-		return nil, errors.New("user missing from context")
+		errs = append(errs, err)
 	}
 
-	errs := []error{}
 	rules := make([]authorizationapi.PolicyRule, 0, len(roleBindings))
 	for _, roleBinding := range roleBindings {
-		if !appliesToUser(roleBinding.Users(), roleBinding.Groups(), user) {
+		if !roleBinding.AppliesToUser(user) {
 			continue
 		}
 
@@ -146,6 +150,7 @@ func (a *DefaultRuleResolver) GetEffectivePolicyRules(ctx kapi.Context) ([]autho
 
 	return rules, kerrors.NewAggregate(errs)
 }
+
 func appliesToUser(ruleUsers, ruleGroups sets.String, user user.Info) bool {
 	if ruleUsers.Has(user.GetName()) {
 		return true

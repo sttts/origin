@@ -1,11 +1,12 @@
 package bearertoken
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/openshift/origin/pkg/auth/authenticator"
-	"k8s.io/kubernetes/pkg/auth/user"
+	"k8s.io/apiserver/pkg/authentication/user"
 )
 
 type Authenticator struct {
@@ -18,6 +19,8 @@ type Authenticator struct {
 func New(auth authenticator.Token, removeHeader bool) *Authenticator {
 	return &Authenticator{auth, removeHeader}
 }
+
+var invalidToken = errors.New("invalid bearer token")
 
 func (a *Authenticator) AuthenticateRequest(req *http.Request) (user.Info, bool, error) {
 	auth := strings.TrimSpace(req.Header.Get("Authorization"))
@@ -39,6 +42,9 @@ func (a *Authenticator) AuthenticateRequest(req *http.Request) (user.Info, bool,
 	user, ok, err := a.auth.AuthenticateToken(token)
 	if ok && a.removeHeader {
 		req.Header.Del("Authorization")
+	}
+	if !ok && err == nil {
+		err = invalidToken
 	}
 	return user, ok, err
 }

@@ -1,22 +1,30 @@
 package v1
 
 import (
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/runtime"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-const GroupName = ""
+const (
+	GroupName       = "user.openshift.io"
+	LegacyGroupName = ""
+)
 
 // SchemeGroupVersion is group version used to register these objects
-var SchemeGroupVersion = unversioned.GroupVersion{Group: GroupName, Version: "v1"}
+var (
+	SchemeGroupVersion       = schema.GroupVersion{Group: GroupName, Version: "v1"}
+	LegacySchemeGroupVersion = schema.GroupVersion{Group: LegacyGroupName, Version: "v1"}
 
-func AddToScheme(scheme *runtime.Scheme) {
-	addKnownTypes(scheme)
-	addConversionFuncs(scheme)
-}
+	LegacySchemeBuilder    = runtime.NewSchemeBuilder(addLegacyKnownTypes, addConversionFuncs)
+	AddToSchemeInCoreGroup = LegacySchemeBuilder.AddToScheme
+
+	SchemeBuilder = runtime.NewSchemeBuilder(addKnownTypes, addConversionFuncs)
+	AddToScheme   = SchemeBuilder.AddToScheme
+)
 
 // Adds the list of known types to api.Scheme.
-func addKnownTypes(scheme *runtime.Scheme) {
+func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&User{},
 		&UserList{},
@@ -26,12 +34,21 @@ func addKnownTypes(scheme *runtime.Scheme) {
 		&Group{},
 		&GroupList{},
 	)
+	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
+	return nil
 }
 
-func (obj *GroupList) GetObjectKind() unversioned.ObjectKind           { return &obj.TypeMeta }
-func (obj *Group) GetObjectKind() unversioned.ObjectKind               { return &obj.TypeMeta }
-func (obj *User) GetObjectKind() unversioned.ObjectKind                { return &obj.TypeMeta }
-func (obj *UserList) GetObjectKind() unversioned.ObjectKind            { return &obj.TypeMeta }
-func (obj *Identity) GetObjectKind() unversioned.ObjectKind            { return &obj.TypeMeta }
-func (obj *IdentityList) GetObjectKind() unversioned.ObjectKind        { return &obj.TypeMeta }
-func (obj *UserIdentityMapping) GetObjectKind() unversioned.ObjectKind { return &obj.TypeMeta }
+// Adds the list of known types to api.Scheme.
+func addLegacyKnownTypes(scheme *runtime.Scheme) error {
+	types := []runtime.Object{
+		&User{},
+		&UserList{},
+		&Identity{},
+		&IdentityList{},
+		&UserIdentityMapping{},
+		&Group{},
+		&GroupList{},
+	}
+	scheme.AddKnownTypes(LegacySchemeGroupVersion, types...)
+	return nil
+}

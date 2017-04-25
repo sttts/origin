@@ -3,13 +3,19 @@ package bootstrappolicy
 import (
 	"fmt"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	kapi "k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/apis/apps"
 	"k8s.io/kubernetes/pkg/apis/autoscaling"
 	"k8s.io/kubernetes/pkg/apis/batch"
+	"k8s.io/kubernetes/pkg/apis/certificates"
 	"k8s.io/kubernetes/pkg/apis/extensions"
-	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/kubernetes/pkg/apis/policy"
+	"k8s.io/kubernetes/pkg/apis/storage"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
+	buildapi "github.com/openshift/origin/pkg/build/api"
 )
 
 const (
@@ -18,6 +24,12 @@ const (
 
 	InfraReplicationControllerServiceAccountName = "replication-controller"
 	ReplicationControllerRoleName                = "system:replication-controller"
+
+	InfraReplicaSetControllerServiceAccountName = "replicaset-controller"
+	ReplicaSetControllerRoleName                = "system:replicaset-controller"
+
+	InfraDeploymentConfigControllerServiceAccountName = "deploymentconfig-controller"
+	DeploymentConfigControllerRoleName                = "system:deploymentconfig-controller"
 
 	InfraDeploymentControllerServiceAccountName = "deployment-controller"
 	DeploymentControllerRoleName                = "system:deployment-controller"
@@ -28,6 +40,9 @@ const (
 	InfraDaemonSetControllerServiceAccountName = "daemonset-controller"
 	DaemonSetControllerRoleName                = "system:daemonset-controller"
 
+	InfraDisruptionControllerServiceAccountName = "disruption-controller"
+	DisruptionControllerRoleName                = "system:disruption-controller"
+
 	InfraHPAControllerServiceAccountName = "hpa-controller"
 	HPAControllerRoleName                = "system:hpa-controller"
 
@@ -36,6 +51,9 @@ const (
 
 	InfraPersistentVolumeBinderControllerServiceAccountName = "pv-binder-controller"
 	PersistentVolumeBinderControllerRoleName                = "system:pv-binder-controller"
+
+	InfraPersistentVolumeAttachDetachControllerServiceAccountName = "pv-attach-detach-controller"
+	PersistentVolumeAttachDetachControllerRoleName                = "system:pv-attach-detach-controller"
 
 	InfraPersistentVolumeRecyclerControllerServiceAccountName = "pv-recycler-controller"
 	PersistentVolumeRecyclerControllerRoleName                = "system:pv-recycler-controller"
@@ -49,11 +67,26 @@ const (
 	InfraServiceLoadBalancerControllerServiceAccountName = "service-load-balancer-controller"
 	ServiceLoadBalancerControllerRoleName                = "system:service-load-balancer-controller"
 
+	InfraStatefulSetControllerServiceAccountName = "statefulset-controller"
+	StatefulSetControllerRoleName                = "system:statefulset-controller"
+
+	InfraCertificateSigningControllerServiceAccountName = "certificate-signing-controller"
+	CertificateSigningControllerRoleName                = "system:certificate-signing-controller"
+
+	InfraUnidlingControllerServiceAccountName = "unidling-controller"
+	UnidlingControllerRoleName                = "system:unidling-controller"
+
 	ServiceServingCertServiceAccountName = "service-serving-cert-controller"
 	ServiceServingCertControllerRoleName = "system:service-serving-cert-controller"
 
 	InfraEndpointControllerServiceAccountName = "endpoint-controller"
 	EndpointControllerRoleName                = "system:endpoint-controller"
+
+	InfraServiceIngressIPControllerServiceAccountName = "service-ingress-ip-controller"
+	ServiceIngressIPControllerRoleName                = "system:service-ingress-ip-controller"
+
+	InfraNodeBootstrapServiceAccountName = "node-bootstrapper"
+	NodeBootstrapRoleName                = "system:node-bootstrapper"
 )
 
 type InfraServiceAccounts struct {
@@ -74,6 +107,10 @@ func (r *InfraServiceAccounts) addServiceAccount(saName string, role authorizati
 		}
 	}
 
+	if role.Annotations == nil {
+		role.Annotations = map[string]string{}
+	}
+	role.Annotations[roleSystemOnly] = roleIsSystemOnly
 	r.saToRole[saName] = role
 	r.serviceAccounts.Insert(saName)
 	return nil
@@ -104,7 +141,7 @@ func init() {
 	err = InfraSAs.addServiceAccount(
 		InfraBuildControllerServiceAccountName,
 		authorizationapi.ClusterRole{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: BuildControllerRoleName,
 			},
 			Rules: []authorizationapi.PolicyRule{
@@ -123,6 +160,7 @@ func init() {
 				{
 					Verbs:     sets.NewString("create"),
 					Resources: sets.NewString("builds/docker", "builds/source", "builds/custom", "builds/jenkinspipeline"),
+					APIGroups: []string{buildapi.GroupName, buildapi.LegacyGroupName},
 				},
 				// BuildController.ImageStreamClient (ControllerClient)
 				{
@@ -149,10 +187,10 @@ func init() {
 	}
 
 	err = InfraSAs.addServiceAccount(
-		InfraDeploymentControllerServiceAccountName,
+		InfraDeploymentConfigControllerServiceAccountName,
 		authorizationapi.ClusterRole{
-			ObjectMeta: kapi.ObjectMeta{
-				Name: DeploymentControllerRoleName,
+			ObjectMeta: metav1.ObjectMeta{
+				Name: DeploymentConfigControllerRoleName,
 			},
 			Rules: []authorizationapi.PolicyRule{
 				// DeploymentControllerFactory.deploymentLW
@@ -183,9 +221,50 @@ func init() {
 	}
 
 	err = InfraSAs.addServiceAccount(
+		InfraDeploymentControllerServiceAccountName,
+		authorizationapi.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: DeploymentControllerRoleName,
+			},
+			Rules: []authorizationapi.PolicyRule{
+				{
+					APIGroups: []string{extensions.GroupName},
+					Verbs:     sets.NewString("get", "list", "watch", "update"),
+					Resources: sets.NewString("deployments"),
+				},
+				{
+					APIGroups: []string{extensions.GroupName},
+					Verbs:     sets.NewString("update"),
+					Resources: sets.NewString("deployments/status"),
+				},
+				{
+					APIGroups: []string{extensions.GroupName},
+					Verbs:     sets.NewString("list", "watch", "get", "create", "patch", "update", "delete"),
+					Resources: sets.NewString("replicasets"),
+				},
+				{
+					APIGroups: []string{""},
+					// TODO: remove "update" once
+					// https://github.com/kubernetes/kubernetes/issues/36897 is resolved.
+					Verbs:     sets.NewString("get", "list", "watch", "update"),
+					Resources: sets.NewString("pods"),
+				},
+				{
+					APIGroups: []string{""},
+					Verbs:     sets.NewString("create", "update", "patch"),
+					Resources: sets.NewString("events"),
+				},
+			},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	err = InfraSAs.addServiceAccount(
 		InfraReplicationControllerServiceAccountName,
 		authorizationapi.ClusterRole{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: ReplicationControllerRoleName,
 			},
 			Rules: []authorizationapi.PolicyRule{
@@ -228,23 +307,65 @@ func init() {
 	}
 
 	err = InfraSAs.addServiceAccount(
+		InfraReplicaSetControllerServiceAccountName,
+		authorizationapi.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: ReplicaSetControllerRoleName,
+			},
+			Rules: []authorizationapi.PolicyRule{
+				{
+					APIGroups: []string{extensions.GroupName},
+					Verbs:     sets.NewString("get", "list", "watch", "update"),
+					Resources: sets.NewString("replicasets"),
+				},
+				{
+					APIGroups: []string{extensions.GroupName},
+					Verbs:     sets.NewString("update"),
+					Resources: sets.NewString("replicasets/status"),
+				},
+				{
+					Verbs:     sets.NewString("list", "watch", "create", "delete"),
+					Resources: sets.NewString("pods"),
+				},
+				{
+					Verbs:     sets.NewString("create", "update", "patch"),
+					Resources: sets.NewString("events"),
+				},
+			},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	err = InfraSAs.addServiceAccount(
 		InfraJobControllerServiceAccountName,
 		authorizationapi.ClusterRole{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: JobControllerRoleName,
 			},
 			Rules: []authorizationapi.PolicyRule{
 				// JobController.jobController.ListWatch
+				// CronJobController.SyncAll
+				// CronJobController.SyncOne
 				{
 					APIGroups: []string{extensions.GroupName, batch.GroupName},
-					Verbs:     sets.NewString("list", "watch"),
-					Resources: sets.NewString("jobs"),
+					Verbs:     sets.NewString("get", "list", "watch"),
+					// TODO do we need to keep scheduledjobs or is cronjobs sufficient?
+					Resources: sets.NewString("jobs", "scheduledjobs", "cronjobs"),
 				},
-				// JobController.syncJob() -> updateJobStatus()
+				// JobController.syncJob
+				// CronJobController.SyncOne
 				{
 					APIGroups: []string{extensions.GroupName, batch.GroupName},
 					Verbs:     sets.NewString("update"),
-					Resources: sets.NewString("jobs/status"),
+					Resources: sets.NewString("jobs/status", "scheduledjobs/status", "cronjobs/status"),
+				},
+				// CronJobController.SyncOne
+				{
+					APIGroups: []string{extensions.GroupName, batch.GroupName},
+					Verbs:     sets.NewString("create", "update", "delete"),
+					Resources: sets.NewString("jobs"),
 				},
 				// JobController.podController.ListWatch
 				{
@@ -271,7 +392,7 @@ func init() {
 	err = InfraSAs.addServiceAccount(
 		InfraHPAControllerServiceAccountName,
 		authorizationapi.ClusterRole{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: HPAControllerRoleName,
 			},
 			Rules: []authorizationapi.PolicyRule{
@@ -321,7 +442,7 @@ func init() {
 	err = InfraSAs.addServiceAccount(
 		InfraPersistentVolumeRecyclerControllerServiceAccountName,
 		authorizationapi.ClusterRole{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: PersistentVolumeRecyclerControllerRoleName,
 			},
 			Rules: []authorizationapi.PolicyRule{
@@ -378,9 +499,58 @@ func init() {
 	}
 
 	err = InfraSAs.addServiceAccount(
+		InfraPersistentVolumeAttachDetachControllerServiceAccountName,
+		authorizationapi.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: PersistentVolumeAttachDetachControllerRoleName,
+			},
+			Rules: []authorizationapi.PolicyRule{
+				// shared informer on PVs
+				{
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("persistentvolumes"),
+				},
+				// shared informer on PVCs
+				{
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("persistentvolumeclaims"),
+				},
+				// shared informer on nodes
+				{
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("nodes"),
+				},
+				// operationexecutor uses get with nodes
+				{
+					Verbs:     sets.NewString("get"),
+					Resources: sets.NewString("nodes"),
+				},
+				// strategic patch on nodes/status
+				{
+					Verbs:     sets.NewString("patch", "update"),
+					Resources: sets.NewString("nodes/status"),
+				},
+				// shared informer on pods
+				{
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("pods"),
+				},
+				// normal event usage
+				{
+					Verbs:     sets.NewString("create", "update", "patch"),
+					Resources: sets.NewString("events"),
+				},
+			},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	err = InfraSAs.addServiceAccount(
 		InfraPersistentVolumeBinderControllerServiceAccountName,
 		authorizationapi.ClusterRole{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: PersistentVolumeBinderControllerRoleName,
 			},
 			Rules: []authorizationapi.PolicyRule{
@@ -424,10 +594,32 @@ func init() {
 					Verbs:     sets.NewString("get", "create", "delete"),
 					Resources: sets.NewString("pods"),
 				},
+				// RecycleVolumeByWatchingPodUntilCompletion
+				{
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("events"),
+				},
 				// PersistentVolumeRecycler.reclaimVolume() -> handleRecycle()
 				{
 					Verbs:     sets.NewString("create", "update", "patch"),
 					Resources: sets.NewString("events"),
+				},
+				// PersistentVolumeBinder.findProvisionablePlugin()
+				// Glusterfs provisioner
+				{
+					APIGroups: []string{storage.GroupName},
+					Verbs:     sets.NewString("list", "watch", "get"),
+					Resources: sets.NewString("storageclasses"),
+				},
+				// Glusterfs provisioner
+				{
+					Verbs:     sets.NewString("get", "create", "delete"),
+					Resources: sets.NewString("services", "endpoints"),
+				},
+				// Glusterfs & Ceph provisioner
+				{
+					Verbs:     sets.NewString("get"),
+					Resources: sets.NewString("secrets"),
 				},
 			},
 		},
@@ -439,7 +631,7 @@ func init() {
 	err = InfraSAs.addServiceAccount(
 		InfraPersistentVolumeProvisionerControllerServiceAccountName,
 		authorizationapi.ClusterRole{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: PersistentVolumeProvisionerControllerRoleName,
 			},
 			Rules: []authorizationapi.PolicyRule{
@@ -483,14 +675,14 @@ func init() {
 	err = InfraSAs.addServiceAccount(
 		InfraDaemonSetControllerServiceAccountName,
 		authorizationapi.ClusterRole{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: DaemonSetControllerRoleName,
 			},
 			Rules: []authorizationapi.PolicyRule{
 				// DaemonSetsController.dsStore.ListWatch
 				{
 					APIGroups: []string{extensions.GroupName},
-					Verbs:     sets.NewString("list", "watch"),
+					Verbs:     sets.NewString("get", "list", "watch"),
 					Resources: sets.NewString("daemonsets"),
 				},
 				// DaemonSetsController.podStore.ListWatch
@@ -532,9 +724,57 @@ func init() {
 	}
 
 	err = InfraSAs.addServiceAccount(
+		InfraDisruptionControllerServiceAccountName,
+		authorizationapi.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: DisruptionControllerRoleName,
+			},
+			Rules: []authorizationapi.PolicyRule{
+				// DisruptionBudgetController.dStore.ListWatch
+				{
+					APIGroups: []string{extensions.GroupName},
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("deployments"),
+				},
+				// DisruptionBudgetController.rsStore.ListWatch
+				{
+					APIGroups: []string{extensions.GroupName},
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("replicasets"),
+				},
+				// DisruptionBudgetController.rcStore.ListWatch
+				{
+					APIGroups: []string{kapi.GroupName},
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("replicationcontrollers"),
+				},
+				{
+					APIGroups: []string{apps.GroupName},
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("statefulsets"),
+				},
+				{
+					APIGroups: []string{policy.GroupName},
+					Verbs:     sets.NewString("get", "list", "watch"),
+					Resources: sets.NewString("poddisruptionbudgets"),
+				},
+				// DisruptionBudgetController.dbControl
+				{
+					APIGroups: []string{policy.GroupName},
+					Verbs:     sets.NewString("update"),
+					Resources: sets.NewString("poddisruptionbudgets/status"),
+				},
+			},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	err = InfraSAs.addServiceAccount(
 		InfraNamespaceControllerServiceAccountName,
 		authorizationapi.ClusterRole{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: NamespaceControllerRoleName,
 			},
 			Rules: []authorizationapi.PolicyRule{
@@ -567,7 +807,7 @@ func init() {
 	err = InfraSAs.addServiceAccount(
 		InfraGCControllerServiceAccountName,
 		authorizationapi.ClusterRole{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: GCControllerRoleName,
 			},
 			Rules: []authorizationapi.PolicyRule{
@@ -576,6 +816,12 @@ func init() {
 					APIGroups: []string{kapi.GroupName},
 					Verbs:     sets.NewString("list", "watch"),
 					Resources: sets.NewString("pods"),
+				},
+				// GCController.nodeStore.ListWatch
+				{
+					APIGroups: []string{kapi.GroupName},
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("nodes"),
 				},
 				// GCController.deletePod
 				{
@@ -593,7 +839,7 @@ func init() {
 	err = InfraSAs.addServiceAccount(
 		InfraServiceLoadBalancerControllerServiceAccountName,
 		authorizationapi.ClusterRole{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: ServiceLoadBalancerControllerRoleName,
 			},
 			Rules: []authorizationapi.PolicyRule{
@@ -634,9 +880,114 @@ func init() {
 	}
 
 	err = InfraSAs.addServiceAccount(
+		InfraStatefulSetControllerServiceAccountName,
+		authorizationapi.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: StatefulSetControllerRoleName,
+			},
+			Rules: []authorizationapi.PolicyRule{
+				// StatefulSetController.podCache.ListWatch
+				{
+					APIGroups: []string{kapi.GroupName},
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("pods"),
+				},
+				// StatefulSetController.cache.ListWatch
+				{
+					APIGroups: []string{apps.GroupName},
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("statefulsets"),
+				},
+				// StatefulSetController.petClient
+				{
+					APIGroups: []string{apps.GroupName},
+					Verbs:     sets.NewString("get"),
+					Resources: sets.NewString("statefulsets"),
+				},
+				{
+					APIGroups: []string{apps.GroupName},
+					Verbs:     sets.NewString("update"),
+					Resources: sets.NewString("statefulsets/status"),
+				},
+				// StatefulSetController.podClient
+				{
+					APIGroups: []string{kapi.GroupName},
+					Verbs:     sets.NewString("get", "create", "delete", "update"),
+					Resources: sets.NewString("pods"),
+				},
+				// StatefulSetController.petClient (PVC)
+				// This is an escalating client and we must admission check the statefulset
+				{
+					APIGroups: []string{kapi.GroupName},
+					Verbs:     sets.NewString("get", "create"), // future "delete"
+					Resources: sets.NewString("persistentvolumeclaims"),
+				},
+				// StatefulSetController.eventRecorder
+				{
+					APIGroups: []string{kapi.GroupName},
+					Verbs:     sets.NewString("create", "update", "patch"),
+					Resources: sets.NewString("events"),
+				},
+			},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	err = InfraSAs.addServiceAccount(
+		InfraUnidlingControllerServiceAccountName,
+		authorizationapi.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: UnidlingControllerRoleName,
+			},
+			Rules: []authorizationapi.PolicyRule{
+				{
+					APIGroups: []string{kapi.GroupName, extensions.GroupName},
+					Verbs:     sets.NewString("get", "update"),
+					Resources: sets.NewString("replicationcontrollers/scale"),
+				},
+				{
+					APIGroups: []string{extensions.GroupName},
+					Verbs:     sets.NewString("get", "update"),
+					Resources: sets.NewString("replicasets/scale", "deployments/scale"),
+				},
+				{
+					Verbs:     sets.NewString("get", "update"),
+					Resources: sets.NewString("deploymentconfigs/scale"),
+				},
+				{
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("events"),
+				},
+				{
+					APIGroups: []string{kapi.GroupName},
+					Verbs:     sets.NewString("get", "update"),
+					Resources: sets.NewString("endpoints"),
+				},
+				// these are used to "manually" scale and annotate known objects, and should be
+				// removed once we can set the last-scale-reason field via the scale subresource
+				{
+					APIGroups: []string{kapi.GroupName},
+					Verbs:     sets.NewString("get", "update", "patch"),
+					Resources: sets.NewString("replicationcontrollers"),
+				},
+				{
+					APIGroups: []string{},
+					Verbs:     sets.NewString("get", "update", "patch"),
+					Resources: sets.NewString("deploymentconfigs"),
+				},
+			},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	err = InfraSAs.addServiceAccount(
 		ServiceServingCertServiceAccountName,
 		authorizationapi.ClusterRole{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: ServiceServingCertControllerRoleName,
 			},
 			Rules: []authorizationapi.PolicyRule{
@@ -647,8 +998,32 @@ func init() {
 				},
 				{
 					APIGroups: []string{kapi.GroupName},
-					Verbs:     sets.NewString("get", "create"),
+					Verbs:     sets.NewString("get", "list", "watch", "create", "update"),
 					Resources: sets.NewString("secrets"),
+				},
+			},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	err = InfraSAs.addServiceAccount(
+		InfraCertificateSigningControllerServiceAccountName,
+		authorizationapi.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: CertificateSigningControllerRoleName,
+			},
+			Rules: []authorizationapi.PolicyRule{
+				{
+					APIGroups: []string{certificates.GroupName},
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("certificatesigningrequests"),
+				},
+				{
+					APIGroups: []string{certificates.GroupName},
+					Verbs:     sets.NewString("update"),
+					Resources: sets.NewString("certificatesigningrequests/status", "certificatesigningrequests/approval"),
 				},
 			},
 		},
@@ -660,7 +1035,7 @@ func init() {
 	err = InfraSAs.addServiceAccount(
 		InfraEndpointControllerServiceAccountName,
 		authorizationapi.ClusterRole{
-			ObjectMeta: kapi.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: EndpointControllerRoleName,
 			},
 			Rules: []authorizationapi.PolicyRule{
@@ -689,4 +1064,59 @@ func init() {
 		panic(err)
 	}
 
+	err = InfraSAs.addServiceAccount(
+		InfraServiceIngressIPControllerServiceAccountName,
+		authorizationapi.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: ServiceIngressIPControllerRoleName,
+			},
+			Rules: []authorizationapi.PolicyRule{
+				// Listing and watching services
+				{
+					APIGroups: []string{kapi.GroupName},
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("services"),
+				},
+				// IngressIPController.persistSpec changes the spec of the service
+				{
+					APIGroups: []string{kapi.GroupName},
+					Verbs:     sets.NewString("update"),
+					Resources: sets.NewString("services"),
+				},
+				// IngressIPController.persistStatus changes the status of the service
+				{
+					APIGroups: []string{kapi.GroupName},
+					Verbs:     sets.NewString("update"),
+					Resources: sets.NewString("services/status"),
+				},
+				// IngressIPController.recorder
+				{
+					Verbs:     sets.NewString("create", "update", "patch"),
+					Resources: sets.NewString("events"),
+				},
+			},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	err = InfraSAs.addServiceAccount(
+		InfraNodeBootstrapServiceAccountName,
+		authorizationapi.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: NodeBootstrapRoleName,
+			},
+			Rules: []authorizationapi.PolicyRule{
+				{
+					APIGroups: []string{certificates.GroupName},
+					Verbs:     sets.NewString("create", "get"),
+					Resources: sets.NewString("certificatesigningrequests"),
+				},
+			},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
 }

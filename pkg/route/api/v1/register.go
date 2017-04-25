@@ -1,28 +1,43 @@
 package v1
 
 import (
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/runtime"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-const GroupName = ""
+const (
+	GroupName       = "route.openshift.io"
+	LegacyGroupName = ""
+)
 
 // SchemeGroupVersion is group version used to register these objects
-var SchemeGroupVersion = unversioned.GroupVersion{Group: GroupName, Version: "v1"}
+var (
+	SchemeGroupVersion       = schema.GroupVersion{Group: GroupName, Version: "v1"}
+	LegacySchemeGroupVersion = schema.GroupVersion{Group: LegacyGroupName, Version: "v1"}
 
-func AddToScheme(scheme *runtime.Scheme) {
-	addKnownTypes(scheme)
-	addDefaultingFuncs(scheme)
-	addConversionFuncs(scheme)
-}
+	LegacySchemeBuilder    = runtime.NewSchemeBuilder(addLegacyKnownTypes, addConversionFuncs, addDefaultingFuncs)
+	AddToSchemeInCoreGroup = LegacySchemeBuilder.AddToScheme
+
+	SchemeBuilder = runtime.NewSchemeBuilder(addKnownTypes, addConversionFuncs, addDefaultingFuncs)
+	AddToScheme   = SchemeBuilder.AddToScheme
+)
 
 // Adds the list of known types to api.Scheme.
-func addKnownTypes(scheme *runtime.Scheme) {
+func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&Route{},
 		&RouteList{},
 	)
+	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
+	return nil
 }
 
-func (obj *Route) GetObjectKind() unversioned.ObjectKind     { return &obj.TypeMeta }
-func (obj *RouteList) GetObjectKind() unversioned.ObjectKind { return &obj.TypeMeta }
+func addLegacyKnownTypes(scheme *runtime.Scheme) error {
+	types := []runtime.Object{
+		&Route{},
+		&RouteList{},
+	}
+	scheme.AddKnownTypes(LegacySchemeGroupVersion, types...)
+	return nil
+}

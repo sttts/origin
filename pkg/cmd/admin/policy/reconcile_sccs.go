@@ -8,15 +8,18 @@ import (
 
 	"github.com/spf13/cobra"
 
+	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kapierrors "k8s.io/kubernetes/pkg/api/errors"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
+	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	sccutil "k8s.io/kubernetes/pkg/securitycontextconstraints/util"
-	"k8s.io/kubernetes/pkg/util/sets"
 
 	"github.com/openshift/origin/pkg/cmd/server/bootstrappolicy"
+	"github.com/openshift/origin/pkg/cmd/templates"
 	cmdutil "github.com/openshift/origin/pkg/cmd/util"
+
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 )
 
@@ -26,8 +29,9 @@ const ReconcileSCCRecommendedName = "reconcile-sccs"
 type ReconcileSCCOptions struct {
 	// confirmed indicates that the data should be persisted
 	Confirmed bool
-	// union controls if we make additive changes to the users/groups fields or overwrite them
-	// as well as preserving existing priorities (unset priorities will always be reconciled)
+	// union controls if we make additive changes to the users/groups/labels/annotations fields
+	// or overwrite them as well as preserving existing priorities (unset priorities will
+	// always be reconciled)
 	Union bool
 	// is the name of the openshift infrastructure namespace.  It is provided here so that
 	// the command doesn't need to try and parse the policy config.
@@ -36,32 +40,33 @@ type ReconcileSCCOptions struct {
 	Out    io.Writer
 	Output string
 
-	SCCClient kclient.SecurityContextConstraintInterface
-	NSClient  kclient.NamespaceInterface
+	SCCClient kcoreclient.SecurityContextConstraintsInterface
+	NSClient  kcoreclient.NamespaceInterface
 }
 
-const (
-	reconcileSCCLong = `
-Replace cluster SCCs to match the recommended bootstrap policy
+var (
+	reconcileSCCLong = templates.LongDesc(`
+		Replace cluster SCCs to match the recommended bootstrap policy
 
-This command will inspect the cluster SCCs against the recommended bootstrap SCCs.
-Any cluster SCC that does not match will be replaced by the recommended SCC.
-This command will not remove any additional cluster SCCs.  By default, this command
-will not remove additional users and groups that have been granted access to the SCC and
-will preserve existing priorities (but will always reconcile unset priorities and the policy
-definition).
+		This command will inspect the cluster SCCs against the recommended bootstrap SCCs.
+		Any cluster SCC that does not match will be replaced by the recommended SCC.
+		This command will not remove any additional cluster SCCs.  By default, this command
+		will not remove additional users and groups that have been granted access to the SCC and
+		will preserve existing priorities (but will always reconcile unset priorities and the policy
+		definition), labels, and annotations.
 
-You can see which cluster SCCs have recommended changes by choosing an output type.`
+		You can see which cluster SCCs have recommended changes by choosing an output type.`)
 
-	reconcileSCCExample = `  # Display the cluster SCCs that would be modified
-  %[1]s
+	reconcileSCCExample = templates.Examples(`
+		# Display the cluster SCCs that would be modified
+	  %[1]s
 
-  # Update cluster SCCs that don't match the current defaults preserving additional grants
-  # for users and group and keeping any priorities that are already set
-  %[1]s --confirm
+	  # Update cluster SCCs that don't match the current defaults preserving additional grants
+	  # for users, groups, labels, annotations and keeping any priorities that are already set
+	  %[1]s --confirm
 
-  # Replace existing users, groups, and priorities that do not match defaults
-  %[1]s --additive-only=false --confirm`
+	  # Replace existing users, groups, labels, annotations, and priorities that do not match defaults
+	  %[1]s --additive-only=false --confirm`)
 )
 
 // NewDefaultReconcileSCCOptions provides a ReconcileSCCOptions with default settings.
@@ -95,8 +100,8 @@ func NewCmdReconcileSCC(name, fullName string, f *clientcmd.Factory, out io.Writ
 		},
 	}
 
-	cmd.Flags().BoolVar(&o.Confirmed, "confirm", o.Confirmed, "Specify that cluster SCCs should be modified. Defaults to false, displaying what would be replaced but not actually replacing anything.")
-	cmd.Flags().BoolVar(&o.Union, "additive-only", o.Union, "Preserves extra users, groups, labels and annotations in the SCC as well as existing priorities.")
+	cmd.Flags().BoolVar(&o.Confirmed, "confirm", o.Confirmed, "If true, specify that cluster SCCs should be modified. Defaults to false, displaying what would be replaced but not actually replacing anything.")
+	cmd.Flags().BoolVar(&o.Union, "additive-only", o.Union, "If true, preserves extra users, groups, labels and annotations in the SCC as well as existing priorities.")
 	cmd.Flags().StringVar(&o.InfraNamespace, "infrastructure-namespace", o.InfraNamespace, "Name of the infrastructure namespace.")
 	kcmdutil.AddPrinterFlags(cmd)
 	cmd.Flags().Lookup("output").DefValue = "yaml"
@@ -113,8 +118,8 @@ func (o *ReconcileSCCOptions) Complete(cmd *cobra.Command, f *clientcmd.Factory,
 	if err != nil {
 		return err
 	}
-	o.SCCClient = kClient.SecurityContextConstraints()
-	o.NSClient = kClient.Namespaces()
+	o.SCCClient = kClient.Core().SecurityContextConstraints()
+	o.NSClient = kClient.Core().Namespaces()
 	o.Output = kcmdutil.GetFlagString(cmd, "output")
 
 	return nil
@@ -124,7 +129,7 @@ func (o *ReconcileSCCOptions) Validate() error {
 	if o.SCCClient == nil {
 		return errors.New("a SCC client is required")
 	}
-	if _, err := o.NSClient.Get(o.InfraNamespace); err != nil {
+	if _, err := o.NSClient.Get(o.InfraNamespace, metav1.GetOptions{}); err != nil {
 		return fmt.Errorf("%s is not a valid namespace", o.InfraNamespace)
 	}
 	return nil
@@ -148,7 +153,7 @@ func (o *ReconcileSCCOptions) RunReconcileSCCs(cmd *cobra.Command, f *clientcmd.
 		for _, item := range changedSCCs {
 			list.Items = append(list.Items, item)
 		}
-		mapper, _ := f.Object(false)
+		mapper, _ := f.Object()
 		fn := cmdutil.VersionedPrintObject(f.PrintObject, cmd, mapper, o.Out)
 		if err := fn(list); err != nil {
 			return err
@@ -171,7 +176,7 @@ func (o *ReconcileSCCOptions) ChangedSCCs() ([]*kapi.SecurityContextConstraints,
 
 	for i := range bootstrapSCCs {
 		expectedSCC := &bootstrapSCCs[i]
-		actualSCC, err := o.SCCClient.Get(expectedSCC.Name)
+		actualSCC, err := o.SCCClient.Get(expectedSCC.Name, metav1.GetOptions{})
 		// if not found it needs to be created
 		if kapierrors.IsNotFound(err) {
 			changedSCCs = append(changedSCCs, expectedSCC)
@@ -192,7 +197,7 @@ func (o *ReconcileSCCOptions) ChangedSCCs() ([]*kapi.SecurityContextConstraints,
 // ReplaceChangedSCCs persists the changed SCCs.
 func (o *ReconcileSCCOptions) ReplaceChangedSCCs(changedSCCs []*kapi.SecurityContextConstraints) error {
 	for i := range changedSCCs {
-		_, err := o.SCCClient.Get(changedSCCs[i].Name)
+		_, err := o.SCCClient.Get(changedSCCs[i].Name, metav1.GetOptions{})
 		if err != nil && !kapierrors.IsNotFound(err) {
 			return err
 		}

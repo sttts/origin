@@ -3,10 +3,11 @@ package controller
 import (
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
-	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
+	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
 
 	"github.com/openshift/origin/pkg/security"
 	"github.com/openshift/origin/pkg/security/mcs"
@@ -37,7 +38,7 @@ func DefaultMCSAllocation(from *uid.Range, to *mcs.Range, blockSize int) MCSAllo
 type Allocation struct {
 	uid    uidallocator.Interface
 	mcs    MCSAllocationFunc
-	client kclient.NamespaceInterface
+	client kcoreclient.NamespaceInterface
 }
 
 // retryCount is the number of times to retry on a conflict when updating a namespace
@@ -87,7 +88,7 @@ func (c *Allocation) Next(ns *kapi.Namespace) error {
 		if !errors.IsConflict(err) {
 			return err
 		}
-		newNs, err := c.client.Get(ns.Name)
+		newNs, err := c.client.Get(ns.Name, metav1.GetOptions{})
 		if errors.IsNotFound(err) {
 			return nil
 		}

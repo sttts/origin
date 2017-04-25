@@ -1,5 +1,3 @@
-// +build integration
-
 package integration
 
 import (
@@ -11,9 +9,10 @@ import (
 	"time"
 
 	cmdutil "github.com/openshift/origin/pkg/cmd/util"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	waitutil "k8s.io/apimachinery/pkg/util/wait"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	waitutil "k8s.io/kubernetes/pkg/util/wait"
 
 	"github.com/miekg/dns"
 	testutil "github.com/openshift/origin/test/util"
@@ -22,6 +21,7 @@ import (
 
 func TestDNS(t *testing.T) {
 	testutil.RequireEtcd(t)
+	defer testutil.DumpEtcdOnFailure(t)
 	masterConfig, clientFile, err := testserver.StartTestMaster()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -43,7 +43,7 @@ func TestDNS(t *testing.T) {
 	waitutil.Until(func() {
 		m1 := &dns.Msg{
 			MsgHdr:   dns.MsgHdr{Id: dns.Id(), RecursionDesired: false},
-			Question: []dns.Question{{"kubernetes.default.svc.cluster.local.", dns.TypeA, dns.ClassINET}},
+			Question: []dns.Question{{Name: "kubernetes.default.svc.cluster.local.", Qtype: dns.TypeA, Qclass: dns.ClassINET}},
 		}
 		in, err := dns.Exchange(m1, masterConfig.DNSConfig.BindAddress)
 		if err != nil {
@@ -81,7 +81,7 @@ func TestDNS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	kubernetesService, err := client.Services(kapi.NamespaceDefault).Get("kubernetes")
+	kubernetesService, err := client.Core().Services(metav1.NamespaceDefault).Get("kubernetes", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -89,6 +89,7 @@ func TestDNS(t *testing.T) {
 	for _, port := range kubernetesService.Spec.Ports {
 		if port.Port == 53 && port.TargetPort.IntVal == int32(dnsPort) && port.Protocol == kapi.ProtocolTCP {
 			found = true
+			break
 		}
 	}
 	if !found {
@@ -96,8 +97,8 @@ func TestDNS(t *testing.T) {
 	}
 
 	for {
-		if _, err := client.Services(kapi.NamespaceDefault).Create(&kapi.Service{
-			ObjectMeta: kapi.ObjectMeta{
+		if _, err := client.Core().Services(metav1.NamespaceDefault).Create(&kapi.Service{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: "headless",
 			},
 			Spec: kapi.ServiceSpec{
@@ -112,14 +113,14 @@ func TestDNS(t *testing.T) {
 			}
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if _, err := client.Endpoints(kapi.NamespaceDefault).Create(&kapi.Endpoints{
-			ObjectMeta: kapi.ObjectMeta{
+		if _, err := client.Core().Endpoints(metav1.NamespaceDefault).Create(&kapi.Endpoints{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: "headless",
 			},
 			Subsets: []kapi.EndpointSubset{{
 				Addresses: []kapi.EndpointAddress{{IP: "172.0.0.1"}},
 				Ports: []kapi.EndpointPort{
-					{Port: 2345},
+					{Port: 2345, Name: "http"},
 				},
 			}},
 		}); err != nil {
@@ -130,8 +131,8 @@ func TestDNS(t *testing.T) {
 	headlessIP := net.ParseIP("172.0.0.1")
 	headlessIPHash := getHash(headlessIP.String())
 
-	if _, err := client.Services(kapi.NamespaceDefault).Create(&kapi.Service{
-		ObjectMeta: kapi.ObjectMeta{
+	if _, err := client.Core().Services(metav1.NamespaceDefault).Create(&kapi.Service{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: "headless2",
 		},
 		Spec: kapi.ServiceSpec{
@@ -141,8 +142,8 @@ func TestDNS(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, err := client.Endpoints(kapi.NamespaceDefault).Create(&kapi.Endpoints{
-		ObjectMeta: kapi.ObjectMeta{
+	if _, err := client.Core().Endpoints(metav1.NamespaceDefault).Create(&kapi.Endpoints{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: "headless2",
 		},
 		Subsets: []kapi.EndpointSubset{{
@@ -188,20 +189,29 @@ func TestDNS(t *testing.T) {
 			expect:          []*net.IP{&headlessIP},
 		},
 		{ // specific port of a headless service
-			dnsQuestionName: "unknown-port-2345.e1.headless.default.svc.cluster.local.",
+			dnsQuestionName: "_http._tcp.headless.default.svc.cluster.local.",
 			expect:          []*net.IP{&headlessIP},
 		},
 		{ // SRV record for that service
 			dnsQuestionName: "headless.default.svc.cluster.local.",
 			srv: []*dns.SRV{
 				{
-					Target: headlessIPHash + "._unknown-port-2345._tcp.headless.default.svc.cluster.local.",
-					Port:   2345,
+					Target: headlessIPHash + ".headless.default.svc.cluster.local.",
+					Port:   0,
+				},
+			},
+		},
+		{ // SRV record for a port
+			dnsQuestionName: "_http._tcp.headless2.default.svc.cluster.local.",
+			srv: []*dns.SRV{
+				{
+					Target: headless2IPHash + ".headless2.default.svc.cluster.local.",
+					Port:   2346,
 				},
 			},
 		},
 		{ // the SRV record resolves to the IP
-			dnsQuestionName: "unknown-port-2345.e1.headless.default.svc.cluster.local.",
+			dnsQuestionName: "_http._tcp.headless.default.svc.cluster.local.",
 			expect:          []*net.IP{&headlessIP},
 		},
 		{ // headless 2 service
@@ -212,17 +222,13 @@ func TestDNS(t *testing.T) {
 			dnsQuestionName: "headless2.default.svc.cluster.local.",
 			srv: []*dns.SRV{
 				{
-					Target: headless2IPHash + "._http._tcp.headless2.default.svc.cluster.local.",
-					Port:   2346,
-				},
-				{
-					Target: headless2IPHash + "._other._tcp.headless2.default.svc.cluster.local.",
-					Port:   2345,
+					Target: headless2IPHash + ".headless2.default.svc.cluster.local.",
+					Port:   0,
 				},
 			},
 		},
 		{ // the SRV record resolves to the IP
-			dnsQuestionName: "other.e1.headless2.default.svc.cluster.local.",
+			dnsQuestionName: headless2IPHash + ".headless2.default.svc.cluster.local.",
 			expect:          []*net.IP{&headless2IP},
 		},
 		{
@@ -237,7 +243,7 @@ func TestDNS(t *testing.T) {
 		}
 		m1 := &dns.Msg{
 			MsgHdr:   dns.MsgHdr{Id: dns.Id(), RecursionDesired: tc.recursionExpected},
-			Question: []dns.Question{{tc.dnsQuestionName, qType, dns.ClassINET}},
+			Question: []dns.Question{{Name: tc.dnsQuestionName, Qtype: qType, Qclass: dns.ClassINET}},
 		}
 		ch := make(chan struct{})
 		count := 0

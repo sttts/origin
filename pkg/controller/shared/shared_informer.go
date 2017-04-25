@@ -5,10 +5,11 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/client/cache"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/controller/framework"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/cache"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	kinformers "k8s.io/kubernetes/pkg/client/informers/informers_generated/externalversions"
+	kinternalinformers "k8s.io/kubernetes/pkg/client/informers/informers_generated/internalversion"
 
 	oclient "github.com/openshift/origin/pkg/client"
 )
@@ -19,22 +20,21 @@ type InformerFactory interface {
 	// StartCore starts core informers that must initialize in order for the API server to start
 	StartCore(stopCh <-chan struct{})
 
-	Pods() PodInformer
-	Namespaces() NamespaceInformer
-	Nodes() NodeInformer
-	PersistentVolumes() PersistentVolumeInformer
-	PersistentVolumeClaims() PersistentVolumeClaimInformer
-	ReplicationControllers() ReplicationControllerInformer
-
 	ClusterPolicies() ClusterPolicyInformer
 	ClusterPolicyBindings() ClusterPolicyBindingInformer
 	Policies() PolicyInformer
 	PolicyBindings() PolicyBindingInformer
 
 	DeploymentConfigs() DeploymentConfigInformer
+	BuildConfigs() BuildConfigInformer
+	Templates() TemplateInformer
+	Builds() BuildInformer
 	ImageStreams() ImageStreamInformer
-
+	SecurityContextConstraints() SecurityContextConstraintsInformer
 	ClusterResourceQuotas() ClusterResourceQuotaInformer
+
+	KubernetesInformers() kinformers.SharedInformerFactory
+	InternalKubernetesInformers() kinternalinformers.SharedInformerFactory
 }
 
 // ListerWatcherOverrides allows a caller to specify special behavior for particular ListerWatchers
@@ -42,37 +42,48 @@ type InformerFactory interface {
 type ListerWatcherOverrides interface {
 	// GetListerWatcher returns back a ListerWatcher for a given resource or nil if
 	// no particular ListerWatcher was specified for the type
-	GetListerWatcher(resource unversioned.GroupResource) cache.ListerWatcher
+	GetListerWatcher(resource schema.GroupResource) cache.ListerWatcher
 }
 
-type DefaultListerWatcherOverrides map[unversioned.GroupResource]cache.ListerWatcher
+type DefaultListerWatcherOverrides map[schema.GroupResource]cache.ListerWatcher
 
-func (o DefaultListerWatcherOverrides) GetListerWatcher(resource unversioned.GroupResource) cache.ListerWatcher {
+func (o DefaultListerWatcherOverrides) GetListerWatcher(resource schema.GroupResource) cache.ListerWatcher {
 	return o[resource]
 }
 
-func NewInformerFactory(kubeClient kclient.Interface, originClient oclient.Interface, customListerWatchers ListerWatcherOverrides, defaultResync time.Duration) InformerFactory {
+func NewInformerFactory(
+	internalKubeInformers kinternalinformers.SharedInformerFactory,
+	kubeInformers kinformers.SharedInformerFactory,
+	kubeClient kclientset.Interface,
+	originClient oclient.Interface,
+	customListerWatchers ListerWatcherOverrides,
+	defaultResync time.Duration,
+) InformerFactory {
 	return &sharedInformerFactory{
-		kubeClient:           kubeClient,
-		originClient:         originClient,
-		customListerWatchers: customListerWatchers,
-		defaultResync:        defaultResync,
+		internalKubeInformers: internalKubeInformers,
+		kubeInformers:         kubeInformers,
+		kubeClient:            kubeClient,
+		originClient:          originClient,
+		customListerWatchers:  customListerWatchers,
+		defaultResync:         defaultResync,
 
-		informers:            map[reflect.Type]framework.SharedIndexInformer{},
-		coreInformers:        map[reflect.Type]framework.SharedIndexInformer{},
+		informers:            map[reflect.Type]cache.SharedIndexInformer{},
+		coreInformers:        map[reflect.Type]cache.SharedIndexInformer{},
 		startedInformers:     map[reflect.Type]bool{},
 		startedCoreInformers: map[reflect.Type]bool{},
 	}
 }
 
 type sharedInformerFactory struct {
-	kubeClient           kclient.Interface
-	originClient         oclient.Interface
-	customListerWatchers ListerWatcherOverrides
-	defaultResync        time.Duration
+	internalKubeInformers kinternalinformers.SharedInformerFactory
+	kubeInformers         kinformers.SharedInformerFactory
+	kubeClient            kclientset.Interface
+	originClient          oclient.Interface
+	customListerWatchers  ListerWatcherOverrides
+	defaultResync         time.Duration
 
-	informers            map[reflect.Type]framework.SharedIndexInformer
-	coreInformers        map[reflect.Type]framework.SharedIndexInformer
+	informers            map[reflect.Type]cache.SharedIndexInformer
+	coreInformers        map[reflect.Type]cache.SharedIndexInformer
 	startedInformers     map[reflect.Type]bool
 	startedCoreInformers map[reflect.Type]bool
 	lock                 sync.Mutex
@@ -102,30 +113,6 @@ func (f *sharedInformerFactory) StartCore(stopCh <-chan struct{}) {
 	}
 }
 
-func (f *sharedInformerFactory) Pods() PodInformer {
-	return &podInformer{sharedInformerFactory: f}
-}
-
-func (f *sharedInformerFactory) Nodes() NodeInformer {
-	return &nodeInformer{sharedInformerFactory: f}
-}
-
-func (f *sharedInformerFactory) PersistentVolumes() PersistentVolumeInformer {
-	return &persistentVolumeInformer{sharedInformerFactory: f}
-}
-
-func (f *sharedInformerFactory) PersistentVolumeClaims() PersistentVolumeClaimInformer {
-	return &persistentVolumeClaimInformer{sharedInformerFactory: f}
-}
-
-func (f *sharedInformerFactory) ReplicationControllers() ReplicationControllerInformer {
-	return &replicationControllerInformer{sharedInformerFactory: f}
-}
-
-func (f *sharedInformerFactory) Namespaces() NamespaceInformer {
-	return &namespaceInformer{sharedInformerFactory: f}
-}
-
 func (f *sharedInformerFactory) ClusterPolicies() ClusterPolicyInformer {
 	return &clusterPolicyInformer{sharedInformerFactory: f}
 }
@@ -146,10 +133,34 @@ func (f *sharedInformerFactory) DeploymentConfigs() DeploymentConfigInformer {
 	return &deploymentConfigInformer{sharedInformerFactory: f}
 }
 
+func (f *sharedInformerFactory) BuildConfigs() BuildConfigInformer {
+	return &buildConfigInformer{sharedInformerFactory: f}
+}
+
+func (f *sharedInformerFactory) Templates() TemplateInformer {
+	return &templateInformer{sharedInformerFactory: f}
+}
+
+func (f *sharedInformerFactory) Builds() BuildInformer {
+	return &buildInformer{sharedInformerFactory: f}
+}
+
 func (f *sharedInformerFactory) ImageStreams() ImageStreamInformer {
 	return &imageStreamInformer{sharedInformerFactory: f}
 }
 
+func (f *sharedInformerFactory) SecurityContextConstraints() SecurityContextConstraintsInformer {
+	return &securityContextConstraintsInformer{sharedInformerFactory: f}
+}
+
 func (f *sharedInformerFactory) ClusterResourceQuotas() ClusterResourceQuotaInformer {
 	return &clusterResourceQuotaInformer{sharedInformerFactory: f}
+}
+
+func (f *sharedInformerFactory) KubernetesInformers() kinformers.SharedInformerFactory {
+	return f.kubeInformers
+}
+
+func (f *sharedInformerFactory) InternalKubernetesInformers() kinternalinformers.SharedInformerFactory {
+	return f.internalKubeInformers
 }

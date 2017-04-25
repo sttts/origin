@@ -1,31 +1,37 @@
 package v1
 
 import (
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/runtime"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	kapiv1 "k8s.io/kubernetes/pkg/api/v1"
 
 	"github.com/openshift/origin/pkg/image/api/docker10"
 	"github.com/openshift/origin/pkg/image/api/dockerpre012"
 )
 
-const GroupName = ""
+const (
+	GroupName       = "image.openshift.io"
+	LegacyGroupName = ""
+)
 
-// SchemeGroupVersion is group version used to register these objects
-var SchemeGroupVersion = unversioned.GroupVersion{Group: GroupName, Version: "v1"}
+var (
+	SchemeGroupVersion       = schema.GroupVersion{Group: GroupName, Version: "v1"}
+	LegacySchemeGroupVersion = schema.GroupVersion{Group: LegacyGroupName, Version: "v1"}
 
-func AddToScheme(scheme *runtime.Scheme) {
-	docker10.AddToScheme(scheme)
-	dockerpre012.AddToScheme(scheme)
-	addKnownTypes(scheme)
-	addDefaultingFuncs(scheme)
-	addConversionFuncs(scheme)
-}
+	LegacySchemeBuilder    = runtime.NewSchemeBuilder(addLegacyKnownTypes, addConversionFuncs, addDefaultingFuncs, docker10.AddToSchemeInCoreGroup, dockerpre012.AddToSchemeInCoreGroup)
+	AddToSchemeInCoreGroup = LegacySchemeBuilder.AddToScheme
+
+	SchemeBuilder = runtime.NewSchemeBuilder(addKnownTypes, addConversionFuncs, addDefaultingFuncs, docker10.AddToScheme, dockerpre012.AddToScheme)
+	AddToScheme   = SchemeBuilder.AddToScheme
+)
 
 // Adds the list of known types to api.Scheme.
-func addKnownTypes(scheme *runtime.Scheme) {
-	scheme.AddKnownTypes(SchemeGroupVersion,
+func addLegacyKnownTypes(scheme *runtime.Scheme) error {
+	types := []runtime.Object{
 		&Image{},
 		&ImageList{},
+		&ImageSignature{},
 		&ImageStream{},
 		&ImageStreamList{},
 		&ImageStreamMapping{},
@@ -33,15 +39,26 @@ func addKnownTypes(scheme *runtime.Scheme) {
 		&ImageStreamTagList{},
 		&ImageStreamImage{},
 		&ImageStreamImport{},
-	)
+	}
+	scheme.AddKnownTypes(LegacySchemeGroupVersion, types...)
+	return nil
 }
 
-func (obj *Image) GetObjectKind() unversioned.ObjectKind              { return &obj.TypeMeta }
-func (obj *ImageList) GetObjectKind() unversioned.ObjectKind          { return &obj.TypeMeta }
-func (obj *ImageStream) GetObjectKind() unversioned.ObjectKind        { return &obj.TypeMeta }
-func (obj *ImageStreamList) GetObjectKind() unversioned.ObjectKind    { return &obj.TypeMeta }
-func (obj *ImageStreamMapping) GetObjectKind() unversioned.ObjectKind { return &obj.TypeMeta }
-func (obj *ImageStreamTag) GetObjectKind() unversioned.ObjectKind     { return &obj.TypeMeta }
-func (obj *ImageStreamTagList) GetObjectKind() unversioned.ObjectKind { return &obj.TypeMeta }
-func (obj *ImageStreamImage) GetObjectKind() unversioned.ObjectKind   { return &obj.TypeMeta }
-func (obj *ImageStreamImport) GetObjectKind() unversioned.ObjectKind  { return &obj.TypeMeta }
+// Adds the list of known types to api.Scheme.
+func addKnownTypes(scheme *runtime.Scheme) error {
+	scheme.AddKnownTypes(SchemeGroupVersion,
+		&Image{},
+		&ImageList{},
+		&ImageSignature{},
+		&ImageStream{},
+		&ImageStreamList{},
+		&ImageStreamMapping{},
+		&ImageStreamTag{},
+		&ImageStreamTagList{},
+		&ImageStreamImage{},
+		&ImageStreamImport{},
+		&kapiv1.SecretList{},
+	)
+	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
+	return nil
+}

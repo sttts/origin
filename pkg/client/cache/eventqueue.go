@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"sync"
 
-	kcache "k8s.io/kubernetes/pkg/client/cache"
-	"k8s.io/kubernetes/pkg/util/sets"
-	"k8s.io/kubernetes/pkg/watch"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/watch"
+	kcache "k8s.io/client-go/tools/cache"
 )
 
 // EventQueue is a Store implementation that provides a sequence of compressed events to a consumer
@@ -49,6 +49,10 @@ type EventQueue struct {
 	// item it refers to is explicitly deleted from the store or the
 	// event is read via Pop().
 	lastReplaceKey string
+	// Tracks whether the Replace() method has been called at least once.
+	replaceCalled bool
+	// Tracks the number of items queued by the last Replace() call.
+	replaceCount int
 }
 
 // EventQueue implements kcache.Store
@@ -286,13 +290,21 @@ func (eq *EventQueue) Pop() (watch.EventType, interface{}, error) {
 		key := eq.queue[0]
 		eq.queue = eq.queue[1:]
 
-		eventType := eq.events[key]
-		delete(eq.events, key)
+		eventType, ok := eq.events[key]
+		if ok {
+			delete(eq.events, key)
+		} else {
+			// The event type has been removed by a previous call to
+			// Pop().  Since the object has already been seen and has
+			// not been deleted, and callers will need to be
+			// idempotent, watch.Modified can be safely assumed.
+			eventType = watch.Modified
+		}
 
 		// Track the last replace key immediately after the store
 		// state has been changed to prevent subsequent errors from
 		// leaving a stale key.
-		if eq.lastReplaceKey != "" && eq.lastReplaceKey == key {
+		if eq.lastReplaceKey == key {
 			eq.lastReplaceKey = ""
 		}
 
@@ -322,6 +334,9 @@ func (eq *EventQueue) Replace(objects []interface{}, resourceVersion string) err
 	eq.lock.Lock()
 	defer eq.lock.Unlock()
 
+	eq.replaceCalled = true
+	eq.replaceCount = len(objects)
+
 	eq.events = map[string]watch.EventType{}
 	eq.queue = eq.queue[:0]
 
@@ -344,6 +359,23 @@ func (eq *EventQueue) Replace(objects []interface{}, resourceVersion string) err
 		eq.lastReplaceKey = ""
 	}
 	return nil
+}
+
+// ListSuccessfulAtLeastOnce indicates whether a List operation was
+// successfully completed regardless of whether any items were queued.
+func (eq *EventQueue) ListSuccessfulAtLeastOnce() bool {
+	eq.lock.Lock()
+	defer eq.lock.Unlock()
+
+	return eq.replaceCalled
+}
+
+// ListCount returns how many objects were queued by the most recent List operation.
+func (eq *EventQueue) ListCount() int {
+	eq.lock.Lock()
+	defer eq.lock.Unlock()
+
+	return eq.replaceCount
 }
 
 // ListConsumed indicates whether the items queued by a List/Relist

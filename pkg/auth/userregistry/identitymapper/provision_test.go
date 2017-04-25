@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	kapi "k8s.io/kubernetes/pkg/api"
-	kerrs "k8s.io/kubernetes/pkg/api/errors"
+	kerrs "k8s.io/apimachinery/pkg/api/errors"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 
 	authapi "github.com/openshift/origin/pkg/auth/api"
 	"github.com/openshift/origin/pkg/user/api"
@@ -19,7 +19,7 @@ type testNewIdentityGetter struct {
 	responses []interface{}
 }
 
-func (t *testNewIdentityGetter) UserForNewIdentity(ctx kapi.Context, preferredUserName string, identity *userapi.Identity) (*userapi.User, error) {
+func (t *testNewIdentityGetter) UserForNewIdentity(ctx apirequest.Context, preferredUserName string, identity *userapi.Identity) (*userapi.User, error) {
 	t.called++
 	if len(t.responses) < t.called {
 		return nil, fmt.Errorf("Called at least %d times, only %d responses registered", t.called, len(t.responses))
@@ -72,9 +72,9 @@ func TestProvision(t *testing.T) {
 			},
 
 			ExpectedActions: []test.Action{
-				{"GetIdentity", "idp:bob"},
+				{Name: "GetIdentity", Object: "idp:bob"},
 				// ... new identity user getter creates user
-				{"CreateIdentity", makeIdentity("", "idp", "bob", "bobUserUID", "bob")},
+				{Name: "CreateIdentity", Object: makeIdentity("", "idp", "bob", "bobUserUID", "bob")},
 			},
 			ExpectedUserName: "bob",
 		},
@@ -90,11 +90,11 @@ func TestProvision(t *testing.T) {
 			},
 
 			ExpectedActions: []test.Action{
-				{"GetIdentity", "idp:bob"},
+				{Name: "GetIdentity", Object: "idp:bob"},
 				// ... new identity user getter returns error
-				{"GetIdentity", "idp:bob"},
+				{Name: "GetIdentity", Object: "idp:bob"},
 				// ... new identity user getter creates user
-				{"CreateIdentity", makeIdentity("", "idp", "bob", "bobUserUID", "bob")},
+				{Name: "CreateIdentity", Object: makeIdentity("", "idp", "bob", "bobUserUID", "bob")},
 			},
 			ExpectedUserName: "bob",
 		},
@@ -110,11 +110,11 @@ func TestProvision(t *testing.T) {
 			},
 
 			ExpectedActions: []test.Action{
-				{"GetIdentity", "idp:bob"},
+				{Name: "GetIdentity", Object: "idp:bob"},
 				// ... new identity user getter returns error
-				{"GetIdentity", "idp:bob"},
+				{Name: "GetIdentity", Object: "idp:bob"},
 				// ... new identity user getter creates user
-				{"CreateIdentity", makeIdentity("", "idp", "bob", "bobUserUID", "bob")},
+				{Name: "CreateIdentity", Object: makeIdentity("", "idp", "bob", "bobUserUID", "bob")},
 			},
 			ExpectedUserName: "bob",
 		},
@@ -133,16 +133,16 @@ func TestProvision(t *testing.T) {
 
 			ExpectedActions: []test.Action{
 				// original attempt
-				{"GetIdentity", "idp:bob"},
+				{Name: "GetIdentity", Object: "idp:bob"},
 				// ... new identity user getter returns error
 				// retry #1
-				{"GetIdentity", "idp:bob"},
+				{Name: "GetIdentity", Object: "idp:bob"},
 				// ... new identity user getter returns error
 				// retry #2
-				{"GetIdentity", "idp:bob"},
+				{Name: "GetIdentity", Object: "idp:bob"},
 				// ... new identity user getter returns error
 				// retry #3
-				{"GetIdentity", "idp:bob"},
+				{Name: "GetIdentity", Object: "idp:bob"},
 				// ... new identity user getter returns error
 			},
 			ExpectedError: true,
@@ -158,7 +158,7 @@ func TestProvision(t *testing.T) {
 			},
 
 			ExpectedActions: []test.Action{
-				{"GetIdentity", "idp:bob"},
+				{Name: "GetIdentity", Object: "idp:bob"},
 				// ... new identity user getter returns error
 			},
 			ExpectedError: true,
@@ -173,7 +173,7 @@ func TestProvision(t *testing.T) {
 			NewIdentityGetterResponses: []interface{}{},
 
 			ExpectedActions: []test.Action{
-				{"GetIdentity", "idp:bob"},
+				{Name: "GetIdentity", Object: "idp:bob"},
 			},
 			ExpectedError: true,
 		},
@@ -186,8 +186,8 @@ func TestProvision(t *testing.T) {
 			NewIdentityGetterResponses: []interface{}{},
 
 			ExpectedActions: []test.Action{
-				{"GetIdentity", "idp:bob"},
-				{"GetUser", "bob"},
+				{Name: "GetIdentity", Object: "idp:bob"},
+				{Name: "GetUser", Object: "bob"},
 			},
 			ExpectedError: true,
 		},
@@ -200,8 +200,8 @@ func TestProvision(t *testing.T) {
 			NewIdentityGetterResponses: []interface{}{},
 
 			ExpectedActions: []test.Action{
-				{"GetIdentity", "idp:bob"},
-				{"GetUser", "bob"},
+				{Name: "GetIdentity", Object: "idp:bob"},
+				{Name: "GetUser", Object: "bob"},
 			},
 			ExpectedError: true,
 		},
@@ -214,8 +214,8 @@ func TestProvision(t *testing.T) {
 			NewIdentityGetterResponses: []interface{}{},
 
 			ExpectedActions: []test.Action{
-				{"GetIdentity", "idp:bob"},
-				{"GetUser", "bob"},
+				{Name: "GetIdentity", Object: "idp:bob"},
+				{Name: "GetUser", Object: "bob"},
 			},
 			ExpectedError: true,
 		},
@@ -228,8 +228,8 @@ func TestProvision(t *testing.T) {
 			NewIdentityGetterResponses: []interface{}{},
 
 			ExpectedActions: []test.Action{
-				{"GetIdentity", "idp:bob"},
-				{"GetUser", "bob"},
+				{Name: "GetIdentity", Object: "idp:bob"},
+				{Name: "GetUser", Object: "bob"},
 			},
 			ExpectedUserName: "bob",
 		},

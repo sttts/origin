@@ -1,5 +1,3 @@
-// +build integration
-
 package integration
 
 import (
@@ -16,13 +14,14 @@ import (
 	"github.com/docker/distribution/registry/api/errcode"
 	gocontext "golang.org/x/net/context"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/watch"
+	restclient "k8s.io/client-go/rest"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/client/restclient"
-	kerrors "k8s.io/kubernetes/pkg/util/errors"
-	"k8s.io/kubernetes/pkg/watch"
 
+	"github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/dockerregistry"
 	"github.com/openshift/origin/pkg/image/api"
 	"github.com/openshift/origin/pkg/image/importer"
@@ -34,6 +33,7 @@ import (
 
 func TestImageStreamImport(t *testing.T) {
 	testutil.RequireEtcd(t)
+	defer testutil.DumpEtcdOnFailure(t)
 	_, clusterAdminKubeConfig, err := testserver.StartTestMaster()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -50,12 +50,12 @@ func TestImageStreamImport(t *testing.T) {
 
 	// can't give invalid image specs, should be invalid
 	isi, err := c.ImageStreams(testutil.Namespace()).Import(&api.ImageStreamImport{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: "doesnotexist",
 		},
 		Spec: api.ImageStreamImportSpec{
 			Images: []api.ImageImportSpec{
-				{From: kapi.ObjectReference{Kind: "DockerImage", Name: "a/a/a/a/a/redis:latest"}, To: &kapi.LocalObjectReference{Name: "tag"}},
+				{From: kapi.ObjectReference{Kind: "DockerImage", Name: "///a/a/a/a/a/redis:latest"}, To: &kapi.LocalObjectReference{Name: "tag"}},
 				{From: kapi.ObjectReference{Kind: "DockerImage", Name: "redis:latest"}},
 			},
 		},
@@ -64,13 +64,13 @@ func TestImageStreamImport(t *testing.T) {
 		t.Fatalf("unexpected responses: %#v %#v %#v", err, isi, isi.Status.Import)
 	}
 	// does not create stream
-	if _, err := c.ImageStreams(testutil.Namespace()).Get("doesnotexist"); err == nil || !errors.IsNotFound(err) {
+	if _, err := c.ImageStreams(testutil.Namespace()).Get("doesnotexist", metav1.GetOptions{}); err == nil || !errors.IsNotFound(err) {
 		t.Fatal(err)
 	}
 
 	// import without committing
 	isi, err = c.ImageStreams(testutil.Namespace()).Import(&api.ImageStreamImport{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: "doesnotexist",
 		},
 		Spec: api.ImageStreamImportSpec{
@@ -83,13 +83,13 @@ func TestImageStreamImport(t *testing.T) {
 		t.Fatalf("unexpected responses: %v %#v %#v", err, isi, isi.Status.Import)
 	}
 	// does not create stream
-	if _, err := c.ImageStreams(testutil.Namespace()).Get("doesnotexist"); err == nil || !errors.IsNotFound(err) {
+	if _, err := c.ImageStreams(testutil.Namespace()).Get("doesnotexist", metav1.GetOptions{}); err == nil || !errors.IsNotFound(err) {
 		t.Fatal(err)
 	}
 
 	// import with commit
 	isi, err = c.ImageStreams(testutil.Namespace()).Import(&api.ImageStreamImport{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: "doesnotexist",
 		},
 		Spec: api.ImageStreamImportSpec{
@@ -100,7 +100,7 @@ func TestImageStreamImport(t *testing.T) {
 		},
 	})
 	if err != nil || isi == nil || isi.Status.Import == nil {
-		t.Fatalf("unexpected responses: %v %#v %#v", err, isi, isi.Status.Import)
+		t.Fatalf("unexpected responses: %v %#v", err, isi)
 	}
 
 	if isi.Status.Images[0].Image == nil || isi.Status.Images[0].Image.DockerImageMetadata.Size == 0 || len(isi.Status.Images[0].Image.DockerImageLayers) == 0 {
@@ -126,7 +126,7 @@ func TestImageStreamImport(t *testing.T) {
 	}
 
 	// stream should not have changed
-	stream2, err := c.ImageStreams(testutil.Namespace()).Get("doesnotexist")
+	stream2, err := c.ImageStreams(testutil.Namespace()).Get("doesnotexist", metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,44 @@ func mockRegistryHandler(t *testing.T, requireAuth bool, count *int) http.Handle
 	})
 }
 
-func TestImageStreamImportOfV1ImageFromV2Repository(t *testing.T) {
+func testImageStreamImport(t *testing.T, c *client.Client, imageSize int64, imagestreamimport *api.ImageStreamImport) {
+	imageStreams := c.ImageStreams(testutil.Namespace())
+
+	isi, err := imageStreams.Import(imagestreamimport)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(isi.Status.Images) != 1 {
+		t.Errorf("imported unexpected number of images (%d != 1)", len(isi.Status.Images))
+	}
+
+	for i, image := range isi.Status.Images {
+		if image.Status.Status != metav1.StatusSuccess {
+			t.Errorf("unexpected status %d: %#v", i, image.Status)
+		}
+
+		if image.Image == nil {
+			t.Errorf("unexpected empty image %d", i)
+		}
+
+		// the image name is always the sha256, and size is calculated
+		if image.Image.Name != convertedDigest {
+			t.Errorf("unexpected image %d: %#v (expect %q)", i, image.Image.Name, convertedDigest)
+		}
+
+		// the image size is calculated
+		if image.Image.DockerImageMetadata.Size == 0 {
+			t.Errorf("unexpected image size %d: %#v", i, image.Image.DockerImageMetadata.Size)
+		}
+
+		if image.Image.DockerImageMetadata.Size != imageSize {
+			t.Errorf("unexpected image size %d: %#v (expect %d)", i, image.Image.DockerImageMetadata.Size, imageSize)
+		}
+	}
+}
+
+func testImageStreamImportWithPath(t *testing.T, reponame string) {
 	imageDigest := "sha256:815d06b56f4138afacd0009b8e3799fcdce79f0507bf8d0588e219b93ab6fd4d"
 	descriptors := map[string]int64{
 		"sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4": 3000,
@@ -197,6 +234,7 @@ func TestImageStreamImportOfV1ImageFromV2Repository(t *testing.T) {
 	}
 
 	testutil.RequireEtcd(t)
+	defer testutil.DumpEtcdOnFailure(t)
 
 	// start regular HTTP servers
 	requireAuth := false
@@ -219,9 +257,9 @@ func TestImageStreamImportOfV1ImageFromV2Repository(t *testing.T) {
 		switch r.URL.Path {
 		case "/v2/":
 			w.Write([]byte(`{}`))
-		case "/v2/test/image/tags/list":
-			w.Write([]byte("{\"name\": \"test/image\", \"tags\": [\"testtag\"]}"))
-		case "/v2/test/image/manifests/testtag", "/v2/test/image/manifests/" + imageDigest:
+		case "/v2/" + reponame + "/tags/list":
+			w.Write([]byte("{\"name\": \"" + reponame + "\", \"tags\": [\"testtag\"]}"))
+		case "/v2/" + reponame + "/manifests/testtag", "/v2/" + reponame + "/manifests/" + imageDigest:
 			if r.Method == "HEAD" {
 				w.Header().Set("Content-Length", fmt.Sprintf("%d", len(convertedManifest)))
 				w.Header().Set("Docker-Content-Digest", imageDigest)
@@ -230,9 +268,9 @@ func TestImageStreamImportOfV1ImageFromV2Repository(t *testing.T) {
 				w.Write([]byte(convertedManifest))
 			}
 		default:
-			if strings.HasPrefix(r.URL.Path, "/v2/test/image/blobs/") {
+			if strings.HasPrefix(r.URL.Path, "/v2/"+reponame+"/blobs/") {
 				for dgst, size := range descriptors {
-					if r.URL.Path != "/v2/test/image/blobs/"+dgst {
+					if r.URL.Path != "/v2/"+reponame+"/blobs/"+dgst {
 						continue
 					}
 					if r.Method == "HEAD" {
@@ -266,58 +304,60 @@ func TestImageStreamImportOfV1ImageFromV2Repository(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	imageStreams := c.ImageStreams(testutil.Namespace())
-
-	isi, err := imageStreams.Import(&api.ImageStreamImport{
-		ObjectMeta: kapi.ObjectMeta{
+	testImageStreamImport(t, c, imageSize, &api.ImageStreamImport{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: "test",
 		},
 		Spec: api.ImageStreamImportSpec{
 			Import: true,
 			Images: []api.ImageImportSpec{
 				{
-					From:         kapi.ObjectReference{Kind: "DockerImage", Name: url.Host + "/test/image:testtag"},
+					From:         kapi.ObjectReference{Kind: "DockerImage", Name: url.Host + "/" + reponame + ":testtag"},
 					To:           &kapi.LocalObjectReference{Name: "other"},
 					ImportPolicy: api.TagImportPolicy{Insecure: true},
 				},
 			},
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
+
+	if countStat != len(descriptors) {
+		t.Fatalf("unexpected number of blob stats %d (expected %d)", countStat, len(descriptors))
 	}
 
-	if len(isi.Status.Images) != 1 {
-		t.Errorf("imported unexpected number of images (%d != 1)", len(isi.Status.Images))
+	testImageStreamImport(t, c, imageSize, &api.ImageStreamImport{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test1",
+		},
+		Spec: api.ImageStreamImportSpec{
+			Import: true,
+			Images: []api.ImageImportSpec{
+				{
+					From:         kapi.ObjectReference{Kind: "DockerImage", Name: url.Host + "/" + reponame + ":testtag"},
+					To:           &kapi.LocalObjectReference{Name: "other1"},
+					ImportPolicy: api.TagImportPolicy{Insecure: true},
+				},
+			},
+		},
+	})
+
+	// Test that the global layer cache is working. The counter shouldn't change
+	// because all the information is available in the cache.
+	if countStat != len(descriptors) {
+		t.Fatalf("the global layer cache is not working: unexpected number of blob stats %d (expected %d)", countStat, len(descriptors))
 	}
+}
 
-	for i, image := range isi.Status.Images {
-		if image.Status.Status != unversioned.StatusSuccess {
-			t.Errorf("unexpected status %d: %#v", i, image.Status)
-		}
+func TestImageStreamImportOfV1ImageFromV2Repository(t *testing.T) {
+	testImageStreamImportWithPath(t, "test/image")
+}
 
-		if image.Image == nil {
-			t.Errorf("unexpected empty image %d", i)
-		}
-
-		// the image name is always the sha256, and size is calculated
-		if image.Image.Name != convertedDigest {
-			t.Errorf("unexpected image %d: %#v (expect %q)", i, image.Image.Name, convertedDigest)
-		}
-
-		// the image size is calculated
-		if image.Image.DockerImageMetadata.Size == 0 {
-			t.Errorf("unexpected image size %d: %#v", i, image.Image.DockerImageMetadata.Size)
-		}
-
-		if image.Image.DockerImageMetadata.Size != imageSize {
-			t.Errorf("unexpected image size %d: %#v (expect %d)", i, image.Image.DockerImageMetadata.Size, imageSize)
-		}
-	}
+func TestImageStreamImportOfMultiSegmentDockerReference(t *testing.T) {
+	testImageStreamImportWithPath(t, "test/foo/bar/image")
 }
 
 func TestImageStreamImportAuthenticated(t *testing.T) {
 	testutil.RequireEtcd(t)
+	defer testutil.DumpEtcdOnFailure(t)
 	// start regular HTTP servers
 	count := 0
 	server := httptest.NewServer(mockRegistryHandler(t, true, &count))
@@ -359,7 +399,7 @@ func TestImageStreamImportAuthenticated(t *testing.T) {
 
 	specFn := func(insecure bool, host1, host2 string) *api.ImageStreamImport {
 		return &api.ImageStreamImport{
-			ObjectMeta: kapi.ObjectMeta{Name: "test"},
+			ObjectMeta: metav1.ObjectMeta{Name: "test"},
 			Spec: api.ImageStreamImportSpec{
 				Import: true,
 				Images: []api.ImageImportSpec{
@@ -393,7 +433,7 @@ func TestImageStreamImportAuthenticated(t *testing.T) {
 		t.Fatalf("unexpected responses: %#v", isi)
 	}
 	for i, image := range isi.Status.Images {
-		if image.Status.Status != unversioned.StatusFailure || image.Status.Reason != unversioned.StatusReasonUnauthorized {
+		if image.Status.Status != metav1.StatusFailure || image.Status.Reason != metav1.StatusReasonUnauthorized {
 			t.Fatalf("import of image %d did not report unauthorized: %#v", i, image.Status)
 		}
 	}
@@ -405,8 +445,8 @@ func TestImageStreamImportAuthenticated(t *testing.T) {
 		t.Logf("testing %s host", host)
 
 		// add secrets for subsequent checks
-		_, err = kc.Secrets(testutil.Namespace()).Create(&kapi.Secret{
-			ObjectMeta: kapi.ObjectMeta{Name: fmt.Sprintf("secret-%d", i+1)},
+		_, err = kc.Core().Secrets(testutil.Namespace()).Create(&kapi.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("secret-%d", i+1)},
 			Type:       kapi.SecretTypeDockerConfigJson,
 			Data: map[string][]byte{
 				kapi.DockerConfigJsonKey: []byte(`{"auths":{"` + host + `/test/image/":{"auth":"` + base64.StdEncoding.EncodeToString([]byte("user:password")) + `"}}}`),
@@ -426,11 +466,11 @@ func TestImageStreamImportAuthenticated(t *testing.T) {
 		for i, image := range isi.Status.Images {
 			switch i {
 			case 1, 2:
-				if image.Status.Status != unversioned.StatusFailure || image.Status.Reason != unversioned.StatusReasonUnauthorized {
+				if image.Status.Status != metav1.StatusFailure || image.Status.Reason != metav1.StatusReasonUnauthorized {
 					t.Fatalf("import of image %d did not report unauthorized: %#v", i, image.Status)
 				}
 			default:
-				if image.Status.Status != unversioned.StatusSuccess {
+				if image.Status.Status != metav1.StatusSuccess {
 					t.Fatalf("import of image %d did not succeed: %#v", i, image.Status)
 				}
 			}
@@ -443,7 +483,7 @@ func TestImageStreamImportAuthenticated(t *testing.T) {
 			t.Fatalf("unexpected image output: %#v", isi.Status.Images[0].Image)
 		}
 
-		is, err := c.ImageStreams(testutil.Namespace()).Get("test")
+		is, err := c.ImageStreams(testutil.Namespace()).Get("test", metav1.GetOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -465,7 +505,7 @@ func TestImageStreamImportAuthenticated(t *testing.T) {
 		}
 		tag, ok := is.Spec.Tags["latest"]
 		if !ok {
-			t.Fatalf("object at generation %d did not have tag latest: %#v", is.Generation)
+			t.Fatalf("object at generation %d did not have tag latest: %#v", is.Generation, is)
 		}
 		tagGen := tag.Generation
 		if is.Generation != expectedGen || tagGen == nil || *tagGen != expectedGen {
@@ -484,6 +524,7 @@ func TestImageStreamImportAuthenticated(t *testing.T) {
 // repository.
 func TestImageStreamImportTagsFromRepository(t *testing.T) {
 	testutil.RequireEtcd(t)
+	defer testutil.DumpEtcdOnFailure(t)
 	// start regular HTTP servers
 	count := 0
 	server := httptest.NewServer(mockRegistryHandler(t, false, &count))
@@ -511,7 +552,7 @@ func TestImageStreamImportTagsFromRepository(t *testing.T) {
 	}
 
 	importSpec := &api.ImageStreamImport{
-		ObjectMeta: kapi.ObjectMeta{Name: "test"},
+		ObjectMeta: metav1.ObjectMeta{Name: "test"},
 		Spec: api.ImageStreamImportSpec{
 			Import: true,
 			Repository: &api.RepositoryImportSpec{
@@ -538,8 +579,8 @@ func TestImageStreamImportTagsFromRepository(t *testing.T) {
 	}
 	for i, image := range isi.Status.Repository.Images {
 		switch i {
-		case 2:
-			if image.Status.Status != unversioned.StatusSuccess {
+		case 1:
+			if image.Status.Status != metav1.StatusSuccess {
 				t.Errorf("import of image %d did not succeed: %#v", i, image.Status)
 			}
 			if image.Tag != "v1" {
@@ -555,17 +596,17 @@ func TestImageStreamImportTagsFromRepository(t *testing.T) {
 				t.Errorf("expected etcd digest as a name of the image (%s != %s)", image.Image.Name, etcdDigest)
 			}
 		default:
-			if image.Status.Status != unversioned.StatusFailure || image.Status.Reason != unversioned.StatusReasonInternalError {
+			if image.Status.Status != metav1.StatusFailure || image.Status.Reason != metav1.StatusReasonInternalError {
 				t.Fatalf("import of image %d did not report internal server error: %#v", i, image.Status)
 			}
-			expectedTags := []string{"latest", "v2"}[i]
+			expectedTags := []string{"latest", "", "v2"}[i]
 			if image.Tag != expectedTags {
-				t.Errorf("unexpected tag at position %d (%s != %s)", i, image.Tag, expectedTags[i])
+				t.Errorf("unexpected tag at position %d (%s != %s)", i, image.Tag, expectedTags)
 			}
 		}
 	}
 
-	is, err := c.ImageStreams(testutil.Namespace()).Get("test")
+	is, err := c.ImageStreams(testutil.Namespace()).Get("test", metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,6 +625,7 @@ func TestImageStreamImportTagsFromRepository(t *testing.T) {
 // error occurs writes the error only once (instead of every interval)
 func TestImageStreamImportScheduled(t *testing.T) {
 	testutil.RequireEtcd(t)
+	defer testutil.DumpEtcdOnFailure(t)
 	written := make(chan struct{}, 1)
 	count := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -637,7 +679,7 @@ func TestImageStreamImportScheduled(t *testing.T) {
 
 	// import with commit
 	isi, err := c.ImageStreams(testutil.Namespace()).Import(&api.ImageStreamImport{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: "test",
 		},
 		Spec: api.ImageStreamImportSpec{
@@ -675,7 +717,7 @@ func TestImageStreamImportScheduled(t *testing.T) {
 	<-written
 
 	is := isi.Status.Import
-	w, err := c.ImageStreams(is.Namespace).Watch(kapi.ListOptions{ResourceVersion: is.ResourceVersion})
+	w, err := c.ImageStreams(is.Namespace).Watch(metav1.ListOptions{ResourceVersion: is.ResourceVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -706,14 +748,14 @@ func TestImageStreamImportScheduled(t *testing.T) {
 
 	tag, ok := change.Spec.Tags["latest"]
 	if !ok {
-		t.Fatalf("object at generation %d did not have tag latest: %#v", change.Generation)
+		t.Fatalf("object at generation %d did not have tag latest: %#v", change.Generation, change)
 	}
 	if gen := tag.Generation; gen == nil || *gen != 2 {
 		t.Fatalf("object at generation %d had spec tag: %#v", change.Generation, tag)
 	}
 	items := change.Status.Tags["latest"].Items
 	if len(items) != 2 {
-		t.Fatalf("object at generation %d should have two tagged images", change.Generation, change.Status.Tags["latest"])
+		t.Fatalf("object at generation %d should have two tagged images: %#v", change.Generation, change.Status.Tags["latest"])
 	}
 	if items[0].Image != phpDigest || items[0].DockerImageReference != url.Host+"/test/image@"+phpDigest {
 		t.Fatalf("expected tagged image: %#v", items[0])
@@ -779,7 +821,7 @@ func TestImageStreamImportDockerHub(t *testing.T) {
 	}
 
 	err := retryWhenUnreachable(t, func() error {
-		i := importer.NewImageStreamImporter(importCtx, 3, nil)
+		i := importer.NewImageStreamImporter(importCtx, 3, nil, nil)
 		if err := i.Import(gocontext.Background(), imports); err != nil {
 			return err
 		}
@@ -787,7 +829,7 @@ func TestImageStreamImportDockerHub(t *testing.T) {
 		errs := []error{}
 		for i, d := range imports.Status.Images {
 			fromName := imports.Spec.Images[i].From.Name
-			if d.Status.Status != unversioned.StatusSuccess && fromName != "mysql/doesnotexistinanyform" {
+			if d.Status.Status != metav1.StatusSuccess && fromName != "mysql/doesnotexistinanyform" {
 				errs = append(errs, fmt.Errorf("failed to import an image %s: %v", fromName, d.Status.Message))
 			}
 		}
@@ -797,7 +839,7 @@ func TestImageStreamImportDockerHub(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if imports.Status.Repository.Status.Status != unversioned.StatusSuccess || len(imports.Status.Repository.Images) != 3 || len(imports.Status.Repository.AdditionalTags) < 1 {
+	if imports.Status.Repository.Status.Status != metav1.StatusSuccess || len(imports.Status.Repository.Images) != 3 || len(imports.Status.Repository.AdditionalTags) < 1 {
 		t.Errorf("unexpected repository: %#v", imports.Status.Repository)
 	}
 	if len(imports.Status.Images) != 4 {
@@ -816,7 +858,7 @@ func TestImageStreamImportDockerHub(t *testing.T) {
 		t.Errorf("unexpected object: %#v", d.Image)
 	}
 	d = imports.Status.Images[3]
-	if d.Image != nil || d.Status.Status != unversioned.StatusFailure || d.Status.Reason != "Unauthorized" {
+	if d.Image != nil || d.Status.Status != metav1.StatusFailure || d.Status.Reason != "Unauthorized" {
 		t.Errorf("unexpected object: %#v", d)
 	}
 }
@@ -835,7 +877,7 @@ func TestImageStreamImportQuayIO(t *testing.T) {
 	}
 
 	err := retryWhenUnreachable(t, func() error {
-		i := importer.NewImageStreamImporter(importCtx, 3, nil)
+		i := importer.NewImageStreamImporter(importCtx, 3, nil, nil)
 		if err := i.Import(gocontext.Background(), imports); err != nil {
 			return err
 		}
@@ -843,7 +885,7 @@ func TestImageStreamImportQuayIO(t *testing.T) {
 		errs := []error{}
 		for i, d := range imports.Status.Images {
 			fromName := imports.Spec.Images[i].From.Name
-			if d.Status.Status != unversioned.StatusSuccess {
+			if d.Status.Status != metav1.StatusSuccess {
 				if d.Status.Reason == "NotV2Registry" {
 					t.Skipf("the server did not report as a v2 registry: %#v", d.Status)
 				}
@@ -888,7 +930,7 @@ func TestImageStreamImportRedHatRegistry(t *testing.T) {
 		},
 	}
 
-	i := importer.NewImageStreamImporter(importCtx, 3, nil)
+	i := importer.NewImageStreamImporter(importCtx, 3, nil, nil)
 	if err := i.Import(gocontext.Background(), imports); err != nil {
 		t.Fatal(err)
 	}
@@ -900,7 +942,7 @@ func TestImageStreamImportRedHatRegistry(t *testing.T) {
 		t.Fatalf("unexpected response: %#v", imports.Status.Images)
 	}
 	d := imports.Status.Images[0]
-	if d.Image != nil || d.Status.Status != unversioned.StatusFailure || d.Status.Reason != "NotV2Registry" {
+	if d.Image == nil || d.Status.Status == metav1.StatusFailure {
 		t.Errorf("unexpected object: %#v", d.Status)
 	}
 
@@ -915,7 +957,7 @@ func TestImageStreamImportRedHatRegistry(t *testing.T) {
 	context := gocontext.WithValue(gocontext.Background(), importer.ContextKeyV1RegistryClient, dockerregistry.NewClient(20*time.Second, false))
 	importCtx = importer.NewContext(rt, nil).WithCredentials(importer.NoCredentials)
 	err := retryWhenUnreachable(t, func() error {
-		i = importer.NewImageStreamImporter(importCtx, 3, nil)
+		i = importer.NewImageStreamImporter(importCtx, 3, nil, nil)
 		if err := i.Import(context, imports); err != nil {
 			return err
 		}
@@ -923,7 +965,7 @@ func TestImageStreamImportRedHatRegistry(t *testing.T) {
 		errs := []error{}
 		for i, d := range imports.Status.Images {
 			fromName := imports.Spec.Images[i].From.Name
-			if d.Status.Status != unversioned.StatusSuccess {
+			if d.Status.Status != metav1.StatusSuccess {
 				errs = append(errs, fmt.Errorf("failed to import an image %s: %v", fromName, d.Status.Message))
 			}
 		}
@@ -943,9 +985,9 @@ func TestImageStreamImportRedHatRegistry(t *testing.T) {
 		t.Fatalf("unexpected response: %#v", imports.Status.Images)
 	}
 	d = imports.Status.Images[0]
-	if d.Image == nil || len(d.Image.DockerImageManifest) != 0 || d.Image.DockerImageReference != repositoryName+":latest" || len(d.Image.DockerImageMetadata.ID) == 0 || len(d.Image.DockerImageLayers) != 0 {
+	if d.Image == nil || len(d.Image.DockerImageManifest) == 0 || !strings.HasPrefix(d.Image.DockerImageReference, repositoryName) || len(d.Image.DockerImageMetadata.ID) == 0 || len(d.Image.DockerImageLayers) == 0 {
 		t.Logf("imports: %#v", imports.Status.Images[0].Image)
-		t.Fatalf("unexpected object: %#v", d.Status)
+		t.Fatalf("unexpected object: %#v", d.Image)
 	}
 }
 

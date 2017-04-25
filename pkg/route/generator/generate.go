@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strconv"
 
-	kapi "k8s.io/kubernetes/pkg/api"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/kubernetes/pkg/kubectl"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/intstr"
 
 	"github.com/openshift/origin/pkg/route/api"
 )
@@ -21,12 +21,13 @@ var _ kubectl.Generator = RouteGenerator{}
 // ParamNames returns the parameters required for generating a route
 func (RouteGenerator) ParamNames() []kubectl.GeneratorParam {
 	return []kubectl.GeneratorParam{
-		{"labels", false},
-		{"default-name", true},
-		{"port", false},
-		{"name", false},
-		{"hostname", false},
-		{"path", false},
+		{Name: "labels", Required: false},
+		{Name: "default-name", Required: true},
+		{Name: "port", Required: false},
+		{Name: "name", Required: false},
+		{Name: "hostname", Required: false},
+		{Name: "path", Required: false},
+		{Name: "wildcard-policy", Required: false},
 	}
 }
 
@@ -63,13 +64,14 @@ func (RouteGenerator) Generate(genericParams map[string]interface{}) (runtime.Ob
 	}
 
 	route := &api.Route{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:   name,
 			Labels: labels,
 		},
 		Spec: api.RouteSpec{
-			Host: params["hostname"],
-			Path: params["path"],
+			Host:           params["hostname"],
+			WildcardPolicy: api.WildcardPolicyType(params["wildcard-policy"]),
+			Path:           params["path"],
 			To: api.RouteTargetReference{
 				Name: params["default-name"],
 			},

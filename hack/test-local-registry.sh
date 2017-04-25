@@ -1,19 +1,9 @@
 #!/bin/bash
-
-set -o errexit
-set -o nounset
-set -o pipefail
-
-OS_ROOT=$(dirname "${BASH_SOURCE}")/..
-source "${OS_ROOT}/hack/lib/init.sh"
-
-# Go to the top of the tree.
-cd "${OS_ROOT}"
+source "$(dirname "${BASH_SOURCE}")/lib/init.sh"
 
 os::build::setup_env
 
-hack/build-go.sh cmd/dockerregistry
-dockerregistry="$( os::build::find-binary dockerregistry )"
+os::util::ensure::built_binary_exists 'dockerregistry'
 
 url="${DOCKER_REGISTRY_URL:-localhost:5000}"
 # find the first builder service account token
@@ -26,4 +16,4 @@ echo
 REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY="${REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY:-/tmp/registry}" \
   DOCKER_REGISTRY_URL="${url}" \
 	KUBECONFIG=openshift.local.config/master/openshift-registry.kubeconfig \
-	${dockerregistry} images/dockerregistry/config.yml
+	dockerregistry images/dockerregistry/config.yml

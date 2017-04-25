@@ -1,7 +1,7 @@
 // +build linux
 
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -49,6 +49,22 @@ func (mi *fakeMountInterface) List() ([]mount.MountPoint, error) {
 
 func (mi *fakeMountInterface) IsLikelyNotMountPoint(file string) (bool, error) {
 	return false, fmt.Errorf("unsupported")
+}
+func (mi *fakeMountInterface) GetDeviceNameFromMount(mountPath, pluginDir string) (string, error) {
+	return "", nil
+}
+
+func (mi *fakeMountInterface) DeviceOpened(pathname string) (bool, error) {
+	for _, mp := range mi.mountPoints {
+		if mp.Device == pathname {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (mi *fakeMountInterface) PathIsDevice(pathname string) (bool, error) {
+	return true, nil
 }
 
 func fakeContainerMgrMountInt() mount.Interface {
@@ -136,6 +152,7 @@ func TestSoftRequirementsValidationSuccess(t *testing.T) {
 	req := require.New(t)
 	tempDir, err := ioutil.TempDir("", "")
 	req.NoError(err)
+	defer os.RemoveAll(tempDir)
 	req.NoError(ioutil.WriteFile(path.Join(tempDir, "cpu.cfs_period_us"), []byte("0"), os.ModePerm))
 	req.NoError(ioutil.WriteFile(path.Join(tempDir, "cpu.cfs_quota_us"), []byte("0"), os.ModePerm))
 	mountInt := &fakeMountInterface{

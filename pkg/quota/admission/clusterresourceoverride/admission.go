@@ -6,11 +6,13 @@ import (
 
 	"github.com/golang/glog"
 
-	"k8s.io/kubernetes/pkg/admission"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apiserver/pkg/admission"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/resource"
-	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	"k8s.io/kubernetes/pkg/runtime"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	informers "k8s.io/kubernetes/pkg/client/informers/informers_generated/internalversion"
+	kadmission "k8s.io/kubernetes/pkg/kubeapiserver/admission"
 	"k8s.io/kubernetes/plugin/pkg/admission/limitranger"
 
 	oadmission "github.com/openshift/origin/pkg/cmd/server/admission"
@@ -31,7 +33,7 @@ var (
 )
 
 func init() {
-	admission.RegisterPlugin(api.PluginName, func(client clientset.Interface, config io.Reader) (admission.Interface, error) {
+	admission.RegisterPlugin(api.PluginName, func(config io.Reader) (admission.Interface, error) {
 		pluginConfig, err := ReadConfig(config)
 		if err != nil {
 			return nil, err
@@ -40,7 +42,7 @@ func init() {
 			glog.Infof("Admission plugin %q is not configured so it will be disabled.", api.PluginName)
 			return nil, nil
 		}
-		return newClusterResourceOverride(client, pluginConfig)
+		return newClusterResourceOverride(pluginConfig)
 	})
 }
 
@@ -58,12 +60,13 @@ type clusterResourceOverridePlugin struct {
 type limitRangerActions struct{}
 
 var _ = oadmission.WantsProjectCache(&clusterResourceOverridePlugin{})
-var _ = oadmission.Validator(&clusterResourceOverridePlugin{})
 var _ = limitranger.LimitRangerActions(&limitRangerActions{})
+var _ = kadmission.WantsInternalKubeInformerFactory(&clusterResourceOverridePlugin{})
+var _ = kadmission.WantsInternalKubeClientSet(&clusterResourceOverridePlugin{})
 
 // newClusterResourceOverride returns an admission controller for containers that
 // configurably overrides container resource request/limits
-func newClusterResourceOverride(client clientset.Interface, config *api.ClusterResourceOverrideConfig) (admission.Interface, error) {
+func newClusterResourceOverride(config *api.ClusterResourceOverrideConfig) (admission.Interface, error) {
 	glog.V(2).Infof("%s admission controller loaded with config: %v", api.PluginName, config)
 	var internal *internalConfig
 	if config != nil {
@@ -74,7 +77,7 @@ func newClusterResourceOverride(client clientset.Interface, config *api.ClusterR
 		}
 	}
 
-	limitRanger, err := limitranger.NewLimitRanger(client, &limitRangerActions{})
+	limitRanger, err := limitranger.NewLimitRanger(nil)
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +87,14 @@ func newClusterResourceOverride(client clientset.Interface, config *api.ClusterR
 		config:      internal,
 		LimitRanger: limitRanger,
 	}, nil
+}
+
+func (d *clusterResourceOverridePlugin) SetInternalKubeInformerFactory(i informers.SharedInformerFactory) {
+	d.LimitRanger.(kadmission.WantsInternalKubeInformerFactory).SetInternalKubeInformerFactory(i)
+}
+
+func (d *clusterResourceOverridePlugin) SetInternalKubeClientSet(c kclientset.Interface) {
+	d.LimitRanger.(kadmission.WantsInternalKubeClientSet).SetInternalKubeClientSet(c)
 }
 
 // these serve to satisfy the interface so that our kept LimitRanger limits nothing and only provides defaults.
@@ -126,7 +137,11 @@ func (a *clusterResourceOverridePlugin) Validate() error {
 	if a.ProjectCache == nil {
 		return fmt.Errorf("%s did not get a project cache", api.PluginName)
 	}
-	return nil
+	v, ok := a.LimitRanger.(admission.Validator)
+	if !ok {
+		return fmt.Errorf("LimitRanger does not implement kadmission.Validator")
+	}
+	return v.Validate()
 }
 
 // TODO this will need to update when we have pod requests/limits
@@ -155,54 +170,62 @@ func (a *clusterResourceOverridePlugin) Admit(attr admission.Attributes) error {
 
 	// Reuse LimitRanger logic to apply limit/req defaults from the project. Ignore validation
 	// errors, assume that LimitRanger will run after this plugin to validate.
-	glog.V(5).Infof("%s: initial pod limits are: %#v", api.PluginName, pod.Spec.Containers[0].Resources)
+	glog.V(5).Infof("%s: initial pod limits are: %#v", api.PluginName, pod.Spec)
 	if err := a.LimitRanger.Admit(attr); err != nil {
 		glog.V(5).Infof("%s: error from LimitRanger: %#v", api.PluginName, err)
 	}
-	glog.V(5).Infof("%s: pod limits after LimitRanger are: %#v", api.PluginName, pod.Spec.Containers[0].Resources)
-	for _, container := range pod.Spec.Containers {
-		resources := container.Resources
-		memLimit, memFound := resources.Limits[kapi.ResourceMemory]
-		if memFound && a.config.memoryRequestToLimitRatio != 0 {
-			// memory is measured in whole bytes.
-			// the plugin rounds down to the nearest MiB rather than bytes to improve ease of use for end-users.
-			amount := memLimit.Value() * int64(a.config.memoryRequestToLimitRatio*100) / 100
-			// TODO: move into resource.Quantity
-			var mod int64
-			switch memLimit.Format {
-			case resource.BinarySI:
-				mod = 1024 * 1024
-			default:
-				mod = 1000 * 1000
-			}
-			if rem := amount % mod; rem != 0 {
-				amount = amount - rem
-			}
-			q := resource.NewQuantity(int64(amount), memLimit.Format)
-			if memFloor.Cmp(*q) > 0 {
-				q = memFloor.Copy()
-			}
-			resources.Requests[kapi.ResourceMemory] = *q
-		}
-		if memFound && a.config.limitCPUToMemoryRatio != 0 {
-			amount := float64(memLimit.Value()) * a.config.limitCPUToMemoryRatio * cpuBaseScaleFactor
-			q := resource.NewMilliQuantity(int64(amount), resource.DecimalSI)
-			if cpuFloor.Cmp(*q) > 0 {
-				q = cpuFloor.Copy()
-			}
-			resources.Limits[kapi.ResourceCPU] = *q
-		}
-
-		cpuLimit, cpuFound := resources.Limits[kapi.ResourceCPU]
-		if cpuFound && a.config.cpuRequestToLimitRatio != 0 {
-			amount := float64(cpuLimit.MilliValue()) * a.config.cpuRequestToLimitRatio
-			q := resource.NewMilliQuantity(int64(amount), cpuLimit.Format)
-			if cpuFloor.Cmp(*q) > 0 {
-				q = cpuFloor.Copy()
-			}
-			resources.Requests[kapi.ResourceCPU] = *q
-		}
+	glog.V(5).Infof("%s: pod limits after LimitRanger: %#v", api.PluginName, pod.Spec)
+	for i := range pod.Spec.InitContainers {
+		updateContainerResources(a.config, &pod.Spec.InitContainers[i])
 	}
-	glog.V(5).Infof("%s: pod limits after overrides are: %#v", api.PluginName, pod.Spec.Containers[0].Resources)
+	for i := range pod.Spec.Containers {
+		updateContainerResources(a.config, &pod.Spec.Containers[i])
+	}
+	glog.V(5).Infof("%s: pod limits after overrides are: %#v", api.PluginName, pod.Spec)
 	return nil
+}
+
+func updateContainerResources(config *internalConfig, container *kapi.Container) {
+	resources := container.Resources
+	memLimit, memFound := resources.Limits[kapi.ResourceMemory]
+	if memFound && config.memoryRequestToLimitRatio != 0 {
+		// memory is measured in whole bytes.
+		// the plugin rounds down to the nearest MiB rather than bytes to improve ease of use for end-users.
+		amount := memLimit.Value() * int64(config.memoryRequestToLimitRatio*100) / 100
+		// TODO: move into resource.Quantity
+		var mod int64
+		switch memLimit.Format {
+		case resource.BinarySI:
+			mod = 1024 * 1024
+		default:
+			mod = 1000 * 1000
+		}
+		if rem := amount % mod; rem != 0 {
+			amount = amount - rem
+		}
+		q := resource.NewQuantity(int64(amount), memLimit.Format)
+		if memFloor.Cmp(*q) > 0 {
+			q = memFloor.Copy()
+		}
+		resources.Requests[kapi.ResourceMemory] = *q
+	}
+	if memFound && config.limitCPUToMemoryRatio != 0 {
+		amount := float64(memLimit.Value()) * config.limitCPUToMemoryRatio * cpuBaseScaleFactor
+		q := resource.NewMilliQuantity(int64(amount), resource.DecimalSI)
+		if cpuFloor.Cmp(*q) > 0 {
+			q = cpuFloor.Copy()
+		}
+		resources.Limits[kapi.ResourceCPU] = *q
+	}
+
+	cpuLimit, cpuFound := resources.Limits[kapi.ResourceCPU]
+	if cpuFound && config.cpuRequestToLimitRatio != 0 {
+		amount := float64(cpuLimit.MilliValue()) * config.cpuRequestToLimitRatio
+		q := resource.NewMilliQuantity(int64(amount), cpuLimit.Format)
+		if cpuFloor.Cmp(*q) > 0 {
+			q = cpuFloor.Copy()
+		}
+		resources.Requests[kapi.ResourceCPU] = *q
+	}
+
 }

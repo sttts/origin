@@ -5,8 +5,8 @@ import (
 	"sync"
 	"testing"
 
-	kcache "k8s.io/kubernetes/pkg/client/cache"
-	"k8s.io/kubernetes/pkg/util/flowcontrol"
+	kcache "k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/flowcontrol"
 )
 
 func TestRetryController_handleOneRetryableError(t *testing.T) {
@@ -195,8 +195,12 @@ func (l *mockLimiter) Accept() {
 
 func (l *mockLimiter) Stop() {}
 
-func (t *mockLimiter) Saturation() float64 {
-	return float64(0.0)
+func (l *mockLimiter) Saturation() float64 {
+	return 0.0
+}
+
+func (l *mockLimiter) QPS() float32 {
+	return 0.0
 }
 
 type testObj struct {

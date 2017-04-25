@@ -4,12 +4,14 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apiserver/pkg/authentication/user"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/auth/user"
-	"k8s.io/kubernetes/pkg/client/unversioned/testclient"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 
+	oapi "github.com/openshift/origin/pkg/api"
 	"github.com/openshift/origin/pkg/project/api"
 )
 
@@ -26,13 +28,13 @@ func TestListProjects(t *testing.T) {
 	namespaceList := kapi.NamespaceList{
 		Items: []kapi.Namespace{
 			{
-				ObjectMeta: kapi.ObjectMeta{Name: "foo"},
+				ObjectMeta: metav1.ObjectMeta{Name: "foo"},
 			},
 		},
 	}
-	mockClient := testclient.NewSimpleFake(&namespaceList)
+	mockClient := fake.NewSimpleClientset(&namespaceList)
 	storage := REST{
-		client: mockClient.Namespaces(),
+		client: mockClient.Core().Namespaces(),
 		lister: &mockLister{&namespaceList},
 	}
 	user := &user.DefaultInfo{
@@ -40,7 +42,7 @@ func TestListProjects(t *testing.T) {
 		UID:    "test-uid",
 		Groups: []string{"test-groups"},
 	}
-	ctx := kapi.WithUser(kapi.NewContext(), user)
+	ctx := apirequest.WithUser(apirequest.NewContext(), user)
 	response, err := storage.List(ctx, nil)
 	if err != nil {
 		t.Errorf("%#v should be nil.", err)
@@ -58,7 +60,7 @@ func TestListProjects(t *testing.T) {
 func TestCreateProjectBadObject(t *testing.T) {
 	storage := REST{}
 
-	obj, err := storage.Create(kapi.NewContext(), &api.ProjectList{})
+	obj, err := storage.Create(apirequest.NewContext(), &api.ProjectList{})
 	if obj != nil {
 		t.Errorf("Expected nil, got %v", obj)
 	}
@@ -68,11 +70,11 @@ func TestCreateProjectBadObject(t *testing.T) {
 }
 
 func TestCreateInvalidProject(t *testing.T) {
-	mockClient := &testclient.Fake{}
-	storage := NewREST(mockClient.Namespaces(), &mockLister{}, nil, nil)
-	_, err := storage.Create(nil, &api.Project{
-		ObjectMeta: kapi.ObjectMeta{
-			Annotations: map[string]string{"openshift.io/display-name": "h\t\ni"},
+	mockClient := &fake.Clientset{}
+	storage := NewREST(mockClient.Core().Namespaces(), &mockLister{}, nil, nil)
+	_, err := storage.Create(apirequest.NewContext(), &api.Project{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{oapi.OpenShiftDisplayName: "h\t\ni"},
 		},
 	})
 	if !errors.IsInvalid(err) {
@@ -81,10 +83,10 @@ func TestCreateInvalidProject(t *testing.T) {
 }
 
 func TestCreateProjectOK(t *testing.T) {
-	mockClient := &testclient.Fake{}
-	storage := NewREST(mockClient.Namespaces(), &mockLister{}, nil, nil)
-	_, err := storage.Create(kapi.NewContext(), &api.Project{
-		ObjectMeta: kapi.ObjectMeta{Name: "foo"},
+	mockClient := &fake.Clientset{}
+	storage := NewREST(mockClient.Core().Namespaces(), &mockLister{}, nil, nil)
+	_, err := storage.Create(apirequest.NewContext(), &api.Project{
+		ObjectMeta: metav1.ObjectMeta{Name: "foo"},
 	})
 	if err != nil {
 		t.Errorf("Unexpected non-nil error: %#v", err)
@@ -98,9 +100,9 @@ func TestCreateProjectOK(t *testing.T) {
 }
 
 func TestGetProjectOK(t *testing.T) {
-	mockClient := testclient.NewSimpleFake(&kapi.Namespace{ObjectMeta: kapi.ObjectMeta{Name: "foo"}})
-	storage := NewREST(mockClient.Namespaces(), &mockLister{}, nil, nil)
-	project, err := storage.Get(kapi.NewContext(), "foo")
+	mockClient := fake.NewSimpleClientset(&kapi.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "foo"}})
+	storage := NewREST(mockClient.Core().Namespaces(), &mockLister{}, nil, nil)
+	project, err := storage.Get(apirequest.NewContext(), "foo", &metav1.GetOptions{})
 	if project == nil {
 		t.Error("Unexpected nil project")
 	}
@@ -113,22 +115,22 @@ func TestGetProjectOK(t *testing.T) {
 }
 
 func TestDeleteProject(t *testing.T) {
-	mockClient := &testclient.Fake{}
+	mockClient := &fake.Clientset{}
 	storage := REST{
-		client: mockClient.Namespaces(),
+		client: mockClient.Core().Namespaces(),
 	}
-	obj, err := storage.Delete(kapi.NewContext(), "foo")
+	obj, err := storage.Delete(apirequest.NewContext(), "foo")
 	if obj == nil {
 		t.Error("Unexpected nil obj")
 	}
 	if err != nil {
 		t.Errorf("Unexpected non-nil error: %#v", err)
 	}
-	status, ok := obj.(*unversioned.Status)
+	status, ok := obj.(*metav1.Status)
 	if !ok {
 		t.Errorf("Expected status type, got: %#v", obj)
 	}
-	if status.Status != unversioned.StatusSuccess {
+	if status.Status != metav1.StatusSuccess {
 		t.Errorf("Expected status=success, got: %#v", status)
 	}
 	if len(mockClient.Actions()) != 1 {

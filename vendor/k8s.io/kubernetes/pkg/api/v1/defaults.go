@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,20 +17,17 @@ limitations under the License.
 package v1
 
 import (
-	"strings"
-
-	"k8s.io/kubernetes/pkg/runtime"
-
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/sets"
 	sccutil "k8s.io/kubernetes/pkg/securitycontextconstraints/util"
-
 	"k8s.io/kubernetes/pkg/util"
-	"k8s.io/kubernetes/pkg/util/intstr"
 	"k8s.io/kubernetes/pkg/util/parsers"
-	"k8s.io/kubernetes/pkg/util/sets"
 )
 
-func addDefaultingFuncs(scheme *runtime.Scheme) {
-	scheme.AddDefaultingFuncs(
+func addDefaultingFuncs(scheme *runtime.Scheme) error {
+	RegisterDefaults(scheme)
+	return scheme.AddDefaultingFuncs(
 		SetDefaults_PodExecOptions,
 		SetDefaults_PodAttachOptions,
 		SetDefaults_ReplicationController,
@@ -41,6 +38,11 @@ func addDefaultingFuncs(scheme *runtime.Scheme) {
 		SetDefaults_Pod,
 		SetDefaults_PodSpec,
 		SetDefaults_Probe,
+		SetDefaults_SecretVolumeSource,
+		SetDefaults_ConfigMapVolumeSource,
+		SetDefaults_DownwardAPIVolumeSource,
+		SetDefaults_ProjectedVolumeSource,
+		SetDefaults_DeprecatedDownwardAPIVolumeSource,
 		SetDefaults_Secret,
 		SetDefaults_PersistentVolume,
 		SetDefaults_PersistentVolumeClaim,
@@ -54,29 +56,19 @@ func addDefaultingFuncs(scheme *runtime.Scheme) {
 		SetDefaults_LimitRangeItem,
 		SetDefaults_ConfigMap,
 		SetDefaults_RBDVolumeSource,
+		SetDefaults_ResourceList,
 		SetDefaults_SCC,
-		SetDefaults_ServicePort,
-		SetDefaults_EndpointPort,
 	)
 }
 
-func SetDefaults_ServicePort(obj *ServicePort) {
-	// Carry conversion to make port case valid
-	switch strings.ToUpper(string(obj.Protocol)) {
-	case string(ProtocolTCP):
-		obj.Protocol = ProtocolTCP
-	case string(ProtocolUDP):
-		obj.Protocol = ProtocolUDP
-	}
-}
+func SetDefaults_ResourceList(obj *ResourceList) {
+	for key, val := range *obj {
+		// TODO(#18538): We round up resource values to milli scale to maintain API compatibility.
+		// In the future, we should instead reject values that need rounding.
+		const milliScale = -3
+		val.RoundUp(milliScale)
 
-func SetDefaults_EndpointPort(obj *EndpointPort) {
-	// Carry conversion to make port case valid
-	switch strings.ToUpper(string(obj.Protocol)) {
-	case string(ProtocolTCP):
-		obj.Protocol = ProtocolTCP
-	case string(ProtocolUDP):
-		obj.Protocol = ProtocolUDP
+		(*obj)[ResourceName(key)] = val
 	}
 }
 
@@ -118,13 +110,6 @@ func SetDefaults_ContainerPort(obj *ContainerPort) {
 	if obj.Protocol == "" {
 		obj.Protocol = ProtocolTCP
 	}
-	// Carry conversion to make port case valid
-	switch strings.ToUpper(string(obj.Protocol)) {
-	case string(ProtocolTCP):
-		obj.Protocol = ProtocolTCP
-	case string(ProtocolUDP):
-		obj.Protocol = ProtocolUDP
-	}
 }
 func SetDefaults_Container(obj *Container) {
 	if obj.ImagePullPolicy == "" {
@@ -132,7 +117,6 @@ func SetDefaults_Container(obj *Container) {
 		_, tag, _, _ := parsers.ParseImageName(obj.Image)
 
 		// Check image tag
-
 		if tag == "latest" {
 			obj.ImagePullPolicy = PullAlways
 		} else {
@@ -141,6 +125,9 @@ func SetDefaults_Container(obj *Container) {
 	}
 	if obj.TerminationMessagePath == "" {
 		obj.TerminationMessagePath = TerminationMessagePathDefault
+	}
+	if obj.TerminationMessagePolicy == "" {
+		obj.TerminationMessagePolicy = TerminationMessageReadFile
 	}
 }
 func SetDefaults_ServiceSpec(obj *ServiceSpec) {
@@ -157,10 +144,6 @@ func SetDefaults_ServiceSpec(obj *ServiceSpec) {
 		}
 		if sp.TargetPort == intstr.FromInt(0) || sp.TargetPort == intstr.FromString("") {
 			sp.TargetPort = intstr.FromInt(int(sp.Port))
-		}
-		//Carry conversion
-		if len(obj.ClusterIP) == 0 && len(obj.DeprecatedPortalIP) > 0 {
-			obj.ClusterIP = obj.DeprecatedPortalIP
 		}
 	}
 }
@@ -181,6 +164,18 @@ func SetDefaults_Pod(obj *Pod) {
 			}
 		}
 	}
+	for i := range obj.Spec.InitContainers {
+		if obj.Spec.InitContainers[i].Resources.Limits != nil {
+			if obj.Spec.InitContainers[i].Resources.Requests == nil {
+				obj.Spec.InitContainers[i].Resources.Requests = make(ResourceList)
+			}
+			for key, value := range obj.Spec.InitContainers[i].Resources.Limits {
+				if _, exists := obj.Spec.InitContainers[i].Resources.Requests[key]; !exists {
+					obj.Spec.InitContainers[i].Resources.Requests[key] = *(value.Copy())
+				}
+			}
+		}
+	}
 }
 func SetDefaults_PodSpec(obj *PodSpec) {
 	if obj.DNSPolicy == "" {
@@ -191,21 +186,17 @@ func SetDefaults_PodSpec(obj *PodSpec) {
 	}
 	if obj.HostNetwork {
 		defaultHostNetworkPorts(&obj.Containers)
+		defaultHostNetworkPorts(&obj.InitContainers)
 	}
 	if obj.SecurityContext == nil {
 		obj.SecurityContext = &PodSecurityContext{}
 	}
-	// Carry migration from serviceAccount to serviceAccountName
-	if len(obj.ServiceAccountName) == 0 && len(obj.DeprecatedServiceAccount) > 0 {
-		obj.ServiceAccountName = obj.DeprecatedServiceAccount
-	}
-	// Carry migration from host to nodeName
-	if len(obj.NodeName) == 0 && len(obj.DeprecatedHost) > 0 {
-		obj.NodeName = obj.DeprecatedHost
-	}
 	if obj.TerminationGracePeriodSeconds == nil {
 		period := int64(DefaultTerminationGracePeriodSeconds)
 		obj.TerminationGracePeriodSeconds = &period
+	}
+	if obj.SchedulerName == "" {
+		obj.SchedulerName = DefaultSchedulerName
 	}
 }
 func SetDefaults_Probe(obj *Probe) {
@@ -222,9 +213,41 @@ func SetDefaults_Probe(obj *Probe) {
 		obj.FailureThreshold = 3
 	}
 }
+func SetDefaults_SecretVolumeSource(obj *SecretVolumeSource) {
+	if obj.DefaultMode == nil {
+		perm := int32(SecretVolumeSourceDefaultMode)
+		obj.DefaultMode = &perm
+	}
+}
+func SetDefaults_ConfigMapVolumeSource(obj *ConfigMapVolumeSource) {
+	if obj.DefaultMode == nil {
+		perm := int32(ConfigMapVolumeSourceDefaultMode)
+		obj.DefaultMode = &perm
+	}
+}
+func SetDefaults_DownwardAPIVolumeSource(obj *DownwardAPIVolumeSource) {
+	if obj.DefaultMode == nil {
+		perm := int32(DownwardAPIVolumeSourceDefaultMode)
+		obj.DefaultMode = &perm
+	}
+}
+
+func SetDefaults_DeprecatedDownwardAPIVolumeSource(obj *DeprecatedDownwardAPIVolumeSource) {
+	if obj.DefaultMode == nil {
+		perm := int32(DownwardAPIVolumeSourceDefaultMode)
+		obj.DefaultMode = &perm
+	}
+}
+
 func SetDefaults_Secret(obj *Secret) {
 	if obj.Type == "" {
 		obj.Type = SecretTypeOpaque
+	}
+}
+func SetDefaults_ProjectedVolumeSource(obj *ProjectedVolumeSource) {
+	if obj.DefaultMode == nil {
+		perm := int32(ProjectedVolumeSourceDefaultMode)
+		obj.DefaultMode = &perm
 	}
 }
 func SetDefaults_PersistentVolume(obj *PersistentVolume) {
@@ -243,6 +266,20 @@ func SetDefaults_PersistentVolumeClaim(obj *PersistentVolumeClaim) {
 func SetDefaults_ISCSIVolumeSource(obj *ISCSIVolumeSource) {
 	if obj.ISCSIInterface == "" {
 		obj.ISCSIInterface = "default"
+	}
+}
+func SetDefaults_AzureDiskVolumeSource(obj *AzureDiskVolumeSource) {
+	if obj.CachingMode == nil {
+		obj.CachingMode = new(AzureDataDiskCachingMode)
+		*obj.CachingMode = AzureDataDiskCachingNone
+	}
+	if obj.FSType == nil {
+		obj.FSType = new(string)
+		*obj.FSType = "ext4"
+	}
+	if obj.ReadOnly == nil {
+		obj.ReadOnly = new(bool)
+		*obj.ReadOnly = false
 	}
 }
 func SetDefaults_Endpoints(obj *Endpoints) {
@@ -346,6 +383,21 @@ func SetDefaults_RBDVolumeSource(obj *RBDVolumeSource) {
 	}
 	if obj.Keyring == "" {
 		obj.Keyring = "/etc/ceph/keyring"
+	}
+}
+
+func SetDefaults_ScaleIOVolumeSource(obj *ScaleIOVolumeSource) {
+	if obj.ProtectionDomain == "" {
+		obj.ProtectionDomain = "default"
+	}
+	if obj.StoragePool == "" {
+		obj.StoragePool = "default"
+	}
+	if obj.StorageMode == "" {
+		obj.StorageMode = "ThinProvisioned"
+	}
+	if obj.FSType == "" {
+		obj.FSType = "xfs"
 	}
 }
 

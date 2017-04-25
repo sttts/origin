@@ -1,21 +1,22 @@
 package sti
 
 import (
-	"bufio"
+	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
+	"time"
 
 	"github.com/openshift/source-to-image/pkg/api"
 	"github.com/openshift/source-to-image/pkg/build"
 	"github.com/openshift/source-to-image/pkg/build/strategies/layered"
 	dockerpkg "github.com/openshift/source-to-image/pkg/docker"
-	"github.com/openshift/source-to-image/pkg/errors"
+	s2ierr "github.com/openshift/source-to-image/pkg/errors"
 	"github.com/openshift/source-to-image/pkg/ignore"
 	"github.com/openshift/source-to-image/pkg/scm"
 	"github.com/openshift/source-to-image/pkg/scm/git"
@@ -23,11 +24,12 @@ import (
 	"github.com/openshift/source-to-image/pkg/tar"
 	"github.com/openshift/source-to-image/pkg/util"
 	utilglog "github.com/openshift/source-to-image/pkg/util/glog"
+	utilstatus "github.com/openshift/source-to-image/pkg/util/status"
 )
 
-var glog = utilglog.StderrLog
-
 var (
+	glog = utilglog.StderrLog
+
 	// List of directories that needs to be present inside working dir
 	workingDirs = []string{
 		api.UploadScripts,
@@ -35,28 +37,34 @@ var (
 		api.DefaultScripts,
 		api.UserScripts,
 	}
+
+	errMissingRequirements = errors.New("missing requirements")
 )
 
 // STI strategy executes the S2I build.
 // For more details about S2I, visit https://github.com/openshift/source-to-image
 type STI struct {
-	config            *api.Config
-	result            *api.Result
-	postExecutor      dockerpkg.PostExecutor
-	installer         scripts.Installer
-	git               git.Git
-	fs                util.FileSystem
-	tar               tar.Tar
-	docker            dockerpkg.Docker
-	incrementalDocker dockerpkg.Docker
-	callbackInvoker   util.CallbackInvoker
-	requiredScripts   []string
-	optionalScripts   []string
-	externalScripts   map[string]bool
-	installedScripts  map[string]bool
-	scriptsURL        map[string]string
-	incremental       bool
-	sourceInfo        *api.SourceInfo
+	config                 *api.Config
+	result                 *api.Result
+	postExecutor           dockerpkg.PostExecutor
+	installer              scripts.Installer
+	runtimeInstaller       scripts.Installer
+	git                    git.Git
+	fs                     util.FileSystem
+	tar                    tar.Tar
+	docker                 dockerpkg.Docker
+	incrementalDocker      dockerpkg.Docker
+	runtimeDocker          dockerpkg.Docker
+	callbackInvoker        util.CallbackInvoker
+	requiredScripts        []string
+	optionalScripts        []string
+	optionalRuntimeScripts []string
+	externalScripts        map[string]bool
+	installedScripts       map[string]bool
+	scriptsURL             map[string]string
+	incremental            bool
+	sourceInfo             *api.SourceInfo
+	env                    []string
 
 	// Interfaces
 	preparer  build.Preparer
@@ -66,13 +74,24 @@ type STI struct {
 	source    build.Downloader
 	garbage   build.Cleaner
 	layered   build.Builder
+
+	// post executors steps
+	postExecutorStage            int
+	postExecutorFirstStageSteps  []postExecutorStep
+	postExecutorSecondStageSteps []postExecutorStep
+	postExecutorStepsContext     *postExecutorStepContext
 }
 
 // New returns the instance of STI builder strategy for the given config.
 // If the layeredBuilder parameter is specified, then the builder provided will
 // be used for the case that the base Docker image does not have 'tar' or 'bash'
 // installed.
-func New(config *api.Config, overrides build.Overrides) (*STI, error) {
+func New(config *api.Config, fs util.FileSystem, overrides build.Overrides) (*STI, error) {
+	excludePattern, err := regexp.Compile(config.ExcludeRegExp)
+	if err != nil {
+		return nil, err
+	}
+
 	docker, err := dockerpkg.New(config.DockerConfig, config.PullAuthentication)
 	if err != nil {
 		return nil, err
@@ -85,24 +104,48 @@ func New(config *api.Config, overrides build.Overrides) (*STI, error) {
 		}
 	}
 
-	inst := scripts.NewInstaller(config.BuilderImage, config.ScriptsURL, config.ScriptDownloadProxyConfig, docker, config.PullAuthentication)
-	tarHandler := tar.New()
-	tarHandler.SetExclusionPattern(regexp.MustCompile(config.ExcludeRegExp))
+	inst := scripts.NewInstaller(
+		config.BuilderImage,
+		config.ScriptsURL,
+		config.ScriptDownloadProxyConfig,
+		docker,
+		config.PullAuthentication,
+		fs,
+	)
+	tarHandler := tar.New(fs)
+	tarHandler.SetExclusionPattern(excludePattern)
 
 	builder := &STI{
-		installer:         inst,
-		config:            config,
-		docker:            docker,
-		incrementalDocker: incrementalDocker,
-		git:               git.New(),
-		fs:                util.NewFileSystem(),
-		tar:               tarHandler,
-		callbackInvoker:   util.NewCallbackInvoker(),
-		requiredScripts:   []string{api.Assemble, api.Run},
-		optionalScripts:   []string{api.SaveArtifacts},
-		externalScripts:   map[string]bool{},
-		installedScripts:  map[string]bool{},
-		scriptsURL:        map[string]string{},
+		installer:              inst,
+		config:                 config,
+		docker:                 docker,
+		incrementalDocker:      incrementalDocker,
+		git:                    git.New(fs),
+		fs:                     fs,
+		tar:                    tarHandler,
+		callbackInvoker:        util.NewCallbackInvoker(),
+		requiredScripts:        []string{api.Assemble, api.Run},
+		optionalScripts:        []string{api.SaveArtifacts},
+		optionalRuntimeScripts: []string{api.AssembleRuntime},
+		externalScripts:        map[string]bool{},
+		installedScripts:       map[string]bool{},
+		scriptsURL:             map[string]string{},
+	}
+
+	if len(config.RuntimeImage) > 0 {
+		builder.runtimeDocker, err = dockerpkg.New(config.DockerConfig, config.RuntimeAuthentication)
+		if err != nil {
+			return nil, err
+		}
+
+		builder.runtimeInstaller = scripts.NewInstaller(
+			config.RuntimeImage,
+			config.ScriptsURL,
+			config.ScriptDownloadProxyConfig,
+			builder.runtimeDocker,
+			config.RuntimeAuthentication,
+			builder.fs,
+		)
 	}
 
 	// The sources are downloaded using the Git downloader.
@@ -112,26 +155,33 @@ func New(config *api.Config, overrides build.Overrides) (*STI, error) {
 	// which would lead to replacing this quick short circuit (so this change is tactical)
 	builder.source = overrides.Downloader
 	if builder.source == nil && !config.Usage {
-		downloader, sourceURL, err := scm.DownloaderForSource(config.Source, config.ForceCopy)
+		var downloader build.Downloader
+		var sourceURL string
+		downloader, sourceURL, err = scm.DownloaderForSource(builder.fs, config.Source, config.ForceCopy)
 		if err != nil {
 			return nil, err
 		}
 		builder.source = downloader
 		config.Source = sourceURL
 	}
-
 	builder.garbage = build.NewDefaultCleaner(builder.fs, builder.docker)
-	builder.layered, err = layered.New(config, builder, overrides)
+
+	builder.layered, err = layered.New(config, builder.fs, builder, overrides)
+	if err != nil {
+		return nil, err
+	}
 
 	// Set interfaces
 	builder.preparer = builder
-	// later on, if we support say .gitignore func in addition to .dockerignore func, setting
-	// ignorer will be based on config setting
+	// later on, if we support say .gitignore func in addition to .dockerignore
+	// func, setting ignorer will be based on config setting
 	builder.ignorer = &ignore.DockerIgnorer{}
 	builder.artifacts = builder
 	builder.scripts = builder
 	builder.postExecutor = builder
-	return builder, err
+	builder.initPostExecutorSteps()
+
+	return builder, nil
 }
 
 // Build processes a Request and returns a *api.Result and an error.
@@ -139,11 +189,23 @@ func New(config *api.Config, overrides build.Overrides) (*STI, error) {
 // of the build itself.  Callers should check the Success field of the result
 // to determine whether a build succeeded or not.
 func (builder *STI) Build(config *api.Config) (*api.Result, error) {
+	builder.result = &api.Result{}
+
+	if len(builder.config.CallbackURL) > 0 {
+		defer func() {
+			builder.result.Messages = builder.callbackInvoker.ExecuteCallback(
+				builder.config.CallbackURL,
+				builder.result.Success,
+				builder.postExecutorStepsContext.labels,
+				builder.result.Messages,
+			)
+		}()
+	}
 	defer builder.garbage.Cleanup(config)
 
 	glog.V(1).Infof("Preparing to build %s", config.Tag)
 	if err := builder.preparer.Prepare(config); err != nil {
-		return nil, err
+		return builder.result, err
 	}
 
 	if builder.incremental = builder.artifacts.Exists(config); builder.incremental {
@@ -166,18 +228,29 @@ func (builder *STI) Build(config *api.Config) (*api.Result, error) {
 	} else {
 		glog.V(1).Infof("Running %q in %q", api.Assemble, config.Tag)
 	}
+	startTime := time.Now()
 	if err := builder.scripts.Execute(api.Assemble, config.AssembleUser, config); err != nil {
-		switch e := err.(type) {
-		case errors.ContainerError:
-			if !isMissingRequirements(e.Output) {
-				return nil, err
-			}
+		if err == errMissingRequirements {
 			glog.V(1).Info("Image is missing basic requirements (sh or tar), layered build will be performed")
 			return builder.layered.Build(config)
-		default:
-			return nil, err
 		}
+		if e, ok := err.(s2ierr.ContainerError); ok {
+			if !isMissingRequirements(e.Output) {
+				builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+					utilstatus.ReasonAssembleFailed,
+					utilstatus.ReasonMessageAssembleFailed,
+				)
+				return builder.result, err
+			}
+			glog.V(1).Info("Image is missing basic requirements (sh or tar), layered build will be performed")
+			buildResult, err := builder.layered.Build(config)
+			return buildResult, err
+		}
+
+		return builder.result, err
 	}
+	builder.result.BuildInfo.Stages = api.RecordStageAndStepInfo(builder.result.BuildInfo.Stages, api.StageAssemble, api.StepAssembleBuildScripts, startTime, time.Now())
+	builder.result.Success = true
 
 	return builder.result, nil
 }
@@ -187,20 +260,97 @@ func (builder *STI) Build(config *api.Config) (*api.Result, error) {
 // struct Build func leverages the STI struct Prepare func directly below.
 func (builder *STI) Prepare(config *api.Config) error {
 	var err error
+	if builder.result == nil {
+		builder.result = &api.Result{}
+	}
+
 	if len(config.WorkingDir) == 0 {
 		if config.WorkingDir, err = builder.fs.CreateWorkingDirectory(); err != nil {
+			builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+				utilstatus.ReasonFSOperationFailed,
+				utilstatus.ReasonMessageFSOperationFailed,
+			)
 			return err
 		}
 	}
 
-	builder.result = &api.Result{
-		Success:    false,
-		WorkingDir: config.WorkingDir,
+	builder.result.WorkingDir = config.WorkingDir
+
+	if len(config.RuntimeImage) > 0 {
+		startTime := time.Now()
+		dockerpkg.GetRuntimeImage(config, builder.runtimeDocker)
+		builder.result.BuildInfo.Stages = api.RecordStageAndStepInfo(builder.result.BuildInfo.Stages, api.StagePullImages, api.StepPullRuntimeImage, startTime, time.Now())
+
+		if err != nil {
+			builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+				utilstatus.ReasonPullRuntimeImageFailed,
+				utilstatus.ReasonMessagePullRuntimeImageFailed,
+			)
+			glog.Errorf("Unable to pull runtime image %q: %v", config.RuntimeImage, err)
+			return err
+		}
+
+		// user didn't specify mapping, let's take it from the runtime image then
+		if len(builder.config.RuntimeArtifacts) == 0 {
+			var mapping string
+			mapping, err = builder.docker.GetAssembleInputFiles(config.RuntimeImage)
+			if err != nil {
+				builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+					utilstatus.ReasonInvalidArtifactsMapping,
+					utilstatus.ReasonMessageInvalidArtifactsMapping,
+				)
+				return err
+			}
+			if len(mapping) == 0 {
+				builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+					utilstatus.ReasonGenericS2IBuildFailed,
+					utilstatus.ReasonMessageGenericS2iBuildFailed,
+				)
+				return errors.New("no runtime artifacts to copy were specified")
+			}
+			for _, value := range strings.Split(mapping, ";") {
+				if err = builder.config.RuntimeArtifacts.Set(value); err != nil {
+					builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+						utilstatus.ReasonGenericS2IBuildFailed,
+						utilstatus.ReasonMessageGenericS2iBuildFailed,
+					)
+					return fmt.Errorf("could not  parse %q label with value %q on image %q: %v",
+						dockerpkg.AssembleInputFilesLabel, mapping, config.RuntimeImage, err)
+				}
+			}
+		}
+		// we're validating values here to be sure that we're handling both of the cases of the invocation:
+		// from main() and as a method from OpenShift
+		for _, volumeSpec := range builder.config.RuntimeArtifacts {
+			var volumeErr error
+
+			switch {
+			case !path.IsAbs(filepath.ToSlash(volumeSpec.Source)):
+				volumeErr = fmt.Errorf("invalid runtime artifacts mapping: %q -> %q: source must be an absolute path", volumeSpec.Source, volumeSpec.Destination)
+			case path.IsAbs(volumeSpec.Destination):
+				volumeErr = fmt.Errorf("invalid runtime artifacts mapping: %q -> %q: destination must be a relative path", volumeSpec.Source, volumeSpec.Destination)
+			case strings.HasPrefix(volumeSpec.Destination, ".."):
+				volumeErr = fmt.Errorf("invalid runtime artifacts mapping: %q -> %q: destination cannot start with '..'", volumeSpec.Source, volumeSpec.Destination)
+			default:
+				continue
+			}
+			if volumeErr != nil {
+				builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+					utilstatus.ReasonInvalidArtifactsMapping,
+					utilstatus.ReasonMessageInvalidArtifactsMapping,
+				)
+				return volumeErr
+			}
+		}
 	}
 
 	// Setup working directories
 	for _, v := range workingDirs {
 		if err = builder.fs.MkdirAll(filepath.Join(config.WorkingDir, v)); err != nil {
+			builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+				utilstatus.ReasonFSOperationFailed,
+				utilstatus.ReasonMessageFSOperationFailed,
+			)
 			return err
 		}
 	}
@@ -208,18 +358,34 @@ func (builder *STI) Prepare(config *api.Config) error {
 	// fetch sources, for their .s2i/bin might contain s2i scripts
 	if len(config.Source) > 0 {
 		if builder.sourceInfo, err = builder.source.Download(config); err != nil {
+			builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+				utilstatus.ReasonFetchSourceFailed,
+				utilstatus.ReasonMessageFetchSourceFailed,
+			)
 			return err
+		}
+		if config.SourceInfo != nil {
+			builder.sourceInfo = config.SourceInfo
 		}
 	}
 
 	// get the scripts
 	required, err := builder.installer.InstallRequired(builder.requiredScripts, config.WorkingDir)
 	if err != nil {
+		builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+			utilstatus.ReasonInstallScriptsFailed,
+			utilstatus.ReasonMessageInstallScriptsFailed,
+		)
 		return err
 	}
 	optional := builder.installer.InstallOptional(builder.optionalScripts, config.WorkingDir)
 
 	requiredAndOptional := append(required, optional...)
+
+	if len(config.RuntimeImage) > 0 && builder.runtimeInstaller != nil {
+		optionalRuntime := builder.runtimeInstaller.InstallOptional(builder.optionalRuntimeScripts, config.WorkingDir)
+		requiredAndOptional = append(requiredAndOptional, optionalRuntime...)
+	}
 
 	// If a ScriptsURL was specified, but no scripts were downloaded from it, throw an error
 	if len(config.ScriptsURL) > 0 {
@@ -230,21 +396,27 @@ func (builder *STI) Prepare(config *api.Config) error {
 			}
 		}
 		if failedCount == len(requiredAndOptional) {
-			return fmt.Errorf("Could not download any scripts from URL %v", config.ScriptsURL)
+			builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+				utilstatus.ReasonScriptsFetchFailed,
+				utilstatus.ReasonMessageScriptsFetchFailed,
+			)
+			return fmt.Errorf("could not download any scripts from URL %v", config.ScriptsURL)
 		}
 	}
 
 	for _, r := range requiredAndOptional {
-		if r.Error == nil {
-			builder.externalScripts[r.Script] = r.Downloaded
-			builder.installedScripts[r.Script] = r.Installed
-			builder.scriptsURL[r.Script] = r.URL
-		} else {
+		if r.Error != nil {
 			glog.Warningf("Error getting %v from %s: %v", r.Script, r.URL, r.Error)
+			continue
 		}
+
+		builder.externalScripts[r.Script] = r.Downloaded
+		builder.installedScripts[r.Script] = r.Installed
+		builder.scriptsURL[r.Script] = r.URL
 	}
 
-	// see if there is a .s2iignore file, and if so, read in the patterns an then search and delete on
+	// see if there is a .s2iignore file, and if so, read in the patterns an then
+	// search and delete on
 	return builder.ignorer.Ignore(config)
 }
 
@@ -254,134 +426,34 @@ func (builder *STI) SetScripts(required, optional []string) {
 	builder.optionalScripts = optional
 }
 
-func mergeLabels(newLabels, existingLabels map[string]string) map[string]string {
-	if existingLabels == nil {
-		return newLabels
-	}
-	result := map[string]string{}
-	for k, v := range existingLabels {
-		result[k] = v
-	}
-	for k, v := range newLabels {
-		result[k] = v
-	}
-	return result
-}
+// PostExecute allows to execute post-build actions after the Docker
+// container execution finishes.
+func (builder *STI) PostExecute(containerID, destination string) error {
+	builder.postExecutorStepsContext.containerID = containerID
+	builder.postExecutorStepsContext.destination = destination
 
-// PostExecute allows to execute post-build actions after the Docker build
-// finishes.
-func (builder *STI) PostExecute(containerID, location string) error {
-
-	var previousImageID string
-	if builder.incremental && builder.config.RemovePreviousImage {
-		previousImageID = builder.getPreviousImage()
+	stageSteps := builder.postExecutorFirstStageSteps
+	if builder.postExecutorStage > 0 {
+		stageSteps = builder.postExecutorSecondStageSteps
 	}
 
-	buildEnv := builder.createBuildEnvironment()
-	runCmd := builder.createCommandForResultingImage(location)
-
-	buildImageUser, err := builder.docker.GetImageUser(builder.config.BuilderImage)
-	if err != nil {
-		return err
+	for _, step := range stageSteps {
+		if err := step.execute(builder.postExecutorStepsContext); err != nil {
+			glog.V(0).Info("error: Execution of post execute step failed")
+			return err
+		}
 	}
-
-	labels := builder.createLabelsForResultingImage()
-
-	imageID, err := builder.commitContainer(containerID, runCmd, buildImageUser, buildEnv, labels)
-	if err != nil {
-		return err
-	}
-
-	builder.result.Success = true
-	builder.result.ImageID = imageID
-
-	glog.V(3).Infof("Successfully built %s", firstNonEmpty(builder.config.Tag, imageID))
-
-	if builder.incremental && builder.config.RemovePreviousImage {
-		builder.removePreviousImage(previousImageID)
-	}
-
-	builder.invokeCallbackUrl(labels)
 
 	return nil
 }
 
-func (builder *STI) getPreviousImage() string {
-	previousImageID, err := builder.docker.GetImageID(builder.config.Tag)
-	if err != nil {
-		glog.V(0).Infof("error: Error retrieving previous image's (%v) metadata: %v", builder.config.Tag, err)
-		return ""
-	}
-	return previousImageID
-}
-
-func (builder *STI) createBuildEnvironment() []string {
-	env, err := scripts.GetEnvironment(builder.config)
+func createBuildEnvironment(config *api.Config) []string {
+	env, err := scripts.GetEnvironment(config)
 	if err != nil {
 		glog.V(3).Infof("No user environment provided (%v)", err)
 	}
 
-	return append(scripts.ConvertEnvironment(env), builder.generateConfigEnv()...)
-}
-
-func (builder *STI) createCommandForResultingImage(location string) string {
-	cmd := builder.scriptsURL[api.Run]
-	if strings.HasPrefix(cmd, "image://") {
-		// scripts from inside of the image, we need to strip the image part
-		// NOTE: We use path.Join instead of filepath.Join to avoid converting the
-		// path to UNC (Windows) format as we always run this inside container.
-		cmd = strings.TrimPrefix(cmd, "image://")
-	} else {
-		// external scripts, in which case we're taking the directory to which they
-		// were extracted and append scripts dir and name
-		cmd = path.Join(location, "scripts", api.Run)
-	}
-	return cmd
-}
-
-func (builder *STI) createLabelsForResultingImage() map[string]string {
-	existingLabels, err := builder.docker.GetLabels(builder.config.BuilderImage)
-	if err != nil {
-		glog.V(0).Infof("error: Unable to read existing labels from current builder image %s", builder.config.BuilderImage)
-	}
-
-	return mergeLabels(util.GenerateOutputImageLabels(builder.sourceInfo, builder.config), existingLabels)
-}
-
-func (builder *STI) commitContainer(containerID, cmd, user string, env []string, labels map[string]string) (string, error) {
-	opts := dockerpkg.CommitContainerOptions{
-		Command:     []string{cmd},
-		Env:         env,
-		ContainerID: containerID,
-		Repository:  builder.config.Tag,
-		User:        user,
-		Labels:      labels,
-	}
-
-	imageID, err := builder.docker.CommitContainer(opts)
-	if err != nil {
-		return "", errors.NewCommitError(builder.config.Tag, err)
-	}
-
-	return imageID, nil
-}
-
-func (builder *STI) removePreviousImage(previousImageID string) {
-	if previousImageID == "" {
-		return
-	}
-
-	glog.V(1).Infof("Removing previously-tagged image %s", previousImageID)
-	if err := builder.docker.RemoveImage(previousImageID); err != nil {
-		glog.V(0).Infof("error: Unable to remove previous image: %v", err)
-	}
-}
-
-func (builder *STI) invokeCallbackUrl(resultLabels map[string]string) {
-	if len(builder.config.CallbackURL) > 0 {
-		builder.result.Messages = builder.callbackInvoker.ExecuteCallback(builder.config.CallbackURL,
-			builder.result.Success, resultLabels, builder.result.Messages)
-	}
+	return append(scripts.ConvertEnvironmentList(env), scripts.ConvertEnvironmentList(config.Environment)...)
 }
 
 // Exists determines if the current build supports incremental workflow.
@@ -399,8 +471,15 @@ func (builder *STI) Exists(config *api.Config) bool {
 
 	tag := firstNonEmpty(config.IncrementalFromTag, config.Tag)
 
-	result, err := dockerpkg.PullImage(tag, builder.incrementalDocker, policy, false)
+	startTime := time.Now()
+	result, err := dockerpkg.PullImage(tag, builder.incrementalDocker, policy)
+	builder.result.BuildInfo.Stages = api.RecordStageAndStepInfo(builder.result.BuildInfo.Stages, api.StagePullImages, api.StepPullPreviousImage, startTime, time.Now())
+
 	if err != nil {
+		builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+			utilstatus.ReasonPullPreviousImageFailed,
+			utilstatus.ReasonMessagePullPreviousImageFailed,
+		)
 		glog.V(2).Infof("Unable to pull previously built image %q: %v", tag, err)
 		return false
 	}
@@ -408,31 +487,43 @@ func (builder *STI) Exists(config *api.Config) bool {
 	return result.Image != nil && builder.installedScripts[api.SaveArtifacts]
 }
 
-// Save extracts and restores the build artifacts from the previous build to a
-// current build.
+// Save extracts and restores the build artifacts from the previous build to
+// the current build.
 func (builder *STI) Save(config *api.Config) (err error) {
 	artifactTmpDir := filepath.Join(config.WorkingDir, "upload", "artifacts")
+	if builder.result == nil {
+		builder.result = &api.Result{}
+	}
+
 	if err = builder.fs.Mkdir(artifactTmpDir); err != nil {
+		builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+			utilstatus.ReasonFSOperationFailed,
+			utilstatus.ReasonMessageFSOperationFailed,
+		)
 		return err
 	}
 
 	image := firstNonEmpty(config.IncrementalFromTag, config.Tag)
 
 	outReader, outWriter := io.Pipe()
-	defer outReader.Close()
-	defer outWriter.Close()
 	errReader, errWriter := io.Pipe()
-	defer errReader.Close()
-	defer errWriter.Close()
 	glog.V(1).Infof("Saving build artifacts from image %s to path %s", image, artifactTmpDir)
 	extractFunc := func(string) error {
-		return builder.tar.ExtractTarStream(artifactTmpDir, outReader)
+		startTime := time.Now()
+		extractErr := builder.tar.ExtractTarStream(artifactTmpDir, outReader)
+		io.Copy(ioutil.Discard, outReader) // must ensure reader from container is drained
+		builder.result.BuildInfo.Stages = api.RecordStageAndStepInfo(builder.result.BuildInfo.Stages, api.StageRetrieve, api.StepRetrievePreviousArtifacts, startTime, time.Now())
+		return extractErr
 	}
 
 	user := config.AssembleUser
 	if len(user) == 0 {
 		user, err = builder.docker.GetImageUser(image)
 		if err != nil {
+			builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+				utilstatus.ReasonGenericS2IBuildFailed,
+				utilstatus.ReasonMessageGenericS2iBuildFailed,
+			)
 			return err
 		}
 		glog.V(3).Infof("The assemble user is not set, defaulting to %q user", user)
@@ -456,11 +547,16 @@ func (builder *STI) Save(config *api.Config) (err error) {
 		CapDrop:         config.DropCapabilities,
 	}
 
-	go dockerpkg.StreamContainerIO(errReader, nil, glog.Error)
+	dockerpkg.StreamContainerIO(errReader, nil, func(s string) { glog.Info(s) })
 	err = builder.docker.RunContainer(opts)
-	if e, ok := err.(errors.ContainerError); ok {
-		return errors.NewSaveArtifactsError(image, e.Output, err)
+	if e, ok := err.(s2ierr.ContainerError); ok {
+		err = s2ierr.NewSaveArtifactsError(image, e.Output, err)
 	}
+
+	builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+		utilstatus.ReasonGenericS2IBuildFailed,
+		utilstatus.ReasonMessageGenericS2iBuildFailed,
+	)
 	return err
 }
 
@@ -468,15 +564,13 @@ func (builder *STI) Save(config *api.Config) (err error) {
 func (builder *STI) Execute(command string, user string, config *api.Config) error {
 	glog.V(2).Infof("Using image name %s", config.BuilderImage)
 
-	buildEnv := builder.createBuildEnvironment()
+	// we can't invoke this method before (for example in New() method)
+	// because of later initialization of config.WorkingDir
+	builder.env = createBuildEnvironment(config)
 
 	errOutput := ""
 	outReader, outWriter := io.Pipe()
 	errReader, errWriter := io.Pipe()
-	defer outReader.Close()
-	defer outWriter.Close()
-	defer errReader.Close()
-	defer errWriter.Close()
 	externalScripts := builder.externalScripts[command]
 	// if LayeredBuild is called then all the scripts will be placed inside the image
 	if config.LayeredBuild {
@@ -494,55 +588,64 @@ func (builder *STI) Execute(command string, user string, config *api.Config) err
 		ScriptsURL:      config.ScriptsURL,
 		Destination:     config.Destination,
 		Command:         command,
-		Env:             buildEnv,
+		Env:             builder.env,
 		User:            user,
 		PostExec:        builder.postExecutor,
 		NetworkMode:     string(config.DockerNetworkMode),
 		CGroupLimits:    config.CGroupLimits,
 		CapDrop:         config.DropCapabilities,
-		Binds:           config.BuildVolumes.AsBinds(),
+		Binds:           config.BuildVolumes,
 	}
 
 	// If there are injections specified, override the original assemble script
 	// and wait till all injections are uploaded into the container that runs the
 	// assemble script.
-	injectionComplete := make(chan struct{})
-	var injectionError error
+	injectionError := make(chan error)
 	if len(config.Injections) > 0 && command == api.Assemble {
 		workdir, err := builder.docker.GetImageWorkdir(config.BuilderImage)
 		if err != nil {
+			builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+				utilstatus.ReasonGenericS2IBuildFailed,
+				utilstatus.ReasonMessageGenericS2iBuildFailed,
+			)
 			return err
 		}
 		config.Injections = util.FixInjectionsWithRelativePath(workdir, config.Injections)
-		injectedFiles, err := util.ExpandInjectedFiles(config.Injections)
+		injectedFiles, err := util.ExpandInjectedFiles(builder.fs, config.Injections)
 		if err != nil {
+			builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+				utilstatus.ReasonInstallScriptsFailed,
+				utilstatus.ReasonMessageInstallScriptsFailed,
+			)
 			return err
 		}
 		rmScript, err := util.CreateInjectedFilesRemovalScript(injectedFiles, "/tmp/rm-injections")
+		if len(rmScript) != 0 {
+			defer os.Remove(rmScript)
+		}
 		if err != nil {
+			builder.result.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+				utilstatus.ReasonGenericS2IBuildFailed,
+				utilstatus.ReasonMessageGenericS2iBuildFailed,
+			)
 			return err
 		}
-		defer os.Remove(rmScript)
 		opts.CommandOverrides = func(cmd string) string {
-			return fmt.Sprintf("while [ ! -f %q ]; do sleep 0.5; done; %s; result=$?; source %[1]s; exit $result",
+			return fmt.Sprintf("while [ ! -f %q ]; do sleep 0.5; done; %s; result=$?; . %[1]s; exit $result",
 				"/tmp/rm-injections", cmd)
 		}
 		originalOnStart := opts.OnStart
 		opts.OnStart = func(containerID string) error {
-			defer close(injectionComplete)
-			if err != nil {
-				injectionError = err
-				return err
-			}
+			defer close(injectionError)
 			glog.V(2).Info("starting the injections uploading ...")
 			for _, s := range config.Injections {
-				if err := builder.docker.UploadToContainer(s.Source, s.Destination, containerID); err != nil {
-					injectionError = util.HandleInjectionError(s, err)
+				if err := builder.docker.UploadToContainer(builder.fs, s.Source, s.Destination, containerID); err != nil {
+					injectionError <- util.HandleInjectionError(s, err)
 					return err
 				}
 			}
-			if err := builder.docker.UploadToContainer(rmScript, "/tmp/rm-injections", containerID); err != nil {
-				injectionError = util.HandleInjectionError(api.VolumeSpec{Source: rmScript, Destination: "/tmp/rm-injections"}, err)
+			if err := builder.docker.UploadToContainer(builder.fs, rmScript, "/tmp/rm-injections", containerID); err != nil {
+				injectionError <- util.HandleInjectionError(api.VolumeSpec{Source: rmScript, Destination: "/tmp/rm-injections"}, err)
 				return err
 			}
 			if originalOnStart != nil {
@@ -551,82 +654,95 @@ func (builder *STI) Execute(command string, user string, config *api.Config) err
 			return nil
 		}
 	} else {
-		close(injectionComplete)
+		close(injectionError)
 	}
 
-	wg := sync.WaitGroup{}
 	if !config.LayeredBuild {
-		wg.Add(1)
-		uploadDir := filepath.Join(config.WorkingDir, "upload")
-		// TODO: be able to pass a stream directly to the Docker build to avoid the double temp hit
 		r, w := io.Pipe()
+		opts.Stdin = r
+
 		go func() {
 			// Wait for the injections to complete and check the error. Do not start
 			// streaming the sources when the injection failed.
-			<-injectionComplete
-			if injectionError != nil {
-				wg.Done()
+			if <-injectionError != nil {
+				w.Close()
 				return
 			}
 			glog.V(2).Info("starting the source uploading ...")
-			var err error
-			defer func() {
-				w.CloseWithError(err)
-				if r := recover(); r != nil {
-					glog.Errorf("recovered panic: %#v", r)
-				}
-				wg.Done()
-			}()
-			err = builder.tar.CreateTarStream(uploadDir, false, w)
+			uploadDir := filepath.Join(config.WorkingDir, "upload")
+			w.CloseWithError(builder.tar.CreateTarStream(uploadDir, false, w))
 		}()
-
-		opts.Stdin = r
-		defer wg.Wait()
 	}
 
-	go func(reader io.Reader) {
-		scanner := bufio.NewReader(reader)
-		// Precede build output with newline
-		glog.Info()
-		for {
-			text, err := scanner.ReadString('\n')
-			if err != nil {
-				// we're ignoring ErrClosedPipe, as this is information
-				// the docker container ended streaming logs
-				if glog.Is(2) && err != io.ErrClosedPipe && err != io.EOF {
-					glog.Errorf("Error reading docker stdout, %v", err)
-				}
-				break
-			}
-			// Nothing is printed when the quiet option is set
-			if config.Quiet {
-				continue
-			}
-			glog.Info(strings.TrimSpace(text))
+	dockerpkg.StreamContainerIO(outReader, nil, func(s string) {
+		if !config.Quiet {
+			glog.Info(strings.TrimSpace(s))
 		}
-		// Terminate build output with new line
-		glog.Info()
+	})
 
-	}(outReader)
-
-	go dockerpkg.StreamContainerIO(errReader, &errOutput, glog.Error)
+	c := dockerpkg.StreamContainerIO(errReader, &errOutput, func(s string) { glog.Info(s) })
 
 	err := builder.docker.RunContainer(opts)
-	if util.IsTimeoutError(err) {
-		// Cancel waiting for source input if the container timeouts
-		wg.Done()
+	if err != nil {
+		// Must wait for StreamContainerIO goroutine above to exit before reading errOutput.
+		<-c
+
+		if isMissingRequirements(errOutput) {
+			err = errMissingRequirements
+		} else if e, ok := err.(s2ierr.ContainerError); ok {
+			err = s2ierr.NewContainerError(config.BuilderImage, e.ErrorCode, errOutput)
+		}
 	}
-	if e, ok := err.(errors.ContainerError); ok {
-		return errors.NewContainerError(config.BuilderImage, e.ErrorCode, errOutput)
-	}
+
 	return err
 }
 
-func (builder *STI) generateConfigEnv() (configEnv []string) {
-	for _, e := range builder.config.Environment {
-		configEnv = append(configEnv, strings.Join([]string{e.Name, e.Value}, "="))
+func (builder *STI) initPostExecutorSteps() {
+	builder.postExecutorStepsContext = &postExecutorStepContext{}
+	if len(builder.config.RuntimeImage) == 0 {
+		builder.postExecutorFirstStageSteps = []postExecutorStep{
+			&storePreviousImageStep{
+				builder: builder,
+				docker:  builder.docker,
+			},
+			&commitImageStep{
+				image:   builder.config.BuilderImage,
+				builder: builder,
+				docker:  builder.docker,
+			},
+			&reportSuccessStep{
+				builder: builder,
+			},
+			&removePreviousImageStep{
+				builder: builder,
+				docker:  builder.docker,
+			},
+		}
+	} else {
+		builder.postExecutorFirstStageSteps = []postExecutorStep{
+			&downloadFilesFromBuilderImageStep{
+				builder: builder,
+				docker:  builder.docker,
+				fs:      builder.fs,
+				tar:     builder.tar,
+			},
+			&startRuntimeImageAndUploadFilesStep{
+				builder: builder,
+				docker:  builder.docker,
+				fs:      builder.fs,
+			},
+		}
+		builder.postExecutorSecondStageSteps = []postExecutorStep{
+			&commitImageStep{
+				image:   builder.config.RuntimeImage,
+				builder: builder,
+				docker:  builder.docker,
+			},
+			&reportSuccessStep{
+				builder: builder,
+			},
+		}
 	}
-	return
 }
 
 func isMissingRequirements(text string) bool {

@@ -14,7 +14,7 @@ import (
 	"text/template"
 
 	"github.com/openshift/origin/pkg/quota/admission/clusterresourceoverride/api"
-	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 )
 
 var varyHeaderRegexp = regexp.MustCompile("\\s*,\\s*")
@@ -49,6 +49,15 @@ func GzipHandler(h http.Handler) http.Handler {
 		gz := gzip.NewWriter(w)
 		defer gz.Close()
 		h.ServeHTTP(&gzipResponseWriter{Writer: gz, ResponseWriter: w}, r)
+	})
+}
+
+func SecurityHeadersHandler(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		w.Header().Set("X-Frame-Options", "DENY")
+		h.ServeHTTP(w, r)
 	})
 }
 
@@ -188,6 +197,7 @@ window.OPENSHIFT_CONFIG = {
   },
   auth: {
   	oauth_authorize_uri: "{{ .OAuthAuthorizeURI | js}}",
+	oauth_token_uri: "{{ .OAuthTokenURI | js}}",
   	oauth_redirect_base: "{{ .OAuthRedirectBase | js}}",
   	oauth_client_id: "{{ .OAuthClientID | js}}",
   	logout_uri: "{{ .LogoutURI | js}}"
@@ -224,6 +234,8 @@ type WebConsoleConfig struct {
 	KubernetesResources []string
 	// OAuthAuthorizeURI is the OAuth2 endpoint to use to request an API token. It must support request_type=token.
 	OAuthAuthorizeURI string
+	// OAuthTokenURI is the OAuth2 endpoint to use to request an API token. If set, the OAuthClientID must support a client_secret of "".
+	OAuthTokenURI string
 	// OAuthRedirectBase is the base URI of the web console. It must be a valid redirect_uri for the OAuthClientID
 	OAuthRedirectBase string
 	// OAuthClientID is the OAuth2 client_id to use to request an API token. It must be authorized to redirect to the web console URL.

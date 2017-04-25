@@ -3,14 +3,16 @@ package route
 import (
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/storage"
+	"k8s.io/apiserver/pkg/storage/names"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
-	"k8s.io/kubernetes/pkg/registry/generic"
-	"k8s.io/kubernetes/pkg/runtime"
-	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
-	"k8s.io/kubernetes/pkg/util/validation/field"
 
 	"github.com/openshift/origin/pkg/route"
 	"github.com/openshift/origin/pkg/route/api"
@@ -22,7 +24,7 @@ const HostGeneratedAnnotationKey = "openshift.io/host.generated"
 
 type routeStrategy struct {
 	runtime.ObjectTyper
-	kapi.NameGenerator
+	names.NameGenerator
 	route.RouteAllocator
 }
 
@@ -31,7 +33,7 @@ type routeStrategy struct {
 func NewStrategy(allocator route.RouteAllocator) routeStrategy {
 	return routeStrategy{
 		kapi.Scheme,
-		kapi.SimpleNameGenerator,
+		names.SimpleNameGenerator,
 		allocator,
 	}
 }
@@ -40,7 +42,7 @@ func (routeStrategy) NamespaceScoped() bool {
 	return true
 }
 
-func (s routeStrategy) PrepareForCreate(obj runtime.Object) {
+func (s routeStrategy) PrepareForCreate(ctx apirequest.Context, obj runtime.Object) {
 	route := obj.(*api.Route)
 	route.Status = api.RouteStatus{}
 	err := s.allocateHost(route)
@@ -50,7 +52,7 @@ func (s routeStrategy) PrepareForCreate(obj runtime.Object) {
 	}
 }
 
-func (s routeStrategy) PrepareForUpdate(obj, old runtime.Object) {
+func (s routeStrategy) PrepareForUpdate(ctx apirequest.Context, obj, old runtime.Object) {
 	route := obj.(*api.Route)
 	oldRoute := old.(*api.Route)
 	route.Status = oldRoute.Status
@@ -62,10 +64,15 @@ func (s routeStrategy) PrepareForUpdate(obj, old runtime.Object) {
 	}
 }
 
-// allocateHost allocates a host name ONLY if the host name on the route is empty and an allocator
-// is configured.  It must first allocate the shard and may return an error if shard allocation
-// fails.
+// allocateHost allocates a host name ONLY if the route doesn't specify a subdomain wildcard policy and
+// the host name on the route is empty and an allocator is configured.
+// It must first allocate the shard and may return an error if shard allocation fails.
 func (s routeStrategy) allocateHost(route *api.Route) error {
+	if route.Spec.WildcardPolicy == api.WildcardPolicySubdomain {
+		// Don't allocate a host if subdomain wildcard policy.
+		return nil
+	}
+
 	if len(route.Spec.Host) == 0 && s.RouteAllocator != nil {
 		// TODO: this does not belong here, and should be removed
 		shard, err := s.RouteAllocator.AllocateRouterShard(route)
@@ -81,7 +88,7 @@ func (s routeStrategy) allocateHost(route *api.Route) error {
 	return nil
 }
 
-func (routeStrategy) Validate(ctx kapi.Context, obj runtime.Object) field.ErrorList {
+func (routeStrategy) Validate(ctx apirequest.Context, obj runtime.Object) field.ErrorList {
 	route := obj.(*api.Route)
 	return validation.ValidateRoute(route)
 }
@@ -94,14 +101,14 @@ func (routeStrategy) AllowCreateOnUpdate() bool {
 func (routeStrategy) Canonicalize(obj runtime.Object) {
 }
 
-func (routeStrategy) ValidateUpdate(ctx kapi.Context, obj, old runtime.Object) field.ErrorList {
+func (routeStrategy) ValidateUpdate(ctx apirequest.Context, obj, old runtime.Object) field.ErrorList {
 	oldRoute := old.(*api.Route)
 	objRoute := obj.(*api.Route)
 	return validation.ValidateRouteUpdate(objRoute, oldRoute)
 }
 
 func (routeStrategy) AllowUnconditionalUpdate() bool {
-	return true
+	return false
 }
 
 type routeStatusStrategy struct {
@@ -110,22 +117,30 @@ type routeStatusStrategy struct {
 
 var StatusStrategy = routeStatusStrategy{NewStrategy(nil)}
 
-func (routeStatusStrategy) PrepareForUpdate(obj, old runtime.Object) {
+func (routeStatusStrategy) PrepareForUpdate(ctx apirequest.Context, obj, old runtime.Object) {
 	newRoute := obj.(*api.Route)
 	oldRoute := old.(*api.Route)
 	newRoute.Spec = oldRoute.Spec
 }
 
-func (routeStatusStrategy) ValidateUpdate(ctx kapi.Context, obj, old runtime.Object) field.ErrorList {
+func (routeStatusStrategy) ValidateUpdate(ctx apirequest.Context, obj, old runtime.Object) field.ErrorList {
 	return validation.ValidateRouteStatusUpdate(obj.(*api.Route), old.(*api.Route))
 }
 
-// Matcher returns a matcher for a route
-func Matcher(label labels.Selector, field fields.Selector) generic.Matcher {
-	return &generic.SelectionPredicate{Label: label, Field: field, GetAttrs: getAttrs}
+// GetAttrs returns labels and fields of a given object for filtering purposes
+func GetAttrs(obj runtime.Object) (objLabels labels.Set, objFields fields.Set, err error) {
+	route, ok := obj.(*api.Route)
+	if !ok {
+		return nil, nil, fmt.Errorf("not a route")
+	}
+	return labels.Set(route.Labels), api.RouteToSelectableFields(route), nil
 }
 
-func getAttrs(obj runtime.Object) (objLabels labels.Set, objFields fields.Set, err error) {
-	route := obj.(*api.Route)
-	return labels.Set(route.Labels), api.RouteToSelectableFields(route), nil
+// Matcher returns a matcher for a route
+func Matcher(label labels.Selector, field fields.Selector) storage.SelectionPredicate {
+	return storage.SelectionPredicate{
+		Label:    label,
+		Field:    field,
+		GetAttrs: GetAttrs,
+	}
 }

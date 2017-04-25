@@ -1,11 +1,14 @@
 package cache
 
 import (
-	kapi "k8s.io/kubernetes/pkg/api"
-	kapierrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/client/cache"
-	"k8s.io/kubernetes/pkg/labels"
+	"github.com/golang/glog"
 
+	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/tools/cache"
+
+	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	imageapi "github.com/openshift/origin/pkg/image/api"
 )
 
@@ -27,13 +30,35 @@ func (s *StoreToImageStreamLister) ImageStreams(namespace string) storeImageStre
 	return storeImageStreamsNamespacer{s.Indexer, namespace}
 }
 
+// GetStreamsForConfig returns all the image streams that the provided deployment config points to.
+func (s *StoreToImageStreamLister) GetStreamsForConfig(config *deployapi.DeploymentConfig) []*imageapi.ImageStream {
+	var streams []*imageapi.ImageStream
+
+	for _, t := range config.Spec.Triggers {
+		if t.Type != deployapi.DeploymentTriggerOnImageChange {
+			continue
+		}
+
+		from := t.ImageChangeParams.From
+		name, _, _ := imageapi.SplitImageStreamTag(from.Name)
+		stream, err := s.ImageStreams(from.Namespace).Get(name, metav1.GetOptions{})
+		if err != nil {
+			glog.Infof("Cannot retrieve image stream %s/%s: %v", from.Namespace, name, err)
+			continue
+		}
+		streams = append(streams, stream)
+	}
+
+	return streams
+}
+
 type storeImageStreamsNamespacer struct {
 	indexer   cache.Indexer
 	namespace string
 }
 
 // Get the image stream matching the name from the cache.
-func (s storeImageStreamsNamespacer) Get(name string) (*imageapi.ImageStream, error) {
+func (s storeImageStreamsNamespacer) Get(name string, options metav1.GetOptions) (*imageapi.ImageStream, error) {
 	obj, exists, err := s.indexer.GetByKey(s.namespace + "/" + name)
 	if err != nil {
 		return nil, err
@@ -50,7 +75,7 @@ func (s storeImageStreamsNamespacer) Get(name string) (*imageapi.ImageStream, er
 func (s storeImageStreamsNamespacer) List(selector labels.Selector) ([]*imageapi.ImageStream, error) {
 	streams := []*imageapi.ImageStream{}
 
-	if s.namespace == kapi.NamespaceAll {
+	if s.namespace == metav1.NamespaceAll {
 		for _, obj := range s.indexer.List() {
 			stream := obj.(*imageapi.ImageStream)
 			if selector.Matches(labels.Set(stream.Labels)) {

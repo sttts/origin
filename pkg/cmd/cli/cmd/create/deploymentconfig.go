@@ -6,31 +6,36 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/meta"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
-	"k8s.io/kubernetes/pkg/runtime"
 
 	"github.com/openshift/origin/pkg/client"
+	"github.com/openshift/origin/pkg/cmd/templates"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 )
 
-const (
-	DeploymentConfigRecommendedName = "deploymentconfig"
+var DeploymentConfigRecommendedName = "deploymentconfig"
 
-	deploymentConfigLong = `
-Create a deployment config that uses a given image.
+var (
+	deploymentConfigLong = templates.LongDesc(`
+		Create a deployment config that uses a given image.
 
-Deployment configs define the template for a pod and manages deploying new images or configuration changes.`
+		Deployment configs define the template for a pod and manages deploying new images or configuration changes.`)
 
-	deploymentConfigExample = `  # Create an nginx deployment config named my-nginx
-  %[1]s my-nginx --image=nginx`
+	deploymentConfigExample = templates.Examples(`
+		# Create an nginx deployment config named my-nginx
+  	%[1]s my-nginx --image=nginx`)
 )
 
 type CreateDeploymentConfigOptions struct {
 	DC     *deployapi.DeploymentConfig
 	Client client.DeploymentConfigsNamespacer
+
+	DryRun bool
 
 	Mapper       meta.RESTMapper
 	OutputFormat string
@@ -38,7 +43,7 @@ type CreateDeploymentConfigOptions struct {
 	Printer      ObjectPrinter
 }
 
-// NewCmdCreateServiceAccount is a macro command to create a new service account
+// NewCmdCreateDeploymentConfig is a macro command to create a new deployment config.
 func NewCmdCreateDeploymentConfig(name, fullName string, f *clientcmd.Factory, out io.Writer) *cobra.Command {
 	o := &CreateDeploymentConfigOptions{Out: out}
 
@@ -57,7 +62,8 @@ func NewCmdCreateDeploymentConfig(name, fullName string, f *clientcmd.Factory, o
 
 	cmd.Flags().String("image", "", "The image for the container to run.")
 	cmd.MarkFlagRequired("image")
-	cmdutil.AddOutputFlagsForMutation(cmd)
+	cmdutil.AddDryRunFlag(cmd)
+	cmdutil.AddPrinterFlags(cmd)
 	return cmd
 }
 
@@ -73,13 +79,14 @@ func (o *CreateDeploymentConfigOptions) Complete(cmd *cobra.Command, f *clientcm
 
 	labels := map[string]string{"deployment-config.name": args[0]}
 
+	o.DryRun = cmdutil.GetFlagBool(cmd, "dry-run")
 	o.DC = &deployapi.DeploymentConfig{
-		ObjectMeta: kapi.ObjectMeta{Name: args[0]},
+		ObjectMeta: metav1.ObjectMeta{Name: args[0]},
 		Spec: deployapi.DeploymentConfigSpec{
 			Selector: labels,
 			Replicas: 1,
 			Template: &kapi.PodTemplateSpec{
-				ObjectMeta: kapi.ObjectMeta{Labels: labels},
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: kapi.PodSpec{
 					Containers: []kapi.Container{
 						{
@@ -104,7 +111,7 @@ func (o *CreateDeploymentConfigOptions) Complete(cmd *cobra.Command, f *clientcm
 		return err
 	}
 
-	o.Mapper, _ = f.Object(false)
+	o.Mapper, _ = f.Object()
 	o.OutputFormat = cmdutil.GetFlagString(cmd, "output")
 
 	o.Printer = func(obj runtime.Object, out io.Writer) error {
@@ -135,13 +142,19 @@ func (o *CreateDeploymentConfigOptions) Validate() error {
 }
 
 func (o *CreateDeploymentConfigOptions) Run() error {
-	actualObj, err := o.Client.DeploymentConfigs(o.DC.Namespace).Create(o.DC)
-	if err != nil {
-		return err
+	actualObj := o.DC
+
+	var err error
+	if !o.DryRun {
+
+		actualObj, err = o.Client.DeploymentConfigs(o.DC.Namespace).Create(o.DC)
+		if err != nil {
+			return err
+		}
 	}
 
 	if useShortOutput := o.OutputFormat == "name"; useShortOutput || len(o.OutputFormat) == 0 {
-		cmdutil.PrintSuccess(o.Mapper, useShortOutput, o.Out, "deploymentconfig", actualObj.Name, "created")
+		cmdutil.PrintSuccess(o.Mapper, useShortOutput, o.Out, "deploymentconfig", actualObj.Name, o.DryRun, "created")
 		return nil
 	}
 

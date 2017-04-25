@@ -1,17 +1,17 @@
 package api
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/util/intstr"
 )
 
 // +genclient=true
 
 // Route encapsulates the inputs needed to connect an alias to endpoints.
 type Route struct {
-	unversioned.TypeMeta
-	kapi.ObjectMeta
+	metav1.TypeMeta
+	metav1.ObjectMeta
 
 	// Spec is the desired behavior of the route
 	Spec RouteSpec
@@ -42,6 +42,10 @@ type RouteSpec struct {
 
 	//TLS provides the ability to configure certificates and termination for the route
 	TLS *TLSConfig
+
+	// Wildcard policy if any for the route.
+	// Currently only 'Subdomain' or 'None' is allowed.
+	WildcardPolicy WildcardPolicyType
 }
 
 // RouteTargetReference specifies the target that resolve into endpoints. Only the 'Service'
@@ -77,6 +81,10 @@ type RouteIngress struct {
 	RouterName string
 	// Conditions is the state of the route, may be empty.
 	Conditions []RouteIngressCondition
+	// Wildcard policy is the wildcard policy that was allowed where this route is exposed.
+	WildcardPolicy WildcardPolicyType
+	// CanonicalHostname is an external host name for the router; this value is optional
+	RouterCanonicalHostname string
 }
 
 // RouteIngressConditionType is a valid value for RouteCondition
@@ -107,13 +115,13 @@ type RouteIngressCondition struct {
 	Message string
 	// RFC 3339 date and time at which the object was acknowledged by the router.
 	// This may be before the router exposes the route
-	LastTransitionTime *unversioned.Time
+	LastTransitionTime *metav1.Time
 }
 
 // RouteList is a collection of Routes.
 type RouteList struct {
-	unversioned.TypeMeta
-	unversioned.ListMeta
+	metav1.TypeMeta
+	metav1.ListMeta
 
 	// Items is a list of routes
 	Items []Route
@@ -179,4 +187,18 @@ const (
 	// As an example, for routers that support HTTP and HTTPS, the
 	// insecure HTTP connections will be redirected to use HTTPS.
 	InsecureEdgeTerminationPolicyRedirect InsecureEdgeTerminationPolicyType = "Redirect"
+)
+
+// WildcardPolicyType indicates the type of wildcard support needed by routes.
+type WildcardPolicyType string
+
+const (
+	// WildcardPolicyNone indicates no wildcard support is needed.
+	WildcardPolicyNone WildcardPolicyType = "None"
+
+	// WildcardPolicySubdomain indicates the host needs wildcard support for the subdomain.
+	// Example: With host = "www.acme.test", indicates that the router
+	//          should support requests for *.acme.test
+	//          Note that this will not match acme.test only *.acme.test
+	WildcardPolicySubdomain WildcardPolicyType = "Subdomain"
 )

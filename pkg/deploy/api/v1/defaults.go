@@ -1,8 +1,8 @@
 package v1
 
 import (
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 )
@@ -64,13 +64,18 @@ func SetDefaults_DeploymentStrategy(obj *DeploymentStrategy) {
 	if obj.Type == DeploymentStrategyTypeRecreate && obj.RecreateParams == nil {
 		obj.RecreateParams = &RecreateDeploymentStrategyParams{}
 	}
+
+	if obj.ActiveDeadlineSeconds == nil {
+		obj.ActiveDeadlineSeconds = mkintp(deployapi.MaxDeploymentDurationSeconds)
+	}
 }
 
 func SetDefaults_RecreateDeploymentStrategyParams(obj *RecreateDeploymentStrategyParams) {
 	if obj.TimeoutSeconds == nil {
-		obj.TimeoutSeconds = mkintp(deployapi.DefaultRollingTimeoutSeconds)
+		obj.TimeoutSeconds = mkintp(deployapi.DefaultRecreateTimeoutSeconds)
 	}
 }
+
 func SetDefaults_RollingDeploymentStrategyParams(obj *RollingDeploymentStrategyParams) {
 	if obj.IntervalSeconds == nil {
 		obj.IntervalSeconds = mkintp(deployapi.DefaultRollingIntervalSeconds)
@@ -84,24 +89,34 @@ func SetDefaults_RollingDeploymentStrategyParams(obj *RollingDeploymentStrategyP
 		obj.TimeoutSeconds = mkintp(deployapi.DefaultRollingTimeoutSeconds)
 	}
 
-	if obj.UpdatePercent == nil {
-		// Apply defaults.
-		if obj.MaxUnavailable == nil {
-			maxUnavailable := intstr.FromString("25%")
-			obj.MaxUnavailable = &maxUnavailable
-		}
-		if obj.MaxSurge == nil {
-			maxSurge := intstr.FromString("25%")
-			obj.MaxSurge = &maxSurge
-		}
+	if obj.MaxUnavailable == nil && obj.MaxSurge == nil {
+		maxUnavailable := intstr.FromString("25%")
+		obj.MaxUnavailable = &maxUnavailable
+
+		maxSurge := intstr.FromString("25%")
+		obj.MaxSurge = &maxSurge
+	}
+
+	if obj.MaxUnavailable == nil && obj.MaxSurge != nil &&
+		(*obj.MaxSurge == intstr.FromInt(0) || *obj.MaxSurge == intstr.FromString("0%")) {
+		maxUnavailable := intstr.FromString("25%")
+		obj.MaxUnavailable = &maxUnavailable
+	}
+
+	if obj.MaxSurge == nil && obj.MaxUnavailable != nil &&
+		(*obj.MaxUnavailable == intstr.FromInt(0) || *obj.MaxUnavailable == intstr.FromString("0%")) {
+		maxSurge := intstr.FromString("25%")
+		obj.MaxSurge = &maxSurge
 	}
 }
 
 func SetDefaults_DeploymentConfig(obj *DeploymentConfig) {
 	for _, t := range obj.Spec.Triggers {
 		if t.ImageChangeParams != nil {
-			t.ImageChangeParams.From.Kind = "ImageStreamTag"
-			if len(t.ImageChangeParams.From.Name) > 0 && len(t.ImageChangeParams.From.Namespace) == 0 {
+			if len(t.ImageChangeParams.From.Kind) == 0 {
+				t.ImageChangeParams.From.Kind = "ImageStreamTag"
+			}
+			if len(t.ImageChangeParams.From.Namespace) == 0 {
 				t.ImageChangeParams.From.Namespace = obj.Namespace
 			}
 		}
@@ -112,15 +127,13 @@ func mkintp(i int64) *int64 {
 	return &i
 }
 
-func addDefaultingFuncs(scheme *runtime.Scheme) {
-	err := scheme.AddDefaultingFuncs(
+func addDefaultingFuncs(scheme *runtime.Scheme) error {
+	RegisterDefaults(scheme)
+	return scheme.AddDefaultingFuncs(
 		SetDefaults_DeploymentConfigSpec,
 		SetDefaults_DeploymentStrategy,
 		SetDefaults_RecreateDeploymentStrategyParams,
 		SetDefaults_RollingDeploymentStrategyParams,
 		SetDefaults_DeploymentConfig,
 	)
-	if err != nil {
-		panic(err)
-	}
 }

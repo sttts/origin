@@ -3,34 +3,26 @@ package api_test
 import (
 	"fmt"
 	"math/rand"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/gofuzz"
+	apitesting "k8s.io/apimachinery/pkg/api/testing"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/meta"
-	apitesting "k8s.io/kubernetes/pkg/api/testing"
-	"k8s.io/kubernetes/pkg/api/unversioned"
+	kapitesting "k8s.io/kubernetes/pkg/api/testing"
 	"k8s.io/kubernetes/pkg/api/validation"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/types"
-	"k8s.io/kubernetes/pkg/util/diff"
-	"k8s.io/kubernetes/pkg/util/intstr"
-	"k8s.io/kubernetes/pkg/util/sets"
 
-	osapi "github.com/openshift/origin/pkg/api"
 	_ "github.com/openshift/origin/pkg/api/latest"
-	"github.com/openshift/origin/pkg/api/v1"
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	build "github.com/openshift/origin/pkg/build/api"
 	deploy "github.com/openshift/origin/pkg/deploy/api"
 	image "github.com/openshift/origin/pkg/image/api"
-	"github.com/openshift/origin/pkg/image/api/docker10"
-	"github.com/openshift/origin/pkg/image/api/dockerpre012"
-	quotaapi "github.com/openshift/origin/pkg/quota/api"
-	quotaapiv1 "github.com/openshift/origin/pkg/quota/api/v1"
+	oauthapi "github.com/openshift/origin/pkg/oauth/api"
 	route "github.com/openshift/origin/pkg/route/api"
 	securityapi "github.com/openshift/origin/pkg/security/api"
 	template "github.com/openshift/origin/pkg/template/api"
@@ -39,11 +31,14 @@ import (
 	// install all APIs
 	_ "github.com/openshift/origin/pkg/api/install"
 	_ "github.com/openshift/origin/pkg/quota/api/install"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 	_ "k8s.io/kubernetes/pkg/api/install"
+	"k8s.io/kubernetes/pkg/apis/componentconfig"
 )
 
-func fuzzInternalObject(t *testing.T, forVersion unversioned.GroupVersion, item runtime.Object, seed int64) runtime.Object {
-	f := apitesting.FuzzerFor(t, forVersion, rand.NewSource(seed))
+func originFuzzer(t *testing.T, seed int64) *fuzz.Fuzzer {
+	f := apitesting.FuzzerFor(apitesting.GenericFuzzerFuncs(t, kapi.Codecs), rand.NewSource(seed))
+	f.Funcs(kapitesting.FuzzerFuncs(t, kapi.Codecs)...)
 	f.Funcs(
 		// Roles and RoleBindings maps are never nil
 		func(j *authorizationapi.Policy, c fuzz.Continue) {
@@ -130,7 +125,7 @@ func fuzzInternalObject(t *testing.T, forVersion unversioned.GroupVersion, item 
 			case 0:
 				j.AttributeRestrictions = &authorizationapi.IsPersonalSubjectAccessReview{}
 			case 1:
-				j.AttributeRestrictions = &runtime.Unknown{TypeMeta: runtime.TypeMeta{Kind: "Type", APIVersion: "other"}, Raw: []byte(`{"apiVersion":"other","kind":"Type"}`)}
+				j.AttributeRestrictions = &runtime.Unknown{TypeMeta: runtime.TypeMeta{Kind: "Type", APIVersion: "other"}, ContentType: "application/json", Raw: []byte(`{"apiVersion":"other","kind":"Type"}`)}
 			default:
 				j.AttributeRestrictions = nil
 			}
@@ -182,10 +177,29 @@ func fuzzInternalObject(t *testing.T, forVersion unversioned.GroupVersion, item 
 		func(j *image.Image, c fuzz.Continue) {
 			c.Fuzz(&j.ObjectMeta)
 			c.Fuzz(&j.DockerImageMetadata)
+			c.Fuzz(&j.Signatures)
 			j.DockerImageMetadata.APIVersion = ""
 			j.DockerImageMetadata.Kind = ""
 			j.DockerImageMetadataVersion = []string{"pre012", "1.0"}[c.Rand.Intn(2)]
 			j.DockerImageReference = c.RandString()
+		},
+		func(j *image.ImageSignature, c fuzz.Continue) {
+			c.FuzzNoCustom(j)
+			j.Conditions = nil
+			j.ImageIdentity = ""
+			j.SignedClaims = nil
+			j.Created = nil
+			j.IssuedBy = nil
+			j.IssuedTo = nil
+		},
+		func(j *image.ImageStream, c fuzz.Continue) {
+			c.FuzzNoCustom(j)
+			for k, v := range j.Spec.Tags {
+				if len(v.ReferencePolicy.Type) == 0 {
+					v.ReferencePolicy.Type = image.SourceTagReferencePolicy
+					j.Spec.Tags[k] = v
+				}
+			}
 		},
 		func(j *image.ImageStreamMapping, c fuzz.Continue) {
 			c.FuzzNoCustom(j)
@@ -238,6 +252,10 @@ func fuzzInternalObject(t *testing.T, forVersion unversioned.GroupVersion, item 
 				j.From.Kind = specs[c.Intn(len(specs))]
 			}
 		},
+		func(j *image.TagReferencePolicy, c fuzz.Continue) {
+			c.FuzzNoCustom(j)
+			j.Type = image.SourceTagReferencePolicy
+		},
 		func(j *build.BuildConfigSpec, c fuzz.Continue) {
 			c.FuzzNoCustom(j)
 			j.RunPolicy = build.BuildRunPolicySerial
@@ -260,11 +278,13 @@ func fuzzInternalObject(t *testing.T, forVersion unversioned.GroupVersion, item 
 		},
 		func(j *build.DockerBuildStrategy, c fuzz.Continue) {
 			c.FuzzNoCustom(j)
-			j.From.Kind = "ImageStreamTag"
-			j.From.Name = "image:tag"
-			j.From.APIVersion = ""
-			j.From.ResourceVersion = ""
-			j.From.FieldPath = ""
+			if j.From != nil {
+				j.From.Kind = "ImageStreamTag"
+				j.From.Name = "image:tag"
+				j.From.APIVersion = ""
+				j.From.ResourceVersion = ""
+				j.From.FieldPath = ""
+			}
 		},
 		func(j *build.BuildOutput, c fuzz.Continue) {
 			c.FuzzNoCustom(j)
@@ -304,10 +324,15 @@ func fuzzInternalObject(t *testing.T, forVersion unversioned.GroupVersion, item 
 			}
 		},
 		func(j *deploy.DeploymentStrategy, c fuzz.Continue) {
+			randInt64 := func() *int64 {
+				p := int64(c.RandUint64())
+				return &p
+			}
 			c.FuzzNoCustom(j)
 			j.RecreateParams, j.RollingParams, j.CustomParams = nil, nil, nil
 			strategyTypes := []deploy.DeploymentStrategyType{deploy.DeploymentStrategyTypeRecreate, deploy.DeploymentStrategyTypeRolling, deploy.DeploymentStrategyTypeCustom}
 			j.Type = strategyTypes[c.Rand.Intn(len(strategyTypes))]
+			j.ActiveDeadlineSeconds = randInt64()
 			switch j.Type {
 			case deploy.DeploymentStrategyTypeRecreate:
 				params := &deploy.RecreateDeploymentStrategyParams{}
@@ -319,10 +344,6 @@ func fuzzInternalObject(t *testing.T, forVersion unversioned.GroupVersion, item 
 				j.RecreateParams = params
 			case deploy.DeploymentStrategyTypeRolling:
 				params := &deploy.RollingDeploymentStrategyParams{}
-				randInt64 := func() *int64 {
-					p := int64(c.RandUint64())
-					return &p
-				}
 				params.TimeoutSeconds = randInt64()
 				params.IntervalSeconds = randInt64()
 				params.UpdatePeriodSeconds = randInt64()
@@ -349,8 +370,8 @@ func fuzzInternalObject(t *testing.T, forVersion unversioned.GroupVersion, item 
 					}
 				}
 				if c.RandBool() {
-					params.MaxUnavailable = intstr.FromInt(int(c.RandUint64()))
-					params.MaxSurge = intstr.FromInt(int(c.RandUint64()))
+					params.MaxUnavailable = intstr.FromInt(c.Rand.Int())
+					params.MaxSurge = intstr.FromInt(c.Rand.Int())
 				} else {
 					params.MaxSurge = intstr.FromString(fmt.Sprintf("%d%%", c.RandUint64()))
 					params.MaxUnavailable = intstr.FromString(fmt.Sprintf("%d%%", c.RandUint64()))
@@ -378,20 +399,44 @@ func fuzzInternalObject(t *testing.T, forVersion unversioned.GroupVersion, item 
 		// not supported on security context review for now)
 		func(j *securityapi.PodSecurityPolicyReview, c fuzz.Continue) {
 			c.FuzzNoCustom(j)
-			j.Spec.PodSpec.InitContainers = nil
+			j.Spec.Template.Spec.InitContainers = nil
 			for i := range j.Status.AllowedServiceAccounts {
-				j.Status.AllowedServiceAccounts[i].PodSpec.InitContainers = nil
+				j.Status.AllowedServiceAccounts[i].Template.Spec.InitContainers = nil
 			}
 		},
 		func(j *securityapi.PodSecurityPolicySelfSubjectReview, c fuzz.Continue) {
 			c.FuzzNoCustom(j)
-			j.Spec.PodSpec.InitContainers = nil
-			j.Status.PodSpec.InitContainers = nil
+			j.Spec.Template.Spec.InitContainers = nil
+			j.Status.Template.Spec.InitContainers = nil
 		},
 		func(j *securityapi.PodSecurityPolicySubjectReview, c fuzz.Continue) {
 			c.FuzzNoCustom(j)
-			j.Spec.PodSpec.InitContainers = nil
-			j.Status.PodSpec.InitContainers = nil
+			j.Spec.Template.Spec.InitContainers = nil
+			j.Status.Template.Spec.InitContainers = nil
+		},
+		func(j *oauthapi.OAuthAuthorizeToken, c fuzz.Continue) {
+			c.FuzzNoCustom(j)
+			if len(j.CodeChallenge) > 0 && len(j.CodeChallengeMethod) == 0 {
+				j.CodeChallengeMethod = "plain"
+			}
+		},
+		func(j *oauthapi.OAuthClientAuthorization, c fuzz.Continue) {
+			c.FuzzNoCustom(j)
+			if len(j.Scopes) == 0 {
+				j.Scopes = append(j.Scopes, "user:full")
+			}
+		},
+		func(j *route.RouteSpec, c fuzz.Continue) {
+			c.FuzzNoCustom(j)
+			if len(j.WildcardPolicy) == 0 {
+				j.WildcardPolicy = route.WildcardPolicyNone
+			}
+		},
+		func(j *route.RouteIngress, c fuzz.Continue) {
+			c.FuzzNoCustom(j)
+			if len(j.WildcardPolicy) == 0 {
+				j.WildcardPolicy = route.WildcardPolicyNone
+			}
 		},
 
 		func(j *runtime.Object, c fuzz.Continue) {
@@ -410,17 +455,7 @@ func fuzzInternalObject(t *testing.T, forVersion unversioned.GroupVersion, item 
 			*u64 = c.RandUint64() >> 8
 		},
 	)
-
-	f.Fuzz(item)
-
-	j, err := meta.TypeAccessor(item)
-	if err != nil {
-		t.Fatalf("Unexpected error %v for %#v", err, item)
-	}
-	j.SetKind("")
-	j.SetAPIVersion("")
-
-	return item
+	return f
 }
 
 func defaultHookContainerName(hook *deploy.LifecycleHook, containerName string) {
@@ -439,129 +474,62 @@ func defaultHookContainerName(hook *deploy.LifecycleHook, containerName string) 
 	}
 }
 
-func roundTrip(t *testing.T, codec runtime.Codec, originalItem runtime.Object) {
-	// Make a copy of the originalItem to give to conversion functions
-	// This lets us know if conversion messed with the input object
-	deepCopy, err := kapi.Scheme.DeepCopy(originalItem)
-	if err != nil {
-		t.Errorf("Could not copy object: %v", err)
-		return
-	}
-	item := deepCopy.(runtime.Object)
-
-	name := reflect.TypeOf(item).Elem().Name()
-	data, err := runtime.Encode(codec, item)
-	if err != nil {
-		if runtime.IsNotRegisteredError(err) {
-			t.Logf("%v is not registered", name)
-		}
-		t.Errorf("%v: %v (%#v)", name, err, item)
-		return
-	}
-
-	obj2, err := runtime.Decode(codec, data)
-	if err != nil {
-		t.Errorf("0: %v: %v\nCodec: %v\nData: %s\nSource: %#v", name, err, codec, string(data), originalItem)
-		return
-	}
-	if reflect.TypeOf(item) != reflect.TypeOf(obj2) {
-		obj2conv := reflect.New(reflect.TypeOf(item).Elem()).Interface().(runtime.Object)
-		if err := kapi.Scheme.Convert(obj2, obj2conv, nil); err != nil {
-			t.Errorf("0X: no conversion from %v to %v: %v", reflect.TypeOf(item), reflect.TypeOf(obj2), err)
-			return
-		}
-		obj2 = obj2conv
-	}
-
-	if !kapi.Semantic.DeepEqual(originalItem, obj2) {
-		t.Errorf("1: %v: diff: %v\nCodec: %v\nData: %s", name, diff.ObjectReflectDiff(originalItem, obj2), codec, string(data))
-		return
-	}
-
-	obj3 := reflect.New(reflect.TypeOf(item).Elem()).Interface().(runtime.Object)
-	if err := runtime.DecodeInto(codec, data, obj3); err != nil {
-		t.Errorf("2: %v: %v", name, err)
-		return
-	}
-	if !kapi.Semantic.DeepEqual(originalItem, obj3) {
-		t.Errorf("3: %v: diff: %v\nCodec: %v", name, diff.ObjectReflectDiff(originalItem, obj3), codec)
-		return
-	}
-}
-
-// skipStandardVersions is a map of Kind to a list of API versions to test with.
-var skipStandardVersions = map[string][]unversioned.GroupVersion{
-	// The API versions here are to test our object that serializes from/into
-	// docker's registry API.
-	"DockerImage": {dockerpre012.SchemeGroupVersion, docker10.SchemeGroupVersion},
-}
-
 const fuzzIters = 20
 
 // For debugging problems
 func TestSpecificKind(t *testing.T) {
+	seed := int64(2703387474910584091)
+	fuzzer := originFuzzer(t, seed)
+
 	kapi.Scheme.Log(t)
 	defer kapi.Scheme.Log(nil)
 
-	kind := "DeploymentConfig"
-	item, err := kapi.Scheme.New(osapi.SchemeGroupVersion.WithKind(kind))
-	if err != nil {
-		t.Errorf("Couldn't make a %v? %v", kind, err)
-		return
-	}
-	seed := int64(2703387474910584091) //rand.Int63()
+	gvk := authorizationapi.SchemeGroupVersion.WithKind("ClusterRole")
+	// TODO: make upstream CodecFactory customizable
+	codecs := serializer.NewCodecFactory(kapi.Scheme)
 	for i := 0; i < fuzzIters; i++ {
-		//t.Logf(`About to test %v with "v1"`, kind)
-		fuzzInternalObject(t, v1.SchemeGroupVersion, item, seed)
-		roundTrip(t, kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), item)
+		apitesting.RoundTripSpecificKindWithoutProtobuf(t, gvk, kapi.Scheme, codecs, fuzzer, nil)
 	}
 }
 
-// Keep this in sync with the respective upstream set
-// WatchEvent does not have TypeMeta and cannot be roundtripped.
-var nonInternalRoundTrippableTypes = sets.NewString("List", "ListOptions", "WatchEvent")
+var dockerImageTypes = map[schema.GroupVersionKind]bool{
+	image.SchemeGroupVersion.WithKind("DockerImage"):       true,
+	image.LegacySchemeGroupVersion.WithKind("DockerImage"): true,
+}
 
-// TestTypes will try to roundtrip all OpenShift and Kubernetes stable api types
-func TestTypes(t *testing.T) {
-	internalVersionToExternalVersions := map[unversioned.GroupVersion][]unversioned.GroupVersion{
-		osapi.SchemeGroupVersion:    {v1.SchemeGroupVersion},
-		quotaapi.SchemeGroupVersion: {quotaapiv1.SchemeGroupVersion},
+// TestRoundTripTypes applies the round-trip test to all round-trippable Kinds
+// in all of the API groups registered for test in the testapi package.
+func TestRoundTripTypes(t *testing.T) {
+	seed := rand.Int63()
+	fuzzer := originFuzzer(t, seed)
+
+	kubeExceptions := map[schema.GroupVersionKind]bool{
+		componentconfig.SchemeGroupVersion.WithKind("KubeletConfiguration"):       true,
+		componentconfig.SchemeGroupVersion.WithKind("KubeProxyConfiguration"):     true,
+		componentconfig.SchemeGroupVersion.WithKind("KubeSchedulerConfiguration"): true,
 	}
 
-	for internalVersion, externalVersions := range internalVersionToExternalVersions {
-		for kind, reflectType := range kapi.Scheme.KnownTypes(internalVersion) {
-			if !strings.Contains(reflectType.PkgPath(), "github.com/openshift/origin/") && reflectType.PkgPath() != "github.com/openshift/origin/vendor/k8s.io/kubernetes/pkg/api" {
-				continue
-			}
-			if nonInternalRoundTrippableTypes.Has(kind) {
-				continue
-			}
+	apitesting.RoundTripTypes(t, kapi.Scheme, kapi.Codecs, fuzzer, mergeGvks(kubeExceptions, dockerImageTypes))
+}
 
-			for _, externalVersion := range externalVersions {
-				// Try a few times, since runTest uses random values.
-				for i := 0; i < fuzzIters; i++ {
-					item, err := kapi.Scheme.New(internalVersion.WithKind(kind))
-					if err != nil {
-						t.Errorf("Couldn't make a %v? %v", kind, err)
-						continue
-					}
-					if _, err := meta.TypeAccessor(item); err != nil {
-						t.Fatalf("%q is not a TypeMeta and cannot be tested - add it to nonRoundTrippableTypes: %v", kind, err)
-					}
-					seed := rand.Int63()
+// TestRoundTripDockerImage tests DockerImage whether it serializes from/into docker's registry API.
+func TestRoundTripDockerImage(t *testing.T) {
+	seed := rand.Int63()
+	fuzzer := originFuzzer(t, seed)
 
-					if versions, ok := skipStandardVersions[kind]; ok {
-						for _, v := range versions {
-							fuzzInternalObject(t, v, item, seed)
-							roundTrip(t, kapi.Codecs.LegacyCodec(v), item)
-						}
-						continue
-					}
-					fuzzInternalObject(t, externalVersion, item, seed)
-					roundTrip(t, kapi.Codecs.LegacyCodec(externalVersion), item)
-				}
-			}
-		}
-
+	for gvk := range dockerImageTypes {
+		apitesting.RoundTripSpecificKindWithoutProtobuf(t, gvk, kapi.Scheme, kapi.Codecs, fuzzer, nil)
+		apitesting.RoundTripSpecificKindWithoutProtobuf(t, gvk, kapi.Scheme, kapi.Codecs, fuzzer, nil)
 	}
+}
+
+func mergeGvks(a, b map[schema.GroupVersionKind]bool) map[schema.GroupVersionKind]bool {
+	c := map[schema.GroupVersionKind]bool{}
+	for k, v := range a {
+		c[k] = v
+	}
+	for k, v := range b {
+		c[k] = v
+	}
+	return c
 }

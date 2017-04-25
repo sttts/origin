@@ -1,10 +1,11 @@
 package cache
 
 import (
+	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/tools/cache"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kapierrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/client/cache"
-	"k8s.io/kubernetes/pkg/labels"
 
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	deployutil "github.com/openshift/origin/pkg/deploy/util"
@@ -38,6 +39,22 @@ func (s *StoreToDeploymentConfigLister) GetConfigForController(rc *kapi.Replicat
 	return obj.(*deployapi.DeploymentConfig), nil
 }
 
+// GetConfigForPod returns the managing deployment config for the provided pod.
+func (s *StoreToDeploymentConfigLister) GetConfigForPod(pod *kapi.Pod) (*deployapi.DeploymentConfig, error) {
+	dcName := deployutil.DeploymentConfigNameFor(pod)
+	obj, exists, err := s.Indexer.GetByKey(pod.Namespace + "/" + dcName)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, kapierrors.NewNotFound(deployapi.Resource("deploymentconfig"), dcName)
+	}
+	return obj.(*deployapi.DeploymentConfig), nil
+}
+
+// GetConfigsForImageStream returns all the deployment configs that point to the provided image stream
+// by searching through using the ImageStreamReferenceIndex (deployment configs are indexed in the cache
+// by namespace and by image stream references).
 func (s *StoreToDeploymentConfigLister) GetConfigsForImageStream(stream *imageapi.ImageStream) ([]*deployapi.DeploymentConfig, error) {
 	items, err := s.Indexer.ByIndex(ImageStreamReferenceIndex, stream.Namespace+"/"+stream.Name)
 	if err != nil {
@@ -58,13 +75,14 @@ func (s *StoreToDeploymentConfigLister) DeploymentConfigs(namespace string) stor
 	return storeDeploymentConfigsNamespacer{s.Indexer, namespace}
 }
 
+// storeDeploymentConfigsNamespacer provides a way to get and list DeploymentConfigs from a specific namespace.
 type storeDeploymentConfigsNamespacer struct {
 	indexer   cache.Indexer
 	namespace string
 }
 
 // Get the deployment config matching the name from the cache.
-func (s storeDeploymentConfigsNamespacer) Get(name string) (*deployapi.DeploymentConfig, error) {
+func (s storeDeploymentConfigsNamespacer) Get(name string, options metav1.GetOptions) (*deployapi.DeploymentConfig, error) {
 	obj, exists, err := s.indexer.GetByKey(s.namespace + "/" + name)
 	if err != nil {
 		return nil, err
@@ -81,7 +99,7 @@ func (s storeDeploymentConfigsNamespacer) Get(name string) (*deployapi.Deploymen
 func (s storeDeploymentConfigsNamespacer) List(selector labels.Selector) ([]*deployapi.DeploymentConfig, error) {
 	configs := []*deployapi.DeploymentConfig{}
 
-	if s.namespace == kapi.NamespaceAll {
+	if s.namespace == metav1.NamespaceAll {
 		for _, obj := range s.indexer.List() {
 			dc := obj.(*deployapi.DeploymentConfig)
 			if selector.Matches(labels.Set(dc.Labels)) {

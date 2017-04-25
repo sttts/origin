@@ -4,7 +4,7 @@ import (
 	"bytes"
 
 	"github.com/golang/glog"
-	"k8s.io/kubernetes/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/errors"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
 
@@ -15,7 +15,7 @@ import (
 // ImportObjects imports objects into OpenShift from a particular location
 // into a given namespace
 func ImportObjects(f *clientcmd.Factory, ns, location string) error {
-	mapper, typer := f.Object(false)
+	mapper, typer := f.Object()
 	schema, err := f.Validator(false, "")
 	if err != nil {
 		return err

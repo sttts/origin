@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,18 +24,20 @@ import (
 	"strings"
 	"testing"
 
+	apitesting "k8s.io/apimachinery/pkg/api/testing"
+	"k8s.io/apimachinery/pkg/runtime"
+	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
-	apitesting "k8s.io/kubernetes/pkg/api/testing"
-	"k8s.io/kubernetes/pkg/apis/extensions"
-	"k8s.io/kubernetes/pkg/runtime"
-	k8syaml "k8s.io/kubernetes/pkg/util/yaml"
+	kapitesting "k8s.io/kubernetes/pkg/api/testing"
+	"k8s.io/kubernetes/pkg/api/v1"
+	"k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
 
 	"github.com/ghodss/yaml"
 )
 
 func readPod(filename string) ([]byte, error) {
-	data, err := ioutil.ReadFile("testdata/" + testapi.Default.GroupVersion().Version + "/" + filename)
+	data, err := ioutil.ReadFile("testdata/" + api.Registry.GroupOrDie(api.GroupName).GroupVersion.Version + "/" + filename)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +137,7 @@ func TestLoad(t *testing.T) {
 func TestValidateOk(t *testing.T) {
 	schema, err := loadSchemaForTest()
 	if err != nil {
-		t.Errorf("Failed to load: %v", err)
+		t.Fatalf("Failed to load: %v", err)
 	}
 	tests := []struct {
 		obj      runtime.Object
@@ -147,7 +149,7 @@ func TestValidateOk(t *testing.T) {
 	}
 
 	seed := rand.Int63()
-	apiObjectFuzzer := apitesting.FuzzerFor(nil, testapi.Default.InternalGroupVersion(), rand.NewSource(seed))
+	apiObjectFuzzer := apitesting.FuzzerFor(kapitesting.FuzzerFuncs(t, api.Codecs), rand.NewSource(seed))
 	for i := 0; i < 5; i++ {
 		for _, test := range tests {
 			testObj := test.obj
@@ -167,21 +169,21 @@ func TestValidateOk(t *testing.T) {
 func TestValidateDifferentApiVersions(t *testing.T) {
 	schema, err := loadSchemaForTest()
 	if err != nil {
-		t.Errorf("Failed to load: %v", err)
+		t.Fatalf("Failed to load: %v", err)
 	}
 
-	pod := &api.Pod{}
+	pod := &v1.Pod{}
 	pod.APIVersion = "v1"
 	pod.Kind = "Pod"
 
-	deployment := &extensions.Deployment{}
+	deployment := &v1beta1.Deployment{}
 	deployment.APIVersion = "extensions/v1beta1"
 	deployment.Kind = "Deployment"
 
-	list := &api.List{}
+	list := &v1.List{}
 	list.APIVersion = "v1"
 	list.Kind = "List"
-	list.Items = []runtime.Object{pod, deployment}
+	list.Items = []runtime.RawExtension{{Object: pod}, {Object: deployment}}
 	bytes, err := json.Marshal(list)
 	if err != nil {
 		t.Error(err)
@@ -203,12 +205,13 @@ func TestValidateDifferentApiVersions(t *testing.T) {
 func TestInvalid(t *testing.T) {
 	schema, err := loadSchemaForTest()
 	if err != nil {
-		t.Errorf("Failed to load: %v", err)
+		t.Fatalf("Failed to load: %v", err)
 	}
 	tests := []string{
 		"invalidPod1.json", // command is a string, instead of []string.
 		"invalidPod2.json", // hostPort if of type string, instead of int.
 		"invalidPod3.json", // volumes is not an array of objects.
+		"invalidPod4.yaml", // string list with empty string.
 		"invalidPod.yaml",  // command is a string, instead of []string.
 	}
 	for _, test := range tests {
@@ -226,7 +229,7 @@ func TestInvalid(t *testing.T) {
 func TestValid(t *testing.T) {
 	schema, err := loadSchemaForTest()
 	if err != nil {
-		t.Errorf("Failed to load: %v", err)
+		t.Fatalf("Failed to load: %v", err)
 	}
 	tests := []string{
 		"validPod.yaml",
@@ -238,7 +241,7 @@ func TestValid(t *testing.T) {
 		}
 		err = schema.ValidateBytes(pod)
 		if err != nil {
-			t.Errorf("unexpected error %s, for pod %s", err, pod)
+			t.Errorf("unexpected error: %s, for pod %s", err, pod)
 		}
 	}
 }
@@ -273,7 +276,7 @@ func TestVersionRegex(t *testing.T) {
 
 // Tests that validation works fine when spec contains "type": "any" instead of "type": "object"
 // Ref: https://github.com/kubernetes/kubernetes/issues/24309
-func TestTypeOAny(t *testing.T) {
+func TestTypeAny(t *testing.T) {
 	data, err := readSwaggerFile()
 	if err != nil {
 		t.Errorf("failed to read swagger file: %v", err)
@@ -282,7 +285,7 @@ func TestTypeOAny(t *testing.T) {
 	newData := strings.Replace(string(data), `"type": "object"`, `"type": "any"`, -1)
 	schema, err := NewSwaggerSchemaFromBytes([]byte(newData), nil)
 	if err != nil {
-		t.Errorf("Failed to load: %v", err)
+		t.Fatalf("Failed to load: %v", err)
 	}
 	tests := []string{
 		"validPod.yaml",
@@ -293,7 +296,7 @@ func TestTypeOAny(t *testing.T) {
 			t.Errorf("could not read file: %s, err: %v", test, err)
 		}
 		// Verify that pod has at least one label (labels are type "any")
-		var pod api.Pod
+		var pod v1.Pod
 		err = yaml.Unmarshal(podBytes, &pod)
 		if err != nil {
 			t.Errorf("error in unmarshalling pod: %v", err)
@@ -303,7 +306,122 @@ func TestTypeOAny(t *testing.T) {
 		}
 		err = schema.ValidateBytes(podBytes)
 		if err != nil {
-			t.Errorf("unexpected error %s, for pod %s", err, string(podBytes))
+			t.Errorf("unexpected error: %s, for pod %s", err, string(podBytes))
+		}
+	}
+}
+
+func TestValidateDuplicateLabelsFailCases(t *testing.T) {
+	strs := []string{
+		`{
+	"metadata": {
+		"labels": {
+			"foo": "bar",
+			"foo": "baz"
+		}
+	}
+}`,
+		`{
+	"metadata": {
+		"annotations": {
+			"foo": "bar",
+			"foo": "baz"
+		}
+	}
+}`,
+		`{
+	"metadata": {
+		"labels": {
+			"foo": "blah"
+		},
+		"annotations": {
+			"foo": "bar",
+			"foo": "baz"
+		}
+	}
+}`,
+	}
+	schema := NoDoubleKeySchema{}
+	for _, str := range strs {
+		err := schema.ValidateBytes([]byte(str))
+		if err == nil {
+			t.Errorf("Unexpected non-error %s", str)
+		}
+	}
+}
+
+func TestValidateDuplicateLabelsPassCases(t *testing.T) {
+	strs := []string{
+		`{
+	"metadata": {
+		"labels": {
+			"foo": "bar"
+		},
+		"annotations": {
+			"foo": "baz"
+		}
+	}
+}`,
+		`{
+	"metadata": {}
+}`,
+		`{
+	"metadata": {
+		"labels": {}
+	}
+}`,
+	}
+	schema := NoDoubleKeySchema{}
+	for _, str := range strs {
+		err := schema.ValidateBytes([]byte(str))
+		if err != nil {
+			t.Errorf("Unexpected error: %v %s", err, str)
+		}
+	}
+}
+
+type AlwaysInvalidSchema struct{}
+
+func (AlwaysInvalidSchema) ValidateBytes([]byte) error {
+	return fmt.Errorf("Always invalid!")
+}
+
+func TestConjunctiveSchema(t *testing.T) {
+	tests := []struct {
+		schemas    []Schema
+		shouldPass bool
+		name       string
+	}{
+		{
+			schemas:    []Schema{NullSchema{}, NullSchema{}},
+			shouldPass: true,
+			name:       "all pass",
+		},
+		{
+			schemas:    []Schema{NullSchema{}, AlwaysInvalidSchema{}},
+			shouldPass: false,
+			name:       "one fail",
+		},
+		{
+			schemas:    []Schema{AlwaysInvalidSchema{}, AlwaysInvalidSchema{}},
+			shouldPass: false,
+			name:       "all fail",
+		},
+		{
+			schemas:    []Schema{},
+			shouldPass: true,
+			name:       "empty",
+		},
+	}
+
+	for _, test := range tests {
+		schema := ConjunctiveSchema(test.schemas)
+		err := schema.ValidateBytes([]byte{})
+		if err != nil && test.shouldPass {
+			t.Errorf("Unexpected error: %v in %s", err, test.name)
+		}
+		if err == nil && !test.shouldPass {
+			t.Errorf("Unexpected non-error: %s", test.name)
 		}
 	}
 }

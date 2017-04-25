@@ -3,9 +3,9 @@ package dockerpre012
 import (
 	"github.com/fsouza/go-dockerclient"
 
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/conversion"
-	"k8s.io/kubernetes/pkg/runtime"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/conversion"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	newer "github.com/openshift/origin/pkg/image/api"
 )
@@ -21,7 +21,7 @@ func Convert_dockerpre012_ImagePre_012_to_api_DockerImage(in *docker.ImagePre012
 	out.ID = in.ID
 	out.Parent = in.Parent
 	out.Comment = in.Comment
-	out.Created = unversioned.NewTime(in.Created)
+	out.Created = metav1.NewTime(in.Created)
 	out.Container = in.Container
 	out.DockerVersion = in.DockerVersion
 	out.Author = in.Author
@@ -48,13 +48,9 @@ func Convert_api_DockerImage_to_dockerpre012_ImagePre_012(in *newer.DockerImage,
 	return nil
 }
 
-func addConversionFuncs(scheme *runtime.Scheme) {
-	err := scheme.AddConversionFuncs(
+func addConversionFuncs(scheme *runtime.Scheme) error {
+	return scheme.AddConversionFuncs(
 		Convert_dockerpre012_ImagePre_012_to_api_DockerImage,
 		Convert_api_DockerImage_to_dockerpre012_ImagePre_012,
 	)
-	if err != nil {
-		// If one of the conversion functions is malformed, detect it immediately.
-		panic(err)
-	}
 }

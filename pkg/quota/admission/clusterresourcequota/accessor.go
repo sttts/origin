@@ -5,11 +5,12 @@ import (
 
 	lru "github.com/hashicorp/golang-lru"
 
+	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	utilwait "k8s.io/apimachinery/pkg/util/wait"
+	etcd "k8s.io/apiserver/pkg/storage/etcd"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kapierrors "k8s.io/kubernetes/pkg/api/errors"
+	kcorelisters "k8s.io/kubernetes/pkg/client/listers/core/internalversion"
 	utilquota "k8s.io/kubernetes/pkg/quota"
-	"k8s.io/kubernetes/pkg/storage/etcd"
-	utilwait "k8s.io/kubernetes/pkg/util/wait"
 
 	oclient "github.com/openshift/origin/pkg/client"
 	ocache "github.com/openshift/origin/pkg/client/cache"
@@ -19,7 +20,7 @@ import (
 
 type clusterQuotaAccessor struct {
 	clusterQuotaLister *ocache.IndexerToClusterResourceQuotaLister
-	namespaceLister    *ocache.IndexerToNamespaceLister
+	namespaceLister    kcorelisters.NamespaceLister
 	clusterQuotaClient oclient.ClusterResourceQuotasInterface
 
 	clusterQuotaMapper clusterquotamapping.ClusterQuotaMapper
@@ -31,7 +32,12 @@ type clusterQuotaAccessor struct {
 }
 
 // newQuotaAccessor creates an object that conforms to the QuotaAccessor interface to be used to retrieve quota objects.
-func newQuotaAccessor(clusterQuotaLister *ocache.IndexerToClusterResourceQuotaLister, namespaceLister *ocache.IndexerToNamespaceLister, clusterQuotaClient oclient.ClusterResourceQuotasInterface, clusterQuotaMapper clusterquotamapping.ClusterQuotaMapper) *clusterQuotaAccessor {
+func newQuotaAccessor(
+	clusterQuotaLister *ocache.IndexerToClusterResourceQuotaLister,
+	namespaceLister kcorelisters.NamespaceLister,
+	clusterQuotaClient oclient.ClusterResourceQuotasInterface,
+	clusterQuotaMapper clusterquotamapping.ClusterQuotaMapper,
+) *clusterQuotaAccessor {
 	updatedCache, err := lru.New(100)
 	if err != nil {
 		// this should never happen
@@ -82,7 +88,7 @@ func (e *clusterQuotaAccessor) UpdateQuotaStatus(newQuota *kapi.ResourceQuota) e
 	newNamespaceTotals.Used = utilquota.Add(oldNamespaceTotals.Used, usageDiff)
 	clusterQuota.Status.Namespaces.Insert(newQuota.Namespace, newNamespaceTotals)
 
-	updatedQuota, err := e.clusterQuotaClient.ClusterResourceQuotas().Update(clusterQuota)
+	updatedQuota, err := e.clusterQuotaClient.ClusterResourceQuotas().UpdateStatus(clusterQuota)
 	if err != nil {
 		return err
 	}

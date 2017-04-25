@@ -5,18 +5,19 @@ import (
 	"testing"
 	"time"
 
+	etcd "github.com/coreos/etcd/clientv3"
 	"golang.org/x/net/context"
 
-	etcd "github.com/coreos/etcd/client"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apiserver/pkg/authentication/user"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/storage/etcd/etcdtest"
+	etcdtesting "k8s.io/apiserver/pkg/storage/etcd/testing"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/api/v1"
-	"k8s.io/kubernetes/pkg/auth/user"
 	"k8s.io/kubernetes/pkg/registry/registrytest"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/storage/etcd/etcdtest"
-	etcdtesting "k8s.io/kubernetes/pkg/storage/etcd/testing"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	"github.com/openshift/origin/pkg/authorization/registry/subjectaccessreview"
@@ -38,7 +39,7 @@ type fakeSubjectAccessReviewRegistry struct {
 
 var _ subjectaccessreview.Registry = &fakeSubjectAccessReviewRegistry{}
 
-func (f *fakeSubjectAccessReviewRegistry) CreateSubjectAccessReview(ctx kapi.Context, subjectAccessReview *authorizationapi.SubjectAccessReview) (*authorizationapi.SubjectAccessReviewResponse, error) {
+func (f *fakeSubjectAccessReviewRegistry) CreateSubjectAccessReview(ctx apirequest.Context, subjectAccessReview *authorizationapi.SubjectAccessReview) (*authorizationapi.SubjectAccessReviewResponse, error) {
 	return nil, nil
 }
 
@@ -63,10 +64,9 @@ func (u *fakeUser) GetExtra() map[string][]string {
 	return map[string][]string{}
 }
 
-func setup(t *testing.T) (etcd.KeysAPI, *etcdtesting.EtcdTestServer, *REST) {
-
+func setup(t *testing.T) (etcd.KV, *etcdtesting.EtcdTestServer, *REST) {
 	etcdStorage, server := registrytest.NewEtcdStorage(t, "")
-	etcdClient := etcd.NewKeysAPI(server.Client)
+	etcdClient := etcd.NewKV(server.V3Client)
 
 	imageStorage, err := imageetcd.NewREST(restoptions.NewSimpleGetter(etcdStorage))
 	if err != nil {
@@ -86,7 +86,7 @@ func setup(t *testing.T) (etcd.KeysAPI, *etcdtesting.EtcdTestServer, *REST) {
 }
 
 type statusError interface {
-	Status() unversioned.Status
+	Status() metav1.Status
 }
 
 func TestGetImageStreamTag(t *testing.T) {
@@ -98,9 +98,9 @@ func TestGetImageStreamTag(t *testing.T) {
 		errorTargetID   string
 	}{
 		"happy path": {
-			image: &api.Image{ObjectMeta: kapi.ObjectMeta{Name: "10"}, DockerImageReference: "foo/bar/baz"},
+			image: &api.Image{ObjectMeta: metav1.ObjectMeta{Name: "10"}, DockerImageReference: "foo/bar/baz"},
 			repo: &api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "default",
 					Name:      "test",
 				},
@@ -119,7 +119,7 @@ func TestGetImageStreamTag(t *testing.T) {
 						"latest": {
 							Items: []api.TagEvent{
 								{
-									Created:              unversioned.Date(2015, 3, 24, 9, 38, 0, 0, time.UTC),
+									Created:              metav1.Date(2015, 3, 24, 9, 38, 0, 0, time.UTC),
 									DockerImageReference: "test",
 									Image:                "10",
 								},
@@ -131,7 +131,7 @@ func TestGetImageStreamTag(t *testing.T) {
 		},
 		"image = ''": {
 			repo: &api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{Name: "test"},
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Status: api.ImageStreamStatus{
 					Tags: map[string]api.TagEventList{
 						"latest": {Items: []api.TagEvent{{DockerImageReference: "test", Image: ""}}},
@@ -157,9 +157,9 @@ func TestGetImageStreamTag(t *testing.T) {
 			errorTargetID:   "test",
 		},
 		"missing tag": {
-			image: &api.Image{ObjectMeta: kapi.ObjectMeta{Name: "10"}, DockerImageReference: "foo/bar/baz"},
+			image: &api.Image{ObjectMeta: metav1.ObjectMeta{Name: "10"}, DockerImageReference: "foo/bar/baz"},
 			repo: &api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{Name: "test"},
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Status: api.ImageStreamStatus{
 					Tags: map[string]api.TagEventList{
 						"other": {Items: []api.TagEvent{{DockerImageReference: "test", Image: "10"}}},
@@ -172,63 +172,65 @@ func TestGetImageStreamTag(t *testing.T) {
 	}
 
 	for name, testCase := range tests {
-		client, server, storage := setup(t)
-		defer server.Terminate(t)
+		func() {
+			client, server, storage := setup(t)
+			defer server.Terminate(t)
 
-		if testCase.image != nil {
-			client.Create(
-				context.TODO(),
-				etcdtest.AddPrefix("/images/"+testCase.image.Name),
-				runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), testCase.image),
-			)
-		}
-		if testCase.repo != nil {
-			client.Create(
-				context.TODO(),
-				etcdtest.AddPrefix("/imagestreams/default/test"),
-				runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), testCase.repo),
-			)
-		}
+			if testCase.image != nil {
+				client.Put(
+					context.TODO(),
+					etcdtest.AddPrefix("/images/"+testCase.image.Name),
+					runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), testCase.image),
+				)
+			}
+			if testCase.repo != nil {
+				client.Put(
+					context.TODO(),
+					etcdtest.AddPrefix("/imagestreams/default/test"),
+					runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), testCase.repo),
+				)
+			}
 
-		obj, err := storage.Get(kapi.NewDefaultContext(), "test:latest")
-		gotErr := err != nil
-		if e, a := testCase.expectError, gotErr; e != a {
-			t.Errorf("%s: Expected err=%v: got %v: %v", name, e, a, err)
-			continue
-		}
-		if testCase.expectError {
-			if !errors.IsNotFound(err) {
-				t.Errorf("%s: unexpected error type: %v", name, err)
-				continue
+			obj, err := storage.Get(apirequest.NewDefaultContext(), "test:latest", &metav1.GetOptions{})
+			gotErr := err != nil
+			if e, a := testCase.expectError, gotErr; e != a {
+				t.Errorf("%s: Expected err=%v: got %v: %v", name, e, a, err)
+				return
 			}
-			status := err.(statusError).Status()
-			if status.Details.Kind != testCase.errorTargetKind || status.Details.Name != testCase.errorTargetID {
-				t.Errorf("%s: unexpected status: %#v", name, status.Details)
-				continue
+			if testCase.expectError {
+				if !errors.IsNotFound(err) {
+					t.Errorf("%s: unexpected error type: %v", name, err)
+					return
+				}
+				status := err.(statusError).Status()
+				if status.Details.Kind != testCase.errorTargetKind || status.Details.Name != testCase.errorTargetID {
+					t.Errorf("%s: unexpected status: %#v", name, status.Details)
+					return
+				}
+			} else {
+				actual := obj.(*api.ImageStreamTag)
+				if e, a := "default", actual.Namespace; e != a {
+					t.Errorf("%s: namespace: expected %v, got %v", name, e, a)
+				}
+				if e, a := "test:latest", actual.Name; e != a {
+					t.Errorf("%s: name: expected %v, got %v", name, e, a)
+				}
+				if e, a := map[string]string{"size": "large", "color": "blue"}, actual.Image.Annotations; !reflect.DeepEqual(e, a) {
+					t.Errorf("%s: annotations: expected %v, got %v", name, e, a)
+				}
+				if e, a := metav1.Date(2015, 3, 24, 9, 38, 0, 0, time.UTC), actual.CreationTimestamp; !a.Equal(e) {
+					t.Errorf("%s: timestamp: expected %v, got %v", name, e, a)
+				}
 			}
-		} else {
-			actual := obj.(*api.ImageStreamTag)
-			if e, a := "default", actual.Namespace; e != a {
-				t.Errorf("%s: namespace: expected %v, got %v", name, e, a)
-			}
-			if e, a := "test:latest", actual.Name; e != a {
-				t.Errorf("%s: name: expected %v, got %v", name, e, a)
-			}
-			if e, a := map[string]string{"size": "large", "color": "blue"}, actual.Image.Annotations; !reflect.DeepEqual(e, a) {
-				t.Errorf("%s: annotations: expected %v, got %v", name, e, a)
-			}
-			if e, a := unversioned.Date(2015, 3, 24, 9, 38, 0, 0, time.UTC), actual.CreationTimestamp; !a.Equal(e) {
-				t.Errorf("%s: timestamp: expected %v, got %v", name, e, a)
-			}
-		}
+		}()
 	}
 }
 
 func TestGetImageStreamTagDIR(t *testing.T) {
 	expDockerImageReference := "foo/bar/baz:latest"
-	image := &api.Image{ObjectMeta: kapi.ObjectMeta{Name: "10"}, DockerImageReference: "foo/bar/baz:different"}
+	image := &api.Image{ObjectMeta: metav1.ObjectMeta{Name: "10"}, DockerImageReference: "foo/bar/baz:different"}
 	repo := &api.ImageStream{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "default",
 			Name:      "test",
 		},
@@ -237,7 +239,7 @@ func TestGetImageStreamTagDIR(t *testing.T) {
 				"latest": {
 					Items: []api.TagEvent{
 						{
-							Created:              unversioned.Date(2015, 3, 24, 9, 38, 0, 0, time.UTC),
+							Created:              metav1.Date(2015, 3, 24, 9, 38, 0, 0, time.UTC),
 							DockerImageReference: expDockerImageReference,
 							Image:                "10",
 						},
@@ -249,17 +251,17 @@ func TestGetImageStreamTagDIR(t *testing.T) {
 
 	client, server, storage := setup(t)
 	defer server.Terminate(t)
-	client.Create(
+	client.Put(
 		context.TODO(),
 		etcdtest.AddPrefix("/images/"+image.Name),
 		runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), image),
 	)
-	client.Create(
+	client.Put(
 		context.TODO(),
 		etcdtest.AddPrefix("/imagestreams/default/test"),
 		runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), repo),
 	)
-	obj, err := storage.Get(kapi.NewDefaultContext(), "test:latest")
+	obj, err := storage.Get(apirequest.NewDefaultContext(), "test:latest", &metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -279,7 +281,7 @@ func TestDeleteImageStreamTag(t *testing.T) {
 		},
 		"nil tag map": {
 			repo: &api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "default",
 					Name:      "test",
 				},
@@ -288,7 +290,7 @@ func TestDeleteImageStreamTag(t *testing.T) {
 		},
 		"missing tag": {
 			repo: &api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "default",
 					Name:      "test",
 				},
@@ -307,7 +309,7 @@ func TestDeleteImageStreamTag(t *testing.T) {
 		},
 		"happy path": {
 			repo: &api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Namespace:  "default",
 					Name:       "test",
 					Generation: 2,
@@ -374,89 +376,93 @@ func TestDeleteImageStreamTag(t *testing.T) {
 	}
 
 	for name, testCase := range tests {
-		client, server, storage := setup(t)
-		defer server.Terminate(t)
+		func() {
+			client, server, storage := setup(t)
+			defer server.Terminate(t)
 
-		if testCase.repo != nil {
-			client.Create(
-				context.TODO(),
-				etcdtest.AddPrefix("/imagestreams/default/test"),
-				runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), testCase.repo),
-			)
-		}
+			if testCase.repo != nil {
+				client.Put(
+					context.TODO(),
+					etcdtest.AddPrefix("/imagestreams/default/test"),
+					runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), testCase.repo),
+				)
+			}
 
-		ctx := kapi.WithUser(kapi.NewDefaultContext(), &fakeUser{})
-		obj, err := storage.Delete(ctx, "test:latest")
-		gotError := err != nil
-		if e, a := testCase.expectError, gotError; e != a {
-			t.Fatalf("%s: expectError=%t, gotError=%t: %s", name, e, a, err)
-		}
-		if testCase.expectError {
-			continue
-		}
+			ctx := apirequest.WithUser(apirequest.NewDefaultContext(), &fakeUser{})
+			obj, err := storage.Delete(ctx, "test:latest")
+			gotError := err != nil
+			if e, a := testCase.expectError, gotError; e != a {
+				t.Fatalf("%s: expectError=%t, gotError=%t: %s", name, e, a, err)
+			}
+			if testCase.expectError {
+				return
+			}
 
-		if obj == nil {
-			t.Fatalf("%s: unexpected nil response", name)
-		}
-		expectedStatus := &unversioned.Status{Status: unversioned.StatusSuccess}
-		if e, a := expectedStatus, obj; !reflect.DeepEqual(e, a) {
-			t.Errorf("%s:\nexpect=%#v\nactual=%#v", name, e, a)
-		}
+			if obj == nil {
+				t.Fatalf("%s: unexpected nil response", name)
+			}
+			expectedStatus := &metav1.Status{Status: metav1.StatusSuccess}
+			if e, a := expectedStatus, obj; !reflect.DeepEqual(e, a) {
+				t.Errorf("%s:\nexpect=%#v\nactual=%#v", name, e, a)
+			}
 
-		updatedRepo, err := storage.imageStreamRegistry.GetImageStream(kapi.NewDefaultContext(), "test")
-		if err != nil {
-			t.Fatalf("%s: error retrieving updated repo: %s", name, err)
-		}
-		three := int64(3)
-		expectedStreamSpec := map[string]api.TagReference{
-			"another": {
-				Name: "another",
-				From: &kapi.ObjectReference{
-					Kind: "ImageStreamTag",
-					Name: "test:foo",
-				},
-				Generation: &three,
-			},
-		}
-		expectedStreamStatus := map[string]api.TagEventList{
-			"another": {
-				Items: []api.TagEvent{
-					{
-						DockerImageReference: "registry.default.local/default/test@sha256:381151ac5b7f775e8371e489f3479b84a4c004c90ceddb2ad80b6877215a892f",
-						Image:                "sha256:381151ac5b7f775e8371e489f3479b84a4c004c90ceddb2ad80b6877215a892f",
-						Generation:           2,
+			updatedRepo, err := storage.imageStreamRegistry.GetImageStream(apirequest.NewDefaultContext(), "test", &metav1.GetOptions{})
+			if err != nil {
+				t.Fatalf("%s: error retrieving updated repo: %s", name, err)
+			}
+			three := int64(3)
+			expectedStreamSpec := map[string]api.TagReference{
+				"another": {
+					Name: "another",
+					From: &kapi.ObjectReference{
+						Kind: "ImageStreamTag",
+						Name: "test:foo",
+					},
+					Generation: &three,
+					ReferencePolicy: api.TagReferencePolicy{
+						Type: api.SourceTagReferencePolicy,
 					},
 				},
-			},
-			"foo": {
-				Items: []api.TagEvent{
-					{
-						DockerImageReference: "registry.default.local/default/test@sha256:381151ac5b7f775e8371e489f3479b84a4c004c90ceddb2ad80b6877215a892f",
-						Image:                "sha256:381151ac5b7f775e8371e489f3479b84a4c004c90ceddb2ad80b6877215a892f",
-						Generation:           2,
+			}
+			expectedStreamStatus := map[string]api.TagEventList{
+				"another": {
+					Items: []api.TagEvent{
+						{
+							DockerImageReference: "registry.default.local/default/test@sha256:381151ac5b7f775e8371e489f3479b84a4c004c90ceddb2ad80b6877215a892f",
+							Image:                "sha256:381151ac5b7f775e8371e489f3479b84a4c004c90ceddb2ad80b6877215a892f",
+							Generation:           2,
+						},
 					},
 				},
-			},
-			"bar": {
-				Items: []api.TagEvent{
-					{
-						DockerImageReference: "registry.default.local/default/test@sha256:381151ac5b7f775e8371e489f3479b84a4c004c90ceddb2ad80b6877215a892f",
-						Image:                "sha256:381151ac5b7f775e8371e489f3479b84a4c004c90ceddb2ad80b6877215a892f",
-						Generation:           2,
+				"foo": {
+					Items: []api.TagEvent{
+						{
+							DockerImageReference: "registry.default.local/default/test@sha256:381151ac5b7f775e8371e489f3479b84a4c004c90ceddb2ad80b6877215a892f",
+							Image:                "sha256:381151ac5b7f775e8371e489f3479b84a4c004c90ceddb2ad80b6877215a892f",
+							Generation:           2,
+						},
 					},
 				},
-			},
-		}
+				"bar": {
+					Items: []api.TagEvent{
+						{
+							DockerImageReference: "registry.default.local/default/test@sha256:381151ac5b7f775e8371e489f3479b84a4c004c90ceddb2ad80b6877215a892f",
+							Image:                "sha256:381151ac5b7f775e8371e489f3479b84a4c004c90ceddb2ad80b6877215a892f",
+							Generation:           2,
+						},
+					},
+				},
+			}
 
-		if updatedRepo.Generation != 3 {
-			t.Errorf("%s: unexpected generation: %d", name, updatedRepo.Generation)
-		}
-		if e, a := expectedStreamStatus, updatedRepo.Status.Tags; !reflect.DeepEqual(e, a) {
-			t.Errorf("%s: stream spec:\nexpect=%#v\nactual=%#v", name, e, a)
-		}
-		if e, a := expectedStreamSpec, updatedRepo.Spec.Tags; !reflect.DeepEqual(e, a) {
-			t.Errorf("%s: stream spec:\nexpect=%#v\nactual=%#v", name, e, a)
-		}
-
+			if updatedRepo.Generation != 3 {
+				t.Errorf("%s: unexpected generation: %d", name, updatedRepo.Generation)
+			}
+			if e, a := expectedStreamStatus, updatedRepo.Status.Tags; !reflect.DeepEqual(e, a) {
+				t.Errorf("%s: stream spec:\nexpect=%#v\nactual=%#v", name, e, a)
+			}
+			if e, a := expectedStreamSpec, updatedRepo.Spec.Tags; !reflect.DeepEqual(e, a) {
+				t.Errorf("%s: stream spec:\nexpect=%#v\nactual=%#v", name, e, a)
+			}
+		}()
 	}
 }

@@ -9,10 +9,10 @@ import (
 
 	"github.com/golang/glog"
 
+	"k8s.io/apimachinery/pkg/api/resource"
+	utilerrs "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/resource"
-	utilerrs "k8s.io/kubernetes/pkg/util/errors"
-	"k8s.io/kubernetes/pkg/util/sets"
 
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	"github.com/openshift/origin/pkg/generate/app"
@@ -182,7 +182,6 @@ func Generate(paths ...string) (*templateapi.Template, error) {
 			errs = append(errs, err)
 			continue
 		}
-		repo.BuildWithDocker()
 
 		info := repo.Info()
 		if info == nil || info.Dockerfile == nil {
@@ -212,7 +211,7 @@ func Generate(paths ...string) (*templateapi.Template, error) {
 		image.ObjectName = k
 		image.Tag = "from"
 
-		pipeline, err := app.NewPipelineBuilder(k, nil, false).To(k).NewBuildPipeline(k, image, repo)
+		pipeline, err := app.NewPipelineBuilder(k, nil, nil, false).To(k).NewBuildPipeline(k, image, repo)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -281,7 +280,7 @@ func Generate(paths ...string) (*templateapi.Template, error) {
 				if len(v.WorkingDir) > 0 {
 					c.WorkingDir = v.WorkingDir
 				}
-				c.Env = append(c.Env, app.ParseEnvironment(v.Environment.Slice()...).List()...)
+				c.Env = append(c.Env, app.ParseEnvironmentAllowEmpty(v.Environment.Slice()...).List()...)
 				if uid, err := strconv.Atoi(v.User); err == nil {
 					uid64 := int64(uid)
 					if c.SecurityContext == nil {
@@ -365,7 +364,7 @@ func Generate(paths ...string) (*templateapi.Template, error) {
 				}
 			}
 
-			pipeline, err := app.NewPipelineBuilder(k, nil, true).To(k).NewImagePipeline(k, inputImage)
+			pipeline, err := app.NewPipelineBuilder(k, nil, nil, true).To(k).NewImagePipeline(k, inputImage)
 			if err != nil {
 				errs = append(errs, err)
 				break

@@ -6,6 +6,8 @@ import (
 	g "github.com/onsi/ginkgo"
 	o "github.com/onsi/gomega"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	exutil "github.com/openshift/origin/test/extended/util"
 )
 
@@ -18,27 +20,19 @@ var _ = g.Describe("[builds] build have source revision metadata", func() {
 
 	g.JustBeforeEach(func() {
 		g.By("waiting for builder service account")
-		err := exutil.WaitForBuilderAccount(oc.KubeREST().ServiceAccounts(oc.Namespace()))
+		err := exutil.WaitForBuilderAccount(oc.KubeClient().Core().ServiceAccounts(oc.Namespace()))
 		o.Expect(err).NotTo(o.HaveOccurred())
 		oc.Run("create").Args("-f", buildFixture).Execute()
 	})
 
 	g.Describe("started build", func() {
 		g.It("should contain source revision information", func() {
-			g.By("starting the build with")
-			out, err := oc.Run("start-build").Args("sample-build").Output()
-			fmt.Fprintf(g.GinkgoWriter, "\nstart-build output:\n%s\n", out)
-			o.Expect(err).NotTo(o.HaveOccurred())
+			g.By("starting the build")
+			br, _ := exutil.StartBuildAndWait(oc, "sample-build")
+			br.AssertSuccess()
 
-			g.By("waiting for the build to complete")
-			err = exutil.WaitForABuild(oc.REST().Builds(oc.Namespace()), "sample-build-1", exutil.CheckBuildSuccessFn, exutil.CheckBuildFailedFn)
-			if err != nil {
-				exutil.DumpBuildLogs("sample-build", oc)
-			}
-			o.Expect(err).NotTo(o.HaveOccurred())
-
-			g.By(fmt.Sprintf("verifying the build %q status", "sample-build-1"))
-			build, err := oc.REST().Builds(oc.Namespace()).Get("sample-build-1")
+			g.By(fmt.Sprintf("verifying the status of %q", br.BuildPath))
+			build, err := oc.Client().Builds(oc.Namespace()).Get(br.Build.Name, metav1.GetOptions{})
 			o.Expect(err).NotTo(o.HaveOccurred())
 			o.Expect(build.Spec.Revision).NotTo(o.BeNil())
 			o.Expect(build.Spec.Revision.Git).NotTo(o.BeNil())

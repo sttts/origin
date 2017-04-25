@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -65,9 +65,9 @@ func (g *MetricsGrabber) getMetricsFromNode(nodeName string, kubeletPort int) (s
 	var err error
 	var rawOutput []byte
 	go func() {
-		rawOutput, err = g.client.Get().
-			Prefix("proxy").
+		rawOutput, err = g.client.Core().RESTClient().Get().
 			Resource("nodes").
+			SubResource("proxy").
 			Name(fmt.Sprintf("%v:%v", nodeName, kubeletPort)).
 			Suffix("metrics").
 			Do().Raw()

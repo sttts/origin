@@ -6,25 +6,28 @@ import (
 
 	"github.com/spf13/cobra"
 
+	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
-	kerrors "k8s.io/kubernetes/pkg/util/errors"
 
+	"github.com/openshift/origin/pkg/cmd/templates"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
+	sdnapi "github.com/openshift/origin/pkg/sdn/api"
 )
 
-const (
-	IsolateProjectsNetworkCommandName = "isolate-projects"
+const IsolateProjectsNetworkCommandName = "isolate-projects"
 
-	isolateProjectsNetworkLong = `
-Isolate project network
+var (
+	isolateProjectsNetworkLong = templates.LongDesc(`
+		Isolate project network
 
-Allows projects to isolate their network from other projects when using the %[1]s network plugin.`
+		Allows projects to isolate their network from other projects when using the %[1]s network plugin.`)
 
-	isolateProjectsNetworkExample = `	# Provide isolation for project p1
-	%[1]s <p1>
+	isolateProjectsNetworkExample = templates.Examples(`
+		# Provide isolation for project p1
+		%[1]s <p1>
 
-	# Allow all projects with label name=top-secret to have their own isolated project network
-	%[1]s --selector='name=top-secret'`
+		# Allow all projects with label name=top-secret to have their own isolated project network
+		%[1]s --selector='name=top-secret'`)
 )
 
 type IsolateOptions struct {
@@ -38,7 +41,7 @@ func NewCmdIsolateProjectsNetwork(commandName, fullName string, f *clientcmd.Fac
 	cmd := &cobra.Command{
 		Use:     commandName,
 		Short:   "Isolate project network",
-		Long:    fmt.Sprintf(isolateProjectsNetworkLong, ovsPluginName),
+		Long:    fmt.Sprintf(isolateProjectsNetworkLong, sdnapi.MultiTenantPluginName),
 		Example: fmt.Sprintf(isolateProjectsNetworkExample, fullName),
 		Run: func(c *cobra.Command, args []string) {
 			if err := opts.Complete(f, c, args, out); err != nil {
@@ -69,9 +72,9 @@ func (i *IsolateOptions) Run() error {
 
 	errList := []error{}
 	for _, project := range projects {
-		// TBD: Create or Update network namespace
-		// TODO: Fix this once we move VNID allocation to REST layer
-		errList = append(errList, fmt.Errorf("Project '%s' can not be isolated. Isolate project network feature yet to be implemented!", project.ObjectMeta.Name))
+		if err = i.Options.UpdatePodNetwork(project.Name, sdnapi.IsolatePodNetwork, ""); err != nil {
+			errList = append(errList, fmt.Errorf("Network isolation for project %q failed, error: %v", project.Name, err))
+		}
 	}
 	return kerrors.NewAggregate(errList)
 }

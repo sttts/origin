@@ -1,13 +1,11 @@
-// +build integration
-
 package integration
 
 import (
 	"reflect"
 	"testing"
 
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
 	testutil "github.com/openshift/origin/test/util"
@@ -16,6 +14,7 @@ import (
 
 func TestDiscoveryGroupVersions(t *testing.T) {
 	testutil.RequireEtcd(t)
+	defer testutil.DumpEtcdOnFailure(t)
 	_, clusterAdminKubeConfig, err := testserver.StartTestMasterAPI()
 	if err != nil {
 		t.Fatalf("unexpected error starting test master: %v", err)
@@ -32,12 +31,13 @@ func TestDiscoveryGroupVersions(t *testing.T) {
 	}
 
 	for _, resource := range resources {
-		gv, err := unversioned.ParseGroupVersion(resource.GroupVersion)
+		gv, err := schema.ParseGroupVersion(resource.GroupVersion)
 		if err != nil {
 			continue
 		}
-		allowedVersions := sets.NewString(configapi.KubeAPIGroupsToAllowedVersions[gv.Group]...)
-		if !allowedVersions.Has(gv.Version) {
+		allowedKubeVersions := sets.NewString(configapi.KubeAPIGroupsToAllowedVersions[gv.Group]...)
+		allowedOriginVersions := sets.NewString(configapi.OriginAPIGroupsToAllowedVersions[gv.Group]...)
+		if !allowedKubeVersions.Has(gv.Version) && !allowedOriginVersions.Has(gv.Version) {
 			t.Errorf("Disallowed group/version found in discovery: %#v", gv)
 		}
 	}
@@ -45,11 +45,24 @@ func TestDiscoveryGroupVersions(t *testing.T) {
 	expectedGroupVersions := sets.NewString()
 	for group, versions := range configapi.KubeAPIGroupsToAllowedVersions {
 		for _, version := range versions {
-			expectedGroupVersions.Insert(unversioned.GroupVersion{Group: group, Version: version}.String())
+			expectedGroupVersions.Insert(schema.GroupVersion{Group: group, Version: version}.String())
+		}
+	}
+	for group, versions := range configapi.OriginAPIGroupsToAllowedVersions {
+		for _, version := range versions {
+			expectedGroupVersions.Insert(schema.GroupVersion{Group: group, Version: version}.String())
 		}
 	}
 
-	discoveredGroupVersions := sets.StringKeySet(resources)
+	discoveredGroupVersions := sets.NewString()
+	for _, resource := range resources {
+		gv, err := schema.ParseGroupVersion(resource.GroupVersion)
+		if err != nil {
+			t.Errorf("Error parsing gv %q: %v", resource.GroupVersion, err)
+			continue
+		}
+		discoveredGroupVersions.Insert(gv.String())
+	}
 	if !reflect.DeepEqual(discoveredGroupVersions, expectedGroupVersions) {
 		t.Fatalf("Expected %#v, got %#v", expectedGroupVersions.List(), discoveredGroupVersions.List())
 	}

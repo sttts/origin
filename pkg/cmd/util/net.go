@@ -9,7 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"k8s.io/kubernetes/pkg/util/sets"
+	knet "k8s.io/apimachinery/pkg/util/net"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/golang/glog"
 )
@@ -18,7 +19,7 @@ import (
 func TryListen(network, hostPort string) (bool, error) {
 	l, err := net.Listen(network, hostPort)
 	if err != nil {
-		glog.V(5).Infof("Failure while checking listen on %s: %v", err)
+		glog.V(5).Infof("Failure while checking listen on %s: %v", hostPort, err)
 		return false, err
 	}
 	defer l.Close()
@@ -123,8 +124,9 @@ func TransportFor(ca string, certFile string, keyFile string) (http.RoundTripper
 	}
 
 	// Copy default transport
-	transport := *http.DefaultTransport.(*http.Transport)
-	transport.TLSClientConfig = &tls.Config{}
+	transport := knet.SetTransportDefaults(&http.Transport{
+		TLSClientConfig: &tls.Config{},
+	})
 
 	if len(ca) != 0 {
 		roots, err := CertPoolFromFile(ca)
@@ -142,7 +144,7 @@ func TransportFor(ca string, certFile string, keyFile string) (http.RoundTripper
 		transport.TLSClientConfig.Certificates = []tls.Certificate{cert}
 	}
 
-	return &transport, nil
+	return transport, nil
 }
 
 // GetCertificateFunc returns a function that can be used in tls.Config#GetCertificate

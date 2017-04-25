@@ -1,13 +1,13 @@
 package etcd
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/registry/generic"
+	"k8s.io/apiserver/pkg/registry/generic/registry"
+	kapirest "k8s.io/apiserver/pkg/registry/rest"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kapirest "k8s.io/kubernetes/pkg/api/rest"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
-	"k8s.io/kubernetes/pkg/registry/generic"
-	"k8s.io/kubernetes/pkg/registry/generic/registry"
-	"k8s.io/kubernetes/pkg/runtime"
 
 	"github.com/openshift/origin/pkg/route"
 	"github.com/openshift/origin/pkg/route/api"
@@ -22,30 +22,20 @@ type REST struct {
 // NewREST returns a RESTStorage object that will work against routes.
 func NewREST(optsGetter restoptions.Getter, allocator route.RouteAllocator) (*REST, *StatusREST, error) {
 	strategy := rest.NewStrategy(allocator)
-	prefix := "/routes"
 
 	store := &registry.Store{
-		NewFunc:     func() runtime.Object { return &api.Route{} },
-		NewListFunc: func() runtime.Object { return &api.RouteList{} },
-		KeyRootFunc: func(ctx kapi.Context) string {
-			return registry.NamespaceKeyRootFunc(ctx, prefix)
-		},
-		KeyFunc: func(ctx kapi.Context, id string) (string, error) {
-			return registry.NamespaceKeyFunc(ctx, prefix, id)
-		},
-		ObjectNameFunc: func(obj runtime.Object) (string, error) {
-			return obj.(*api.Route).Name, nil
-		},
-		PredicateFunc: func(label labels.Selector, field fields.Selector) generic.Matcher {
-			return rest.Matcher(label, field)
-		},
+		Copier:            kapi.Scheme,
+		NewFunc:           func() runtime.Object { return &api.Route{} },
+		NewListFunc:       func() runtime.Object { return &api.RouteList{} },
+		PredicateFunc:     rest.Matcher,
 		QualifiedResource: api.Resource("routes"),
 
 		CreateStrategy: strategy,
 		UpdateStrategy: strategy,
 	}
 
-	if err := restoptions.ApplyOptions(optsGetter, store, prefix); err != nil {
+	options := &generic.StoreOptions{RESTOptions: optsGetter, AttrFunc: rest.GetAttrs}
+	if err := store.CompleteWithOptions(options); err != nil {
 		return nil, nil, err
 	}
 
@@ -60,12 +50,20 @@ type StatusREST struct {
 	store *registry.Store
 }
 
+// StatusREST implements Patcher
+var _ = kapirest.Patcher(&StatusREST{})
+
 // New creates a new route resource
 func (r *StatusREST) New() runtime.Object {
 	return &api.Route{}
 }
 
+// Get retrieves the object from the storage. It is required to support Patch.
+func (r *StatusREST) Get(ctx apirequest.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
+	return r.store.Get(ctx, name, options)
+}
+
 // Update alters the status subset of an object.
-func (r *StatusREST) Update(ctx kapi.Context, name string, objInfo kapirest.UpdatedObjectInfo) (runtime.Object, bool, error) {
+func (r *StatusREST) Update(ctx apirequest.Context, name string, objInfo kapirest.UpdatedObjectInfo) (runtime.Object, bool, error) {
 	return r.store.Update(ctx, name, objInfo)
 }

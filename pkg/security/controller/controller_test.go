@@ -5,10 +5,12 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgotesting "k8s.io/client-go/testing"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/client/unversioned/testclient"
-	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 
 	"github.com/openshift/origin/pkg/security"
 	"github.com/openshift/origin/pkg/security/mcs"
@@ -17,9 +19,9 @@ import (
 )
 
 func TestController(t *testing.T) {
-	var action testclient.Action
-	client := &testclient.Fake{}
-	client.AddReactor("*", "*", func(a testclient.Action) (handled bool, ret runtime.Object, err error) {
+	var action clientgotesting.Action
+	client := &fake.Clientset{}
+	client.AddReactor("*", "*", func(a clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
 		action = a
 		return true, (*kapi.Namespace)(nil), nil
 	})
@@ -30,15 +32,15 @@ func TestController(t *testing.T) {
 	c := Allocation{
 		uid:    uida,
 		mcs:    DefaultMCSAllocation(uidr, mcsr, 5),
-		client: client.Namespaces(),
+		client: client.Core().Namespaces(),
 	}
 
-	err := c.Next(&kapi.Namespace{ObjectMeta: kapi.ObjectMeta{Name: "test"}})
+	err := c.Next(&kapi.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "test"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got := action.(testclient.CreateAction).GetObject().(*kapi.Namespace)
+	got := action.(clientgotesting.CreateAction).GetObject().(*kapi.Namespace)
 	if got.Annotations[security.UIDRangeAnnotation] != "10/2" {
 		t.Errorf("unexpected uid annotation: %#v", got)
 	}
@@ -57,7 +59,7 @@ func TestControllerError(t *testing.T) {
 	testCases := map[string]struct {
 		err     func() error
 		errFn   func(err error) bool
-		reactFn testclient.ReactionFunc
+		reactFn clientgotesting.ReactionFunc
 		actions int
 	}{
 		"not found": {
@@ -72,9 +74,9 @@ func TestControllerError(t *testing.T) {
 		},
 		"conflict": {
 			actions: 4,
-			reactFn: func(a testclient.Action) (bool, runtime.Object, error) {
+			reactFn: func(a clientgotesting.Action) (bool, runtime.Object, error) {
 				if a.Matches("get", "namespaces") {
-					return true, &kapi.Namespace{ObjectMeta: kapi.ObjectMeta{Name: "test"}}, nil
+					return true, &kapi.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "test"}}, nil
 				}
 				return true, (*kapi.Namespace)(nil), errors.NewConflict(kapi.Resource("namespace"), "test", fmt.Errorf("test conflict"))
 			},
@@ -85,10 +87,10 @@ func TestControllerError(t *testing.T) {
 	}
 
 	for s, testCase := range testCases {
-		client := &testclient.Fake{}
+		client := &fake.Clientset{}
 
 		if testCase.reactFn == nil {
-			testCase.reactFn = func(a testclient.Action) (bool, runtime.Object, error) {
+			testCase.reactFn = func(a clientgotesting.Action) (bool, runtime.Object, error) {
 				return true, (*kapi.Namespace)(nil), testCase.err()
 			}
 		}
@@ -101,10 +103,10 @@ func TestControllerError(t *testing.T) {
 		c := Allocation{
 			uid:    uida,
 			mcs:    DefaultMCSAllocation(uidr, mcsr, 5),
-			client: client.Namespaces(),
+			client: client.Core().Namespaces(),
 		}
 
-		err := c.Next(&kapi.Namespace{ObjectMeta: kapi.ObjectMeta{Name: "test"}})
+		err := c.Next(&kapi.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "test"}})
 		if !testCase.errFn(err) {
 			t.Errorf("%s: unexpected error: %v", s, err)
 		}

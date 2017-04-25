@@ -21,7 +21,7 @@ var _ = g.Describe("[builds][Slow] result image should have proper labels set", 
 
 	g.JustBeforeEach(func() {
 		g.By("waiting for builder service account")
-		err := exutil.WaitForBuilderAccount(oc.AdminKubeREST().ServiceAccounts(oc.Namespace()))
+		err := exutil.WaitForBuilderAccount(oc.AdminKubeClient().Core().ServiceAccounts(oc.Namespace()))
 		o.Expect(err).NotTo(o.HaveOccurred())
 	})
 
@@ -38,22 +38,14 @@ var _ = g.Describe("[builds][Slow] result image should have proper labels set", 
 			o.Expect(err).NotTo(o.HaveOccurred())
 
 			g.By("starting a test build")
-			buildName, err := oc.Run("start-build").Args("test").Output()
-			fmt.Fprintf(g.GinkgoWriter, "\nstart-build output:\n%s\n", buildName)
-			o.Expect(err).NotTo(o.HaveOccurred())
-
-			g.By("o.Expecting the S2I build is in Complete phase")
-			err = exutil.WaitForABuild(oc.REST().Builds(oc.Namespace()), buildName, exutil.CheckBuildSuccessFn, exutil.CheckBuildFailedFn)
-			if err != nil {
-				exutil.DumpBuildLogs("test", oc)
-			}
-			o.Expect(err).NotTo(o.HaveOccurred())
+			br, err := exutil.StartBuildAndWait(oc, "test")
+			br.AssertSuccess()
 
 			g.By("getting the Docker image reference from ImageStream")
-			imageRef, err := exutil.GetDockerImageReference(oc.REST().ImageStreams(oc.Namespace()), "test", "latest")
+			imageRef, err := exutil.GetDockerImageReference(oc.Client().ImageStreams(oc.Namespace()), "test", "latest")
 			o.Expect(err).NotTo(o.HaveOccurred())
 
-			imageLabels, err := eximages.GetImageLabels(oc.REST().ImageStreamImages(oc.Namespace()), "test", imageRef)
+			imageLabels, err := eximages.GetImageLabels(oc.Client().ImageStreamImages(oc.Namespace()), "test", imageRef)
 			o.Expect(err).NotTo(o.HaveOccurred())
 
 			g.By("inspecting the new image for proper Docker labels")
@@ -75,22 +67,14 @@ var _ = g.Describe("[builds][Slow] result image should have proper labels set", 
 			o.Expect(err).NotTo(o.HaveOccurred())
 
 			g.By("starting a test build")
-			buildName, err := oc.Run("start-build").Args("test").Output()
-			fmt.Fprintf(g.GinkgoWriter, "\nstart-build output:\n%s\n", buildName)
-			o.Expect(err).NotTo(o.HaveOccurred())
-
-			g.By("o.Expecting the Docker build is in Complete phase")
-			err = exutil.WaitForABuild(oc.REST().Builds(oc.Namespace()), buildName, exutil.CheckBuildSuccessFn, exutil.CheckBuildFailedFn)
-			if err != nil {
-				exutil.DumpBuildLogs("test", oc)
-			}
-			o.Expect(err).NotTo(o.HaveOccurred())
+			br, err := exutil.StartBuildAndWait(oc, "test")
+			br.AssertSuccess()
 
 			g.By("getting the Docker image reference from ImageStream")
-			imageRef, err := exutil.GetDockerImageReference(oc.REST().ImageStreams(oc.Namespace()), "test", "latest")
+			imageRef, err := exutil.GetDockerImageReference(oc.Client().ImageStreams(oc.Namespace()), "test", "latest")
 			o.Expect(err).NotTo(o.HaveOccurred())
 
-			imageLabels, err := eximages.GetImageLabels(oc.REST().ImageStreamImages(oc.Namespace()), "test", imageRef)
+			imageLabels, err := eximages.GetImageLabels(oc.Client().ImageStreamImages(oc.Namespace()), "test", imageRef)
 			o.Expect(err).NotTo(o.HaveOccurred())
 
 			g.By("inspecting the new image for proper Docker labels")
@@ -100,7 +84,7 @@ var _ = g.Describe("[builds][Slow] result image should have proper labels set", 
 	})
 })
 
-// ExpectOpenShiftLabels tests if builded Docker image contains appropriate
+// ExpectOpenShiftLabels tests if built Docker image contains appropriate
 // labels.
 func ExpectOpenShiftLabels(labels map[string]string) error {
 	ExpectedLabels := []string{
@@ -111,11 +95,12 @@ func ExpectOpenShiftLabels(labels map[string]string) error {
 		"io.openshift.build.commit.message",
 		"io.openshift.build.source-location",
 		"io.openshift.build.source-context-dir",
+		"user-specified-label",
 	}
 
 	for _, label := range ExpectedLabels {
 		if labels[label] == "" {
-			return fmt.Errorf("Builded image doesn't contain proper Docker image labels. Missing %q label", label)
+			return fmt.Errorf("Built image doesn't contain proper Docker image labels. Missing %q label", label)
 		}
 	}
 

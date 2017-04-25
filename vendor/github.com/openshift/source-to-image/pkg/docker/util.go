@@ -2,150 +2,189 @@ package docker
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
-	client "github.com/fsouza/go-dockerclient"
-
+	"github.com/docker/docker/cliconfig"
+	"github.com/docker/engine-api/client"
+	"github.com/openshift/origin/pkg/image/reference"
 	"github.com/openshift/source-to-image/pkg/api"
-	"github.com/openshift/source-to-image/pkg/errors"
+	s2ierr "github.com/openshift/source-to-image/pkg/errors"
 	utilglog "github.com/openshift/source-to-image/pkg/util/glog"
 	"github.com/openshift/source-to-image/pkg/util/user"
 )
 
-// glog is a placeholder until the builders pass an output stream down
-// client facing libraries should not be using glog
-var glog = utilglog.StderrLog
+var (
+	// glog is a placeholder until the builders pass an output stream down client
+	// facing libraries should not be using glog
+	glog = utilglog.StderrLog
 
-// ImageReference points to a Docker image.
-type ImageReference struct {
-	Registry  string
-	Namespace string
-	Name      string
-	Tag       string
-	ID        string
+	// DefaultEntrypoint is the default entry point used when starting containers
+	DefaultEntrypoint = []string{"/usr/bin/env"}
+)
+
+// AuthConfigurations maps a registry name to an AuthConfig, as used for
+// example in the .dockercfg file
+type AuthConfigurations struct {
+	Configs map[string]api.AuthConfig
+}
+
+type dockerConfig struct {
+	Auth  string `json:"auth"`
+	Email string `json:"email"`
 }
 
 const (
-	// maxErrorOutput is the maximum length of the error output saved for processing
+	// maxErrorOutput is the maximum length of the error output saved for
+	// processing
 	maxErrorOutput  = 1024
 	defaultRegistry = "https://index.docker.io/v1/"
 )
 
-// GetImageRegistryAuth retrieves the appropriate docker client authentication object for a given
-// image name and a given set of client authentication objects.
-func GetImageRegistryAuth(auths *client.AuthConfigurations, imageName string) client.AuthConfiguration {
+// GetImageRegistryAuth retrieves the appropriate docker client authentication
+// object for a given image name and a given set of client authentication
+// objects.
+func GetImageRegistryAuth(auths *AuthConfigurations, imageName string) api.AuthConfig {
 	glog.V(5).Infof("Getting docker credentials for %s", imageName)
-	spec, err := ParseImageReference(imageName)
+	if auths == nil {
+		return api.AuthConfig{}
+	}
+	ref, err := reference.ParseNamedDockerImageReference(imageName)
 	if err != nil {
 		glog.V(0).Infof("error: Failed to parse docker reference %s", imageName)
-		return client.AuthConfiguration{}
+		return api.AuthConfig{}
 	}
-
-	if auth, ok := auths.Configs[spec.Registry]; ok {
-		glog.V(5).Infof("Using %s[%s] credentials for pulling %s", auth.Email, spec.Registry, imageName)
-		return auth
+	if ref.Registry != "" {
+		if auth, ok := auths.Configs[ref.Registry]; ok {
+			glog.V(5).Infof("Using %s[%s] credentials for pulling %s", auth.Email, ref.Registry, imageName)
+			return auth
+		}
 	}
 	if auth, ok := auths.Configs[defaultRegistry]; ok {
 		glog.V(5).Infof("Using %s credentials for pulling %s", auth.Email, imageName)
 		return auth
 	}
-	return client.AuthConfiguration{}
+	return api.AuthConfig{}
 }
 
-// LoadImageRegistryAuth loads and returns the set of client auth objects from a docker config
-// json file.
-func LoadImageRegistryAuth(dockerCfg io.Reader) *client.AuthConfigurations {
-	auths, err := client.NewAuthConfigurations(dockerCfg)
+// LoadImageRegistryAuth loads and returns the set of client auth objects from
+// a docker config json file.
+func LoadImageRegistryAuth(dockerCfg io.Reader) *AuthConfigurations {
+	auths, err := NewAuthConfigurations(dockerCfg)
 	if err != nil {
-		glog.V(0).Infof("error: Unable to load docker config")
+		glog.V(0).Infof("error: Unable to load docker config: %v", err)
 		return nil
 	}
 	return auths
 }
 
-// LoadAndGetImageRegistryAuth loads the set of client auth objects from a docker config file
-// and returns the appropriate client auth object for a given image name.
-func LoadAndGetImageRegistryAuth(dockerCfg io.Reader, imageName string) client.AuthConfiguration {
-	auths, err := client.NewAuthConfigurations(dockerCfg)
+// begin next 3 methods borrowed from go-dockerclient
+
+// NewAuthConfigurations finishes creating the auth config array s2i pulls from
+// any auth config file it is pointed to when started from the command line
+func NewAuthConfigurations(r io.Reader) (*AuthConfigurations, error) {
+	var auth *AuthConfigurations
+	confs, err := parseDockerConfig(r)
 	if err != nil {
-		glog.V(0).Infof("error: Unable to load docker config")
-		return client.AuthConfiguration{}
+		return nil, err
 	}
-	return GetImageRegistryAuth(auths, imageName)
+	auth, err = authConfigs(confs)
+	if err != nil {
+		return nil, err
+	}
+	return auth, nil
 }
 
-// StreamContainerIO takes data from the Reader and redirects to the log function (typically we pass in
-// glog.Error for stderr and glog.Info for stdout
-func StreamContainerIO(errStream io.Reader, errOutput *string, log func(...interface{})) {
-	scanner := bufio.NewReader(errStream)
-	for {
-		text, err := scanner.ReadString('\n')
+// parseDockerConfig does the json unmarshalling of the data we read from the
+// file
+func parseDockerConfig(r io.Reader) (map[string]dockerConfig, error) {
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(r)
+	byteData := buf.Bytes()
+
+	confsWrapper := struct {
+		Auths map[string]dockerConfig `json:"auths"`
+	}{}
+	if err := json.Unmarshal(byteData, &confsWrapper); err == nil {
+		if len(confsWrapper.Auths) > 0 {
+			return confsWrapper.Auths, nil
+		}
+	}
+
+	var confs map[string]dockerConfig
+	if err := json.Unmarshal(byteData, &confs); err != nil {
+		return nil, err
+	}
+	return confs, nil
+}
+
+// authConfigs converts a dockerConfigs map to a AuthConfigurations object.
+func authConfigs(confs map[string]dockerConfig) (*AuthConfigurations, error) {
+	c := &AuthConfigurations{
+		Configs: make(map[string]api.AuthConfig),
+	}
+	for reg, conf := range confs {
+		if len(conf.Auth) == 0 {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(conf.Auth)
 		if err != nil {
-			// we're ignoring ErrClosedPipe, as this is information
-			// the docker container ended streaming logs
-			if glog.Is(2) && err != io.ErrClosedPipe && err != io.EOF {
-				glog.V(0).Infof("error: Error reading docker stderr, %v", err)
-			}
-			break
+			return nil, err
 		}
-		log(text)
-		if errOutput != nil && len(*errOutput) < maxErrorOutput {
-			*errOutput += text + "\n"
+		userpass := strings.SplitN(string(data), ":", 2)
+		if len(userpass) != 2 {
+			return nil, fmt.Errorf("cannot parse username/password from %s", userpass)
+		}
+		c.Configs[reg] = api.AuthConfig{
+			Email:         conf.Email,
+			Username:      userpass[0],
+			Password:      userpass[1],
+			ServerAddress: reg,
 		}
 	}
+	return c, nil
 }
 
-// ParseImageReference parses a Docker pull spec string into a ImageReference.
-// FIXME: This code was copied from OpenShift repository.
-func ParseImageReference(spec string) (ImageReference, error) {
-	var ref ImageReference
+// end block of 3 methods borrowed from go-dockerclient
 
-	// TODO replace with docker version once docker/docker PR11109 is merged upstream
-	stream, tag, id := parseRepositoryTag(spec)
-
-	repoParts := strings.Split(stream, "/")
-	switch len(repoParts) {
-	case 2:
-		if strings.Contains(repoParts[0], ":") {
-			// registry/name
-			ref.Registry = repoParts[0]
-			ref.Namespace = "library"
-			ref.Name = repoParts[1]
-			ref.Tag = tag
-			ref.ID = id
-			return ref, nil
+// StreamContainerIO starts a goroutine to take data from the reader and
+// redirect it to the log function (typically we pass in glog.Error for stderr
+// and glog.Info for stdout. The caller should wrap glog functions in a closure
+// to ensure accurate line numbers are reported:
+// https://github.com/openshift/source-to-image/issues/558 .
+// StreamContainerIO returns a channel which is closed after the reader is
+// closed.
+func StreamContainerIO(r io.Reader, errOutput *string, log func(string)) <-chan struct{} {
+	c := make(chan struct{}, 1)
+	go func() {
+		reader := bufio.NewReader(r)
+		for {
+			text, err := reader.ReadString('\n')
+			if text != "" {
+				log(text)
+			}
+			if errOutput != nil && len(*errOutput) < maxErrorOutput {
+				*errOutput += text + "\n"
+			}
+			if err != nil {
+				if glog.Is(2) && err != io.EOF {
+					glog.V(0).Infof("error: Error reading docker stdout/stderr: %#v", err)
+				}
+				break
+			}
 		}
-		// namespace/name
-		ref.Namespace = repoParts[0]
-		ref.Name = repoParts[1]
-		ref.Tag = tag
-		ref.ID = id
-		return ref, nil
-	case 3:
-		// registry/namespace/name
-		ref.Registry = repoParts[0]
-		ref.Namespace = repoParts[1]
-		ref.Name = repoParts[2]
-		ref.Tag = tag
-		ref.ID = id
-		return ref, nil
-	case 1:
-		// name
-		if len(repoParts[0]) == 0 {
-			return ref, fmt.Errorf("the docker pull spec %q must be two or three segments separated by slashes", spec)
-		}
-		ref.Name = repoParts[0]
-		ref.Tag = tag
-		ref.ID = id
-		return ref, nil
-	default:
-		return ref, fmt.Errorf("the docker pull spec %q must be two or three segments separated by slashes", spec)
-	}
+		close(c)
+	}()
+	return c
 }
 
 // TODO remove (base, tag, id)
@@ -165,21 +204,15 @@ func parseRepositoryTag(repos string) (string, string, string) {
 	return repos, "", ""
 }
 
-// PullImage pulls the Docker image specifies by name taking the pull policy
+// PullImage pulls the Docker image specified by name taking the pull policy
 // into the account.
-// TODO: The 'force' option will be removed
-func PullImage(name string, d Docker, policy api.PullPolicy, force bool) (*PullResult, error) {
-	// TODO: Remove this after we deprecate --force-pull
-	if force {
-		policy = api.PullAlways
-	}
-
+func PullImage(name string, d Docker, policy api.PullPolicy) (*PullResult, error) {
 	if len(policy) == 0 {
-		return nil, fmt.Errorf("the policy for pull image must be set")
+		return nil, errors.New("the policy for pull image must be set")
 	}
 
 	var (
-		image *client.Image
+		image *api.Image
 		err   error
 	)
 	switch policy {
@@ -195,12 +228,15 @@ func PullImage(name string, d Docker, policy api.PullPolicy, force bool) (*PullR
 	return &PullResult{Image: image, OnBuild: d.IsImageOnBuild(name)}, err
 }
 
-// CheckAllowedUser retrieves the user for a Docker image and checks that user against
-// an allowed range of uids.
-// - If the range of users is not empty, then the user on the Docker image needs to be a numeric user
-// - The user's uid must be contained by the range(s) specified by the uids Rangelist
-// - If the image contains ONBUILD instructions and those instructions also contain a USER directive,
-//   then the user specified by that USER directive must meet the uid range criteria as well.
+// CheckAllowedUser retrieves the user for a Docker image and checks that user
+// against an allowed range of uids.
+// - If the range of users is not empty, then the user on the Docker image
+// needs to be a numeric user
+// - The user's uid must be contained by the range(s) specified by the uids
+// Rangelist
+// - If the image contains ONBUILD instructions and those instructions also
+// contain a USER directive, then the user specified by that USER directive
+// must meet the uid range criteria as well.
 func CheckAllowedUser(d Docker, imageName string, uids user.RangeList, isOnbuild bool) error {
 	if uids == nil || uids.Empty() {
 		return nil
@@ -211,7 +247,7 @@ func CheckAllowedUser(d Docker, imageName string, uids user.RangeList, isOnbuild
 	}
 	imageUser := extractUser(imageUserSpec)
 	if !user.IsUserAllowed(imageUser, &uids) {
-		return errors.NewBuilderUserNotAllowedError(imageName, false)
+		return s2ierr.NewUserNotAllowedError(imageName, false)
 	}
 	if isOnbuild {
 		cmds, err := d.GetOnBuild(imageName)
@@ -219,7 +255,7 @@ func CheckAllowedUser(d Docker, imageName string, uids user.RangeList, isOnbuild
 			return err
 		}
 		if !isOnbuildAllowed(cmds, &uids) {
-			return errors.NewBuilderUserNotAllowedError(imageName, true)
+			return s2ierr.NewUserNotAllowedError(imageName, true)
 		}
 	}
 	return nil
@@ -227,9 +263,9 @@ func CheckAllowedUser(d Docker, imageName string, uids user.RangeList, isOnbuild
 
 var dockerLineDelim = regexp.MustCompile(`[\t\v\f\r ]+`)
 
-// isOnbuildAllowed checks a list of Docker ONBUILD instructions for
-// user directives. It ensures that any users specified by the directives
-// falls within the specified range list of users.
+// isOnbuildAllowed checks a list of Docker ONBUILD instructions for user
+// directives. It ensures that any users specified by the directives falls
+// within the specified range list of users.
 func isOnbuildAllowed(directives []string, allowed *user.RangeList) bool {
 	for _, line := range directives {
 		parts := dockerLineDelim.Split(line, 2)
@@ -253,31 +289,23 @@ func extractUser(userSpec string) string {
 	return strings.TrimSpace(user)
 }
 
-// IsReachable returns true if the Docker daemon is reachable from s2i
-func IsReachable(config *api.Config) bool {
+// CheckReachable returns if the Docker daemon is reachable from s2i
+func CheckReachable(config *api.Config) error {
 	d, err := New(config.DockerConfig, config.PullAuthentication)
 	if err != nil {
-		return false
+		return err
 	}
-	return d.Ping() == nil
+	_, err = d.Version()
+	return err
 }
 
-// GetBuilderImage processes the config and performs operations necessary to make
-// the Docker image specified as BuilderImage available locally.
-// It returns information about the base image, containing metadata necessary
-// for choosing the right STI build strategy.
-func GetBuilderImage(config *api.Config) (*PullResult, error) {
-	d, err := New(config.DockerConfig, config.PullAuthentication)
+func pullAndCheck(image string, docker Docker, pullPolicy api.PullPolicy, config *api.Config) (*PullResult, error) {
+	r, err := PullImage(image, docker, pullPolicy)
 	if err != nil {
 		return nil, err
 	}
 
-	r, err := PullImage(config.BuilderImage, d, config.BuilderPullPolicy, config.ForcePull)
-	if err != nil {
-		return nil, err
-	}
-
-	err = CheckAllowedUser(d, config.BuilderImage, config.AllowedUIDs, r.OnBuild)
+	err = CheckAllowedUser(docker, image, config.AllowedUIDs, r.OnBuild)
 	if err != nil {
 		return nil, err
 	}
@@ -285,16 +313,65 @@ func GetBuilderImage(config *api.Config) (*PullResult, error) {
 	return r, nil
 }
 
+// GetBuilderImage processes the config and performs operations necessary to
+// make the Docker image specified as BuilderImage available locally. It
+// returns information about the base image, containing metadata necessary for
+// choosing the right STI build strategy.
+func GetBuilderImage(config *api.Config) (*PullResult, error) {
+	d, err := New(config.DockerConfig, config.PullAuthentication)
+	if err != nil {
+		return nil, err
+	}
+
+	return pullAndCheck(config.BuilderImage, d, config.BuilderPullPolicy, config)
+}
+
+// GetRebuildImage obtains the metadata information for the image specified in
+// a s2i rebuild operation. Assumptions are made that the build is available
+// locally since it should have been previously built.
+func GetRebuildImage(config *api.Config) (*PullResult, error) {
+	d, err := New(config.DockerConfig, config.PullAuthentication)
+	if err != nil {
+		return nil, err
+	}
+
+	return pullAndCheck(config.Tag, d, config.BuilderPullPolicy, config)
+}
+
+// GetRuntimeImage processes the config and performs operations necessary to
+// make the Docker image specified as RuntimeImage available locally.
+func GetRuntimeImage(config *api.Config, docker Docker) error {
+	_, err := pullAndCheck(config.RuntimeImage, docker, config.RuntimeImagePullPolicy, config)
+	return err
+}
+
+// GetDefaultDockerConfig checks relevant Docker environment variables to
+// provide defaults for our command line flags
 func GetDefaultDockerConfig() *api.DockerConfig {
 	cfg := &api.DockerConfig{}
+
 	if cfg.Endpoint = os.Getenv("DOCKER_HOST"); cfg.Endpoint == "" {
-		cfg.Endpoint = "unix:///var/run/docker.sock"
+		cfg.Endpoint = client.DefaultDockerHost
+
+		// TODO: remove this when we bump engine-api to >=
+		// cf82c64276ebc2501e72b241f9fdc1e21e421743
+		if runtime.GOOS == "darwin" {
+			cfg.Endpoint = "unix:///var/run/docker.sock"
+		}
 	}
-	if os.Getenv("DOCKER_TLS_VERIFY") == "1" {
-		certPath := os.Getenv("DOCKER_CERT_PATH")
-		cfg.CertFile = filepath.Join(certPath, "cert.pem")
-		cfg.KeyFile = filepath.Join(certPath, "key.pem")
-		cfg.CAFile = filepath.Join(certPath, "ca.pem")
+
+	certPath := os.Getenv("DOCKER_CERT_PATH")
+	if certPath == "" {
+		certPath = cliconfig.ConfigDir()
 	}
+
+	cfg.CertFile = filepath.Join(certPath, "cert.pem")
+	cfg.KeyFile = filepath.Join(certPath, "key.pem")
+	cfg.CAFile = filepath.Join(certPath, "ca.pem")
+
+	if tlsVerify := os.Getenv("DOCKER_TLS_VERIFY"); tlsVerify != "" {
+		cfg.TLSVerify = true
+	}
+
 	return cfg
 }

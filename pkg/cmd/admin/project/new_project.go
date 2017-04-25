@@ -7,14 +7,18 @@ import (
 
 	"github.com/spf13/cobra"
 
-	kerrors "k8s.io/kubernetes/pkg/api/errors"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	errorsutil "k8s.io/apimachinery/pkg/util/errors"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
-	errorsutil "k8s.io/kubernetes/pkg/util/errors"
 
+	oapi "github.com/openshift/origin/pkg/api"
 	"github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/cmd/admin/policy"
 	"github.com/openshift/origin/pkg/cmd/server/bootstrappolicy"
+	"github.com/openshift/origin/pkg/cmd/templates"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
+
 	projectapi "github.com/openshift/origin/pkg/project/api"
 )
 
@@ -32,12 +36,12 @@ type NewProjectOptions struct {
 	AdminUser string
 }
 
-const newProjectLong = `
-Create a new project
+var newProjectLong = templates.LongDesc(`
+	Create a new project
 
-Use this command to create a project. You may optionally specify metadata about the project,
-an admin user (and role, if you want to use a non-default admin role), and a node selector
-to restrict which nodes pods in this project can be scheduled to.`
+	Use this command to create a project. You may optionally specify metadata about the project,
+	an admin user (and role, if you want to use a non-default admin role), and a node selector
+	to restrict which nodes pods in this project can be scheduled to.`)
 
 // NewCmdNewProject implements the OpenShift cli new-project command
 func NewCmdNewProject(name, fullName string, f *clientcmd.Factory, out io.Writer) *cobra.Command {
@@ -86,7 +90,7 @@ func (o *NewProjectOptions) complete(args []string) error {
 }
 
 func (o *NewProjectOptions) Run(useNodeSelector bool) error {
-	if _, err := o.Client.Projects().Get(o.ProjectName); err != nil {
+	if _, err := o.Client.Projects().Get(o.ProjectName, metav1.GetOptions{}); err != nil {
 		if !kerrors.IsNotFound(err) {
 			return err
 		}
@@ -97,8 +101,8 @@ func (o *NewProjectOptions) Run(useNodeSelector bool) error {
 	project := &projectapi.Project{}
 	project.Name = o.ProjectName
 	project.Annotations = make(map[string]string)
-	project.Annotations[projectapi.ProjectDescription] = o.Description
-	project.Annotations[projectapi.ProjectDisplayName] = o.DisplayName
+	project.Annotations[oapi.OpenShiftDescription] = o.Description
+	project.Annotations[oapi.OpenShiftDisplayName] = o.DisplayName
 	if useNodeSelector {
 		project.Annotations[projectapi.ProjectNodeSelector] = o.NodeSelector
 	}

@@ -5,13 +5,12 @@ import (
 
 	"github.com/golang/glog"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/apimachinery"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/apimachinery"
-	"k8s.io/kubernetes/pkg/apimachinery/registered"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/sets"
 
 	"github.com/openshift/origin/pkg/oauth/api"
 	"github.com/openshift/origin/pkg/oauth/api/v1"
@@ -22,22 +21,22 @@ const importPrefix = "github.com/openshift/origin/pkg/oauth/api"
 var accessor = meta.NewAccessor()
 
 // availableVersions lists all known external versions for this group from most preferred to least preferred
-var availableVersions = []unversioned.GroupVersion{v1.SchemeGroupVersion}
+var availableVersions = []schema.GroupVersion{v1.LegacySchemeGroupVersion}
 
 func init() {
-	registered.RegisterVersions(availableVersions)
-	externalVersions := []unversioned.GroupVersion{}
+	kapi.Registry.RegisterVersions(availableVersions)
+	externalVersions := []schema.GroupVersion{}
 	for _, v := range availableVersions {
-		if registered.IsAllowedVersion(v) {
+		if kapi.Registry.IsAllowedVersion(v) {
 			externalVersions = append(externalVersions, v)
 		}
 	}
 	if len(externalVersions) == 0 {
-		glog.Infof("No version is registered for group %v", api.GroupName)
+		glog.Infof("No version is registered for group %v", api.LegacyGroupName)
 		return
 	}
 
-	if err := registered.EnableVersions(externalVersions...); err != nil {
+	if err := kapi.Registry.EnableVersions(externalVersions...); err != nil {
 		panic(err)
 	}
 	if err := enableVersions(externalVersions); err != nil {
@@ -49,7 +48,7 @@ func init() {
 // group.
 // We can combine registered.RegisterVersions, registered.EnableVersions and
 // registered.RegisterGroup once we have moved enableVersions there.
-func enableVersions(externalVersions []unversioned.GroupVersion) error {
+func enableVersions(externalVersions []schema.GroupVersion) error {
 	addVersionsToScheme(externalVersions...)
 	preferredExternalVersion := externalVersions[0]
 
@@ -61,25 +60,24 @@ func enableVersions(externalVersions []unversioned.GroupVersion) error {
 		InterfacesFor: interfacesFor,
 	}
 
-	if err := registered.RegisterGroup(groupMeta); err != nil {
+	if err := kapi.Registry.RegisterGroup(groupMeta); err != nil {
 		return err
 	}
-	kapi.RegisterRESTMapper(groupMeta.RESTMapper)
 	return nil
 }
 
-func addVersionsToScheme(externalVersions ...unversioned.GroupVersion) {
+func addVersionsToScheme(externalVersions ...schema.GroupVersion) {
 	// add the internal version to Scheme
-	api.AddToScheme(kapi.Scheme)
+	api.AddToSchemeInCoreGroup(kapi.Scheme)
 	// add the enabled external versions to Scheme
 	for _, v := range externalVersions {
-		if !registered.IsEnabledVersion(v) {
+		if !kapi.Registry.IsEnabledVersion(v) {
 			glog.Errorf("Version %s is not enabled, so it will not be added to the Scheme.", v)
 			continue
 		}
 		switch v {
-		case v1.SchemeGroupVersion:
-			v1.AddToScheme(kapi.Scheme)
+		case v1.LegacySchemeGroupVersion:
+			v1.AddToSchemeInCoreGroup(kapi.Scheme)
 
 		default:
 			glog.Errorf("Version %s is not known, so it will not be added to the Scheme.", v)
@@ -88,22 +86,22 @@ func addVersionsToScheme(externalVersions ...unversioned.GroupVersion) {
 	}
 }
 
-func newRESTMapper(externalVersions []unversioned.GroupVersion) meta.RESTMapper {
+func newRESTMapper(externalVersions []schema.GroupVersion) meta.RESTMapper {
 	rootScoped := sets.NewString("OAuthAccessToken", "OAuthAuthorizeToken", "OAuthClient", "OAuthClientAuthorization")
 	ignoredKinds := sets.NewString()
-	return kapi.NewDefaultRESTMapper(externalVersions, interfacesFor, importPrefix, ignoredKinds, rootScoped)
+	return meta.NewDefaultRESTMapperFromScheme(externalVersions, interfacesFor, importPrefix, ignoredKinds, rootScoped, kapi.Scheme)
 }
 
-func interfacesFor(version unversioned.GroupVersion) (*meta.VersionInterfaces, error) {
+func interfacesFor(version schema.GroupVersion) (*meta.VersionInterfaces, error) {
 	switch version {
-	case v1.SchemeGroupVersion:
+	case v1.LegacySchemeGroupVersion:
 		return &meta.VersionInterfaces{
 			ObjectConvertor:  kapi.Scheme,
 			MetadataAccessor: accessor,
 		}, nil
 
 	default:
-		g, _ := registered.Group(api.GroupName)
+		g, _ := kapi.Registry.Group(api.LegacyGroupName)
 		return nil, fmt.Errorf("unsupported storage version: %s (valid: %v)", version, g.GroupVersions)
 	}
 }

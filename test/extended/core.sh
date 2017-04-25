@@ -2,14 +2,8 @@
 #
 # Runs all standard extended tests against either an existing cluster (TEST_ONLY=1)
 # or a standard started server.
-
-set -o errexit
-set -o nounset
-set -o pipefail
-
-OS_ROOT=$(dirname "${BASH_SOURCE}")/../..
+source "$(dirname "${BASH_SOURCE}")/../../hack/lib/init.sh"
 source "${OS_ROOT}/test/extended/setup.sh"
-cd "${OS_ROOT}"
 
 os::test::extended::setup
 os::test::extended::focus "$@"
@@ -26,21 +20,17 @@ ps=$(join '|' "${parallel_exclude[@]}")
 sf=$(join '|' "${serial_only[@]}")
 ss=$(join '|' "${serial_exclude[@]}")
 
-
-# print the tests we are skipping
-echo "[INFO] The following tests are excluded:"
-TEST_REPORT_DIR= TEST_OUTPUT_QUIET=true ${EXTENDEDTEST} "--ginkgo.skip=${ss}" --ginkgo.dryRun --ginkgo.noColor | grep skip | cut -c 20- | sort
-echo
-
 exitstatus=0
 
 # run parallel tests
-nodes="${PARALLEL_NODES:-5}"
-echo "[INFO] Running parallel tests N=${nodes}"
-TEST_REPORT_FILE_NAME=core_parallel ${GINKGO} -v "-focus=${pf}" "-skip=${ps}" -p -nodes "${nodes}" ${EXTENDEDTEST} -- -ginkgo.v -test.timeout 6h || exitstatus=$?
+os::log::info "Running parallel tests N=${PARALLEL_NODES:-<default>}"
+TEST_PARALLEL="${PARALLEL_NODES:-5}" FOCUS="${pf}" SKIP="${ps}" TEST_REPORT_FILE_NAME=core_parallel os::test::extended::run -- -test.timeout 6h ${TEST_EXTENDED_ARGS-} || exitstatus=$?
 
 # run tests in serial
-echo "[INFO] Running serial tests"
-TEST_REPORT_FILE_NAME=core_serial ${GINKGO} -v "-focus=${sf}" "-skip=${ss}" ${EXTENDEDTEST} -- -ginkgo.v -test.timeout 2h || exitstatus=$?
+os::log::info ""
+os::log::info "Running serial tests"
+FOCUS="${sf}" SKIP="${ss}" TEST_REPORT_FILE_NAME=core_serial os::test::extended::run -- -test.timeout 2h ${TEST_EXTENDED_ARGS-} || exitstatus=$?
+
+os::test::extended::merge_junit
 
 exit $exitstatus

@@ -1,11 +1,12 @@
 package builds
 
 import (
-	"fmt"
 	"time"
 
 	g "github.com/onsi/ginkgo"
 	o "github.com/onsi/gomega"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	exutil "github.com/openshift/origin/test/extended/util"
 )
@@ -21,11 +22,11 @@ var _ = g.Describe("[builds][Slow] build can have Docker image source", func() {
 
 	g.JustBeforeEach(func() {
 		g.By("waiting for builder service account")
-		err := exutil.WaitForBuilderAccount(oc.KubeREST().ServiceAccounts(oc.Namespace()))
+		err := exutil.WaitForBuilderAccount(oc.KubeClient().Core().ServiceAccounts(oc.Namespace()))
 		o.Expect(err).NotTo(o.HaveOccurred())
 
 		g.By("waiting for imagestreams to be imported")
-		err = exutil.WaitForAnImageStream(oc.AdminREST().ImageStreams("openshift"), "jenkins", exutil.CheckImageStreamLatestTagPopulatedFn, exutil.CheckImageStreamTagNotFoundFn)
+		err = exutil.WaitForAnImageStream(oc.AdminClient().ImageStreams("openshift"), "ruby", exutil.CheckImageStreamLatestTagPopulatedFn, exutil.CheckImageStreamTagNotFoundFn)
 		o.Expect(err).NotTo(o.HaveOccurred())
 	})
 
@@ -36,28 +37,20 @@ var _ = g.Describe("[builds][Slow] build can have Docker image source", func() {
 			o.Expect(err).NotTo(o.HaveOccurred())
 
 			g.By("starting the source strategy build")
-			out, err := oc.Run("start-build").Args("imagesourcebuild").Output()
-			fmt.Fprintf(g.GinkgoWriter, "\nstart-build output:\n%s\n", out)
-			o.Expect(err).NotTo(o.HaveOccurred())
-
-			g.By("expecting the builds to complete successfully")
-			err = exutil.WaitForABuild(oc.REST().Builds(oc.Namespace()), "imagesourcebuild-1", exutil.CheckBuildSuccessFn, exutil.CheckBuildFailedFn)
-			if err != nil {
-				exutil.DumpBuildLogs("imagesourcebuild", oc)
-			}
-			o.Expect(err).NotTo(o.HaveOccurred())
+			br, err := exutil.StartBuildAndWait(oc, "imagesourcebuild")
+			br.AssertSuccess()
 
 			g.By("expecting the pod to deploy successfully")
-			pods, err := exutil.WaitForPods(oc.KubeREST().Pods(oc.Namespace()), imageSourceLabel, exutil.CheckPodIsRunningFn, 1, 2*time.Minute)
+			pods, err := exutil.WaitForPods(oc.KubeClient().Core().Pods(oc.Namespace()), imageSourceLabel, exutil.CheckPodIsRunningFn, 1, 2*time.Minute)
 			o.Expect(err).NotTo(o.HaveOccurred())
 			o.Expect(len(pods)).To(o.Equal(1))
-			pod, err := oc.KubeREST().Pods(oc.Namespace()).Get(pods[0])
+			pod, err := oc.KubeClient().Core().Pods(oc.Namespace()).Get(pods[0], metav1.GetOptions{})
 			o.Expect(err).NotTo(o.HaveOccurred())
 
 			g.By("expecting the pod to contain the file from the input image")
-			out, err = oc.Run("exec").Args(pod.Name, "-c", pod.Spec.Containers[0].Name, "--", "ls", "injected/dir").Output()
+			out, err := oc.Run("exec").Args(pod.Name, "-c", pod.Spec.Containers[0].Name, "--", "ls", "injected/dir").Output()
 			o.Expect(err).NotTo(o.HaveOccurred())
-			o.Expect(out).To(o.ContainSubstring("jenkins.war"))
+			o.Expect(out).To(o.ContainSubstring("ruby"))
 		})
 	})
 	g.Describe("build with image docker", func() {
@@ -67,28 +60,20 @@ var _ = g.Describe("[builds][Slow] build can have Docker image source", func() {
 			o.Expect(err).NotTo(o.HaveOccurred())
 
 			g.By("starting the docker strategy build")
-			out, err := oc.Run("start-build").Args("imagedockerbuild").Output()
-			fmt.Fprintf(g.GinkgoWriter, "\nstart-build output:\n%s\n", out)
-			o.Expect(err).NotTo(o.HaveOccurred())
-
-			g.By("expect the builds to complete successfully")
-			err = exutil.WaitForABuild(oc.REST().Builds(oc.Namespace()), "imagedockerbuild-1", exutil.CheckBuildSuccessFn, exutil.CheckBuildFailedFn)
-			if err != nil {
-				exutil.DumpBuildLogs("imagedockerbuild", oc)
-			}
-			o.Expect(err).NotTo(o.HaveOccurred())
+			br, err := exutil.StartBuildAndWait(oc, "imagedockerbuild")
+			br.AssertSuccess()
 
 			g.By("expect the pod to deploy successfully")
-			pods, err := exutil.WaitForPods(oc.KubeREST().Pods(oc.Namespace()), imageDockerLabel, exutil.CheckPodIsRunningFn, 1, 2*time.Minute)
+			pods, err := exutil.WaitForPods(oc.KubeClient().Core().Pods(oc.Namespace()), imageDockerLabel, exutil.CheckPodIsRunningFn, 1, 2*time.Minute)
 			o.Expect(err).NotTo(o.HaveOccurred())
 			o.Expect(len(pods)).To(o.Equal(1))
-			pod, err := oc.KubeREST().Pods(oc.Namespace()).Get(pods[0])
+			pod, err := oc.KubeClient().Core().Pods(oc.Namespace()).Get(pods[0], metav1.GetOptions{})
 			o.Expect(err).NotTo(o.HaveOccurred())
 
 			g.By("expecting the pod to contain the file from the input image")
-			out, err = oc.Run("exec").Args(pod.Name, "-c", pod.Spec.Containers[0].Name, "--", "ls", "injected/dir").Output()
+			out, err := oc.Run("exec").Args(pod.Name, "-c", pod.Spec.Containers[0].Name, "--", "ls", "injected/dir").Output()
 			o.Expect(err).NotTo(o.HaveOccurred())
-			o.Expect(out).To(o.ContainSubstring("jenkins.war"))
+			o.Expect(out).To(o.ContainSubstring("ruby"))
 		})
 
 	})

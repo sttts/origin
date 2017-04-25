@@ -5,16 +5,17 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+
+	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/kubernetes/pkg/api"
-	kapierrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/client/cache"
-	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/controller/framework"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/runtime"
-	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
-	"k8s.io/kubernetes/pkg/util/wait"
-	"k8s.io/kubernetes/pkg/watch"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 )
 
 // NumServiceAccountUpdateRetries controls the number of times we will retry on conflict errors.
@@ -29,26 +30,26 @@ type DockercfgDeletedControllerOptions struct {
 }
 
 // NewDockercfgDeletedController returns a new *DockercfgDeletedController.
-func NewDockercfgDeletedController(cl client.Interface, options DockercfgDeletedControllerOptions) *DockercfgDeletedController {
+func NewDockercfgDeletedController(cl kclientset.Interface, options DockercfgDeletedControllerOptions) *DockercfgDeletedController {
 	e := &DockercfgDeletedController{
 		client: cl,
 	}
 
 	dockercfgSelector := fields.OneTermEqualSelector(api.SecretTypeField, string(api.SecretTypeDockercfg))
-	_, e.secretController = framework.NewInformer(
+	_, e.secretController = cache.NewInformer(
 		&cache.ListWatch{
-			ListFunc: func(options api.ListOptions) (runtime.Object, error) {
-				opts := api.ListOptions{FieldSelector: dockercfgSelector}
-				return e.client.Secrets(api.NamespaceAll).List(opts)
+			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+				opts := metav1.ListOptions{FieldSelector: dockercfgSelector.String()}
+				return e.client.Core().Secrets(api.NamespaceAll).List(opts)
 			},
-			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
-				opts := api.ListOptions{FieldSelector: dockercfgSelector, ResourceVersion: options.ResourceVersion}
-				return e.client.Secrets(api.NamespaceAll).Watch(opts)
+			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+				opts := metav1.ListOptions{FieldSelector: dockercfgSelector.String(), ResourceVersion: options.ResourceVersion}
+				return e.client.Core().Secrets(api.NamespaceAll).Watch(opts)
 			},
 		},
 		&api.Secret{},
 		options.Resync,
-		framework.ResourceEventHandlerFuncs{
+		cache.ResourceEventHandlerFuncs{
 			DeleteFunc: e.secretDeleted,
 		},
 	)
@@ -61,9 +62,9 @@ func NewDockercfgDeletedController(cl client.Interface, options DockercfgDeleted
 type DockercfgDeletedController struct {
 	stopChan chan struct{}
 
-	client client.Interface
+	client kclientset.Interface
 
-	secretController *framework.Controller
+	secretController cache.Controller
 }
 
 // Runs controller loops and returns immediately
@@ -108,7 +109,7 @@ func (e *DockercfgDeletedController) secretDeleted(obj interface{}) {
 	}
 
 	// remove the reference token secret
-	if err := e.client.Secrets(dockercfgSecret.Namespace).Delete(dockercfgSecret.Annotations[ServiceAccountTokenSecretNameKey]); (err != nil) && !kapierrors.IsNotFound(err) {
+	if err := e.client.Core().Secrets(dockercfgSecret.Namespace).Delete(dockercfgSecret.Annotations[ServiceAccountTokenSecretNameKey], nil); (err != nil) && !kapierrors.IsNotFound(err) {
 		utilruntime.HandleError(err)
 	}
 }
@@ -149,7 +150,7 @@ func (e *DockercfgDeletedController) removeDockercfgSecretReference(dockercfgSec
 	serviceAccount.ImagePullSecrets = imagePullSecrets
 
 	if changed {
-		_, err = e.client.ServiceAccounts(dockercfgSecret.Namespace).Update(serviceAccount)
+		_, err = e.client.Core().ServiceAccounts(dockercfgSecret.Namespace).Update(serviceAccount)
 		if err != nil {
 			return err
 		}
@@ -165,7 +166,7 @@ func (e *DockercfgDeletedController) getServiceAccount(secret *api.Secret) (*api
 		return nil, nil
 	}
 
-	serviceAccount, err := e.client.ServiceAccounts(secret.Namespace).Get(saName)
+	serviceAccount, err := e.client.Core().ServiceAccounts(secret.Namespace).Get(saName, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}

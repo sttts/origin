@@ -6,14 +6,16 @@ import (
 	"strings"
 
 	"github.com/golang/glog"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/sets"
 
 	"github.com/openshift/origin/pkg/client"
+	"github.com/openshift/origin/pkg/template"
 	templateapi "github.com/openshift/origin/pkg/template/api"
 )
 
@@ -29,53 +31,64 @@ type TemplateSearcher struct {
 func (r TemplateSearcher) Search(precise bool, terms ...string) (ComponentMatches, []error) {
 	matches := ComponentMatches{}
 	var errs []error
-	checkedNamespaces := sets.NewString()
-	for _, namespace := range r.Namespaces {
-		if checkedNamespaces.Has(namespace) {
+	for _, term := range terms {
+		ref, err := template.ParseTemplateReference(term)
+		if err != nil {
+			glog.V(2).Infof("template references must be of the form [<namespace>/]<name>, term %q did not qualify", term)
 			continue
 		}
-		checkedNamespaces.Insert(namespace)
+		if term == "__template_fail" {
+			errs = append(errs, fmt.Errorf("unable to find the specified template: %s", term))
+			continue
+		}
 
-		templates, err := r.Client.Templates(namespace).List(kapi.ListOptions{})
-		if err != nil {
-			if errors.IsNotFound(err) || errors.IsForbidden(err) {
+		namespaces := r.Namespaces
+		if ref.HasNamespace() {
+			namespaces = []string{ref.Namespace}
+		}
+
+		checkedNamespaces := sets.NewString()
+		for _, namespace := range namespaces {
+			if checkedNamespaces.Has(namespace) {
 				continue
 			}
-			errs = append(errs, err)
-			continue
-		}
+			checkedNamespaces.Insert(namespace)
 
-		exact := false
-		for i := range templates.Items {
-			template := &templates.Items[i]
-			for _, term := range terms {
-				if term == "__template_fail" {
-					errs = append(errs, fmt.Errorf("unable to find the specified template: %s", term))
+			templates, err := r.Client.Templates(namespace).List(metav1.ListOptions{})
+			if err != nil {
+				if errors.IsNotFound(err) || errors.IsForbidden(err) {
 					continue
 				}
+				errs = append(errs, err)
+				continue
+			}
 
-				glog.V(4).Infof("checking for term %s in namespace %s", term, namespace)
-				if score, scored := templateScorer(*template, term); scored {
+			exact := false
+			for i := range templates.Items {
+				template := &templates.Items[i]
+				glog.V(4).Infof("checking namespace %s for template %s", namespace, ref.Name)
+				if score, scored := templateScorer(*template, ref.Name); scored {
 					if score == 0.0 {
 						exact = true
 					}
 					glog.V(4).Infof("Adding template %q in project %q with score %f", template.Name, template.Namespace, score)
+					fullName := fmt.Sprintf("%s/%s", template.Namespace, template.Name)
 					matches = append(matches, &ComponentMatch{
 						Value:       term,
-						Argument:    fmt.Sprintf("--template=%q", template.Name),
-						Name:        template.Name,
+						Argument:    fmt.Sprintf("--template=%q", fullName),
+						Name:        fullName,
 						Description: fmt.Sprintf("Template %q in project %q", template.Name, template.Namespace),
 						Score:       score,
 						Template:    template,
 					})
 				}
 			}
-		}
 
-		// If we found one or more exact matches in this namespace, do not continue looking at
-		// other namespaces
-		if exact && precise {
-			break
+			// If we found one or more exact matches in this namespace, do not continue looking at
+			// other namespaces
+			if exact && precise {
+				break
+			}
 		}
 	}
 
@@ -83,7 +96,7 @@ func (r TemplateSearcher) Search(precise bool, terms ...string) (ComponentMatche
 }
 
 // IsPossibleTemplateFile returns true if the argument can be a template file
-func IsPossibleTemplateFile(value string) bool {
+func IsPossibleTemplateFile(value string) (bool, error) {
 	return isFile(value)
 }
 
@@ -95,7 +108,7 @@ type TemplateFileSearcher struct {
 	Namespace    string
 }
 
-// Search attemps to read template files and transform it into template objects
+// Search attempts to read template files and transform it into template objects
 func (r *TemplateFileSearcher) Search(precise bool, terms ...string) (ComponentMatches, []error) {
 	matches := ComponentMatches{}
 	var errs []error
@@ -105,17 +118,19 @@ func (r *TemplateFileSearcher) Search(precise bool, terms ...string) (ComponentM
 			continue
 		}
 
-		var isSingular bool
+		var isSingleItemImplied bool
 		obj, err := resource.NewBuilder(r.Mapper, r.Typer, r.ClientMapper, kapi.Codecs.UniversalDecoder()).
 			NamespaceParam(r.Namespace).RequireNamespace().
-			FilenameParam(false, false, term).
+			FilenameParam(false, &resource.FilenameOptions{Recursive: false, Filenames: terms}).
 			Do().
-			IntoSingular(&isSingular).
+			IntoSingleItemImplied(&isSingleItemImplied).
 			Object()
 
 		if err != nil {
 			switch {
 			case strings.Contains(err.Error(), "does not exist") && strings.Contains(err.Error(), "the path"):
+				continue
+			case strings.Contains(err.Error(), "not a directory") && strings.Contains(err.Error(), "the path"):
 				continue
 			default:
 				if syntaxErr, ok := err.(*json.SyntaxError); ok {
@@ -126,7 +141,14 @@ func (r *TemplateFileSearcher) Search(precise bool, terms ...string) (ComponentM
 			}
 		}
 
-		if !isSingular {
+		if list, isList := obj.(*kapi.List); isList && !isSingleItemImplied {
+			if len(list.Items) == 1 {
+				obj = list.Items[0]
+				isSingleItemImplied = true
+			}
+		}
+
+		if !isSingleItemImplied {
 			errs = append(errs, fmt.Errorf("there is more than one object in %q", term))
 			continue
 		}

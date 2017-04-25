@@ -7,13 +7,13 @@ import (
 	"strconv"
 	"strings"
 
+	unversionedvalidation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	kvalidation "k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	kapi "k8s.io/kubernetes/pkg/api"
-	unversionedvalidation "k8s.io/kubernetes/pkg/api/unversioned/validation"
 	"k8s.io/kubernetes/pkg/api/validation"
 	kapivalidation "k8s.io/kubernetes/pkg/api/validation"
-	"k8s.io/kubernetes/pkg/util/intstr"
-	kvalidation "k8s.io/kubernetes/pkg/util/validation"
-	"k8s.io/kubernetes/pkg/util/validation/field"
 
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	imageapi "github.com/openshift/origin/pkg/image/api"
@@ -43,13 +43,26 @@ func ValidateDeploymentConfigSpec(spec deployapi.DeploymentConfigSpec) field.Err
 	if spec.RevisionHistoryLimit != nil {
 		allErrs = append(allErrs, kapivalidation.ValidateNonnegativeField(int64(*spec.RevisionHistoryLimit), specPath.Child("revisionHistoryLimit"))...)
 	}
+	allErrs = append(allErrs, kapivalidation.ValidateNonnegativeField(int64(spec.MinReadySeconds), specPath.Child("minReadySeconds"))...)
+	timeoutSeconds := deployapi.DefaultRollingTimeoutSeconds
+	if spec.Strategy.RollingParams != nil && spec.Strategy.RollingParams.TimeoutSeconds != nil {
+		timeoutSeconds = *(spec.Strategy.RollingParams.TimeoutSeconds)
+	} else if spec.Strategy.RecreateParams != nil && spec.Strategy.RecreateParams.TimeoutSeconds != nil {
+		timeoutSeconds = *(spec.Strategy.RecreateParams.TimeoutSeconds)
+	}
+	if timeoutSeconds > 0 && int64(spec.MinReadySeconds) >= timeoutSeconds {
+		allErrs = append(allErrs, field.Invalid(specPath.Child("minReadySeconds"), spec.MinReadySeconds, fmt.Sprintf("must be less than the deployment timeout (%ds)", timeoutSeconds)))
+	}
+	if spec.Strategy.ActiveDeadlineSeconds != nil && int64(spec.MinReadySeconds) >= *(spec.Strategy.ActiveDeadlineSeconds) {
+		allErrs = append(allErrs, field.Invalid(specPath.Child("minReadySeconds"), spec.MinReadySeconds, fmt.Sprintf("must be less than activeDeadlineSeconds (%ds - used by the deployer pod)", *(spec.Strategy.ActiveDeadlineSeconds))))
+	}
 	if spec.Template == nil {
 		allErrs = append(allErrs, field.Required(specPath.Child("template"), ""))
 	} else {
 		originalContainerImageNames := getContainerImageNames(spec.Template)
 		defer setContainerImageNames(spec.Template, originalContainerImageNames)
 		handleEmptyImageReferences(spec.Template, spec.Triggers)
-		allErrs = append(allErrs, validation.ValidatePodTemplateSpec(spec.Template, specPath.Child("template"))...)
+		allErrs = append(allErrs, validation.ValidatePodTemplateSpecForRC(spec.Template, spec.Selector, spec.Replicas, specPath.Child("template"))...)
 	}
 	if spec.Replicas < 0 {
 		allErrs = append(allErrs, field.Invalid(specPath.Child("replicas"), spec.Replicas, "replicas cannot be negative"))
@@ -126,6 +139,7 @@ func ValidateDeploymentConfigStatus(status deployapi.DeploymentConfigStatus) fie
 	if status.ObservedGeneration < int64(0) {
 		allErrs = append(allErrs, field.Invalid(statusPath.Child("observedGeneration"), status.ObservedGeneration, "observedGeneration cannot be negative"))
 	}
+	allErrs = append(allErrs, kapivalidation.ValidateNonnegativeField(int64(status.ReadyReplicas), statusPath.Child("readyReplicas"))...)
 	return allErrs
 }
 
@@ -234,6 +248,19 @@ func validateDeploymentStrategy(strategy *deployapi.DeploymentStrategy, pod *kap
 
 	errs = append(errs, validation.ValidateResourceRequirements(&strategy.Resources, fldPath.Child("resources"))...)
 
+	if strategy.ActiveDeadlineSeconds != nil {
+		errs = append(errs, kapivalidation.ValidateNonnegativeField(*strategy.ActiveDeadlineSeconds, fldPath.Child("activeDeadlineSeconds"))...)
+		var timeoutSeconds *int64
+		if strategy.RollingParams != nil {
+			timeoutSeconds = strategy.RollingParams.TimeoutSeconds
+		} else if strategy.RecreateParams != nil {
+			timeoutSeconds = strategy.RecreateParams.TimeoutSeconds
+		}
+		if timeoutSeconds != nil && *strategy.ActiveDeadlineSeconds <= *timeoutSeconds {
+			errs = append(errs, field.Invalid(fldPath.Child("activeDeadlineSeconds"), *strategy.ActiveDeadlineSeconds, "activeDeadlineSeconds must be greater than timeoutSeconds"))
+		}
+	}
+
 	return errs
 }
 
@@ -274,7 +301,7 @@ func validateLifecycleHook(hook *deployapi.LifecycleHook, pod *kapi.PodSpec, fld
 
 	switch {
 	case hook.ExecNewPod != nil && len(hook.TagImages) > 0:
-		errs = append(errs, field.Invalid(fldPath, "<hook>", "only one of 'execNewPod' of 'tagImages' may be specified"))
+		errs = append(errs, field.Invalid(fldPath, "<hook>", "only one of 'execNewPod' or 'tagImages' may be specified"))
 	case hook.ExecNewPod != nil:
 		errs = append(errs, validateExecNewPod(hook.ExecNewPod, fldPath.Child("execNewPod"))...)
 	case len(hook.TagImages) > 0:
@@ -329,8 +356,8 @@ func validateEnv(vars []kapi.EnvVar, fldPath *field.Path) field.ErrorList {
 		if len(ev.Name) == 0 {
 			vErrs = append(vErrs, field.Required(idxPath, ""))
 		}
-		if !kvalidation.IsCIdentifier(ev.Name) {
-			vErrs = append(vErrs, field.Invalid(idxPath, ev.Name, "must match regex "+kvalidation.CIdentifierFmt))
+		if errs := kvalidation.IsCIdentifier(ev.Name); len(errs) > 0 {
+			vErrs = append(vErrs, field.Invalid(idxPath, ev.Name, strings.Join(errs, ", ")))
 		}
 		allErrs = append(allErrs, vErrs...)
 	}
@@ -364,12 +391,6 @@ func validateRollingParams(params *deployapi.RollingDeploymentStrategyParams, po
 		errs = append(errs, field.Invalid(fldPath.Child("timeoutSeconds"), *params.TimeoutSeconds, "must be >0"))
 	}
 
-	if params.UpdatePercent != nil {
-		p := *params.UpdatePercent
-		if p == 0 || p < -100 || p > 100 {
-			errs = append(errs, field.Invalid(fldPath.Child("updatePercent"), *params.UpdatePercent, "must be between 1 and 100 or between -1 and -100 (inclusive)"))
-		}
-	}
 	// Most of this is lifted from the upstream experimental deployments API. We
 	// can't reuse it directly yet, but no use reinventing the logic, so copy-
 	// pasted and adapted here.
@@ -438,7 +459,7 @@ func validateImageChangeParams(params *deployapi.DeploymentTriggerImageChangePar
 func validateImageStreamTagName(istag string) error {
 	name, _, ok := imageapi.SplitImageStreamTag(istag)
 	if !ok {
-		return fmt.Errorf("invalid ImageStreamTag: %s", istag)
+		return fmt.Errorf("must be in the form of <name>:<tag>")
 	}
 	if reasons := imageval.ValidateImageStreamName(name, false); len(reasons) != 0 {
 		return errors.New(strings.Join(reasons, ", "))
@@ -502,6 +523,31 @@ func IsValidPercent(percent string) bool {
 }
 
 const isNegativeErrorMsg string = `must be non-negative`
+
+func ValidateDeploymentRequest(req *deployapi.DeploymentRequest) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	if len(req.Name) == 0 {
+		allErrs = append(allErrs, field.Invalid(field.NewPath("name"), req.Name, "name of the deployment config is missing"))
+	} else if len(kvalidation.IsDNS1123Subdomain(req.Name)) != 0 {
+		allErrs = append(allErrs, field.Invalid(field.NewPath("name"), req.Name, "name of the deployment config is invalid"))
+	}
+
+	return allErrs
+}
+
+func ValidateRequestForDeploymentConfig(req *deployapi.DeploymentRequest, config *deployapi.DeploymentConfig) field.ErrorList {
+	allErrs := ValidateDeploymentRequest(req)
+
+	if config.Spec.Paused {
+		// TODO: Enable deployment requests for paused deployment configs
+		// See https://github.com/openshift/origin/issues/9903
+		details := fmt.Sprintf("deployment config %q is paused - unpause to request a new deployment", config.Name)
+		allErrs = append(allErrs, field.Invalid(field.NewPath("spec").Child("paused"), config.Spec.Paused, details))
+	}
+
+	return allErrs
+}
 
 func ValidateDeploymentLogOptions(opts *deployapi.DeploymentLogOptions) field.ErrorList {
 	allErrs := field.ErrorList{}

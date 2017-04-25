@@ -80,19 +80,12 @@ readonly -f os::util::environment::setup_time_vars
 #  - export API_HOST
 #  - export API_PORT
 #  - export API_SCHEME
-#  - export CURL_CA_BUNDLE
-#  - export CURL_CERT
-#  - export CURL_KEY
 #  - export SERVER_CONFIG_DIR
 #  - export MASTER_CONFIG_DIR
 #  - export NODE_CONFIG_DIR
 #  - export USE_IMAGES
 #  - export TAG
 function os::util::environment::setup_all_server_vars() {
-    local subtempdir=$1
-
-    os::util::environment::update_path_var
-    os::util::environment::setup_tmpdir_vars "${subtempdir}"
     os::util::environment::setup_kubelet_vars
     os::util::environment::setup_etcd_vars
     os::util::environment::setup_server_vars
@@ -110,17 +103,23 @@ readonly -f os::util::environment::setup_all_server_vars
 # Returns:
 #  - export PATH
 function os::util::environment::update_path_var() {
-    PATH="${OS_ROOT}/_output/local/bin/$(os::util::host_platform):${PATH}"
+    local prefix
+    if os::util::find::system_binary 'go' >/dev/null 2>&1; then
+        prefix+="${OS_OUTPUT_BINPATH}/$(os::util::host_platform):"
+    fi
+    if [[ -n "${GOPATH:-}" ]]; then
+        prefix+="${GOPATH}/bin:"
+    fi
+
+    PATH="${prefix:-}${PATH}"
     export PATH
 }
 readonly -f os::util::environment::update_path_var
 
-# os::util::environment::setup_misc_tmpdir_vars sets up temporary directory path variables
+# os::util::environment::setup_tmpdir_vars sets up temporary directory path variables
 #
 # Globals:
 #  - TMPDIR
-#  - LOG_DIR
-#  - ARTIFACT_DIR
 # Arguments:
 #  - 1: the path under the root temporary directory for OpenShift where these subdirectories should be made
 # Returns:
@@ -130,6 +129,7 @@ readonly -f os::util::environment::update_path_var
 #  - export ARTIFACT_DIR
 #  - export FAKE_HOME_DIR
 #  - export HOME
+#  - export OS_TMP_ENV_SET
 function os::util::environment::setup_tmpdir_vars() {
     local sub_dir=$1
 
@@ -141,14 +141,12 @@ function os::util::environment::setup_tmpdir_vars() {
     export VOLUME_DIR
     ARTIFACT_DIR="${ARTIFACT_DIR:-${BASETMPDIR}/artifacts}"
     export ARTIFACT_DIR
-
-    # change the location of $HOME so no one does anything naughty
     FAKE_HOME_DIR="${BASETMPDIR}/openshift.local.home"
     export FAKE_HOME_DIR
-    HOME="${FAKE_HOME_DIR}"
-    export HOME
 
-    mkdir -p  "${BASETMPDIR}" "${LOG_DIR}" "${VOLUME_DIR}" "${ARTIFACT_DIR}" "${HOME}"
+    mkdir -p "${LOG_DIR}" "${VOLUME_DIR}" "${ARTIFACT_DIR}" "${FAKE_HOME_DIR}"
+
+    export OS_TMP_ENV_SET="${sub_dir}"
 }
 readonly -f os::util::environment::setup_tmpdir_vars
 
@@ -169,7 +167,7 @@ readonly -f os::util::environment::setup_tmpdir_vars
 function os::util::environment::setup_kubelet_vars() {
     KUBELET_SCHEME="${KUBELET_SCHEME:-https}"
     export KUBELET_SCHEME
-    KUBELET_BIND_HOST="${KUBELET_BIND_HOST:-$(openshift start --print-ip)}"
+    KUBELET_BIND_HOST="${KUBELET_BIND_HOST:-$(openshift start --print-ip || echo "127.0.0.1")}"
     export KUBELET_BIND_HOST
     KUBELET_HOST="${KUBELET_HOST:-${KUBELET_BIND_HOST}}"
     export KUBELET_HOST
@@ -208,7 +206,7 @@ function os::util::environment::setup_etcd_vars() {
 readonly -f os::util::environment::setup_etcd_vars
 
 # os::util::environment::setup_server_vars sets up environment variables necessary for interacting with the server
-# 
+#
 # Globals:
 #  - BASETMPDIR
 #  - KUBELET_HOST
@@ -224,9 +222,6 @@ readonly -f os::util::environment::setup_etcd_vars
 #  - export API_HOST
 #  - export API_PORT
 #  - export API_SCHEME
-#  - export CURL_CA_BUNDLE
-#  - export CURL_CERT
-#  - export CURL_KEY
 #  - export SERVER_CONFIG_DIR
 #  - export MASTER_CONFIG_DIR
 #  - export NODE_CONFIG_DIR
@@ -235,7 +230,7 @@ function os::util::environment::setup_server_vars() {
     KUBE_CACHE_MUTATION_DETECTOR="${KUBE_CACHE_MUTATION_DETECTOR:-true}"
     export KUBE_CACHE_MUTATION_DETECTOR
 
-    API_BIND_HOST="${API_BIND_HOST:-$(openshift start --print-ip)}"
+    API_BIND_HOST="${API_BIND_HOST:-$(openshift start --print-ip || echo "127.0.0.1")}"
     export API_BIND_HOST
     API_HOST="${API_HOST:-${API_BIND_HOST}}"
     export API_HOST
@@ -257,15 +252,6 @@ function os::util::environment::setup_server_vars() {
     export NODE_CONFIG_DIR
 
     mkdir -p "${SERVER_CONFIG_DIR}" "${MASTER_CONFIG_DIR}" "${NODE_CONFIG_DIR}"
-
-    if [[ "${API_SCHEME}" == "https" ]]; then
-        CURL_CA_BUNDLE="${MASTER_CONFIG_DIR}/ca.crt"
-        export CURL_CA_BUNDLE
-        CURL_CERT="${MASTER_CONFIG_DIR}/admin.crt"
-        export CURL_CERT
-        CURL_KEY="${MASTER_CONFIG_DIR}/admin.key"
-        export CURL_KEY
-    fi
 }
 readonly -f os::util::environment::setup_server_vars
 
@@ -282,19 +268,21 @@ readonly -f os::util::environment::setup_server_vars
 #  - export MAX_IMAGES_BULK_IMPORTED_PER_REPOSITORY
 function os::util::environment::setup_images_vars() {
     # Use either the latest release built images, or latest.
+    IMAGE_PREFIX="${OS_IMAGE_PREFIX:-"openshift/origin"}"
     if [[ -z "${USE_IMAGES-}" ]]; then
         TAG='latest'
         export TAG
-        USE_IMAGES="openshift/origin-\${component}:latest"
+        USE_IMAGES="${IMAGE_PREFIX}-\${component}:latest"
         export USE_IMAGES
 
         if [[ -e "${OS_ROOT}/_output/local/releases/.commit" ]]; then
             TAG="$(cat "${OS_ROOT}/_output/local/releases/.commit")"
             export TAG
-            USE_IMAGES="openshift/origin-\${component}:${TAG}"
+            USE_IMAGES="${IMAGE_PREFIX}-\${component}:${TAG}"
             export USE_IMAGES
         fi
     fi
+	export OPENSHIFT_ROUTER_IMAGE="$( component=haproxy-router eval "echo ${USE_IMAGES}" )"
 	export MAX_IMAGES_BULK_IMPORTED_PER_REPOSITORY="${MAX_IMAGES_BULK_IMPORTED_PER_REPOSITORY:-3}"
 }
 readonly -f os::util::environment::setup_images_vars

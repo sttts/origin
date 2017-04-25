@@ -28,7 +28,7 @@ var _ = g.Describe("[builds][Slow] s2i build with environment file in sources", 
 
 	g.JustBeforeEach(func() {
 		g.By("waiting for builder service account")
-		err := exutil.WaitForBuilderAccount(oc.AdminKubeREST().ServiceAccounts(oc.Namespace()))
+		err := exutil.WaitForBuilderAccount(oc.AdminKubeClient().Core().ServiceAccounts(oc.Namespace()))
 		o.Expect(err).NotTo(o.HaveOccurred())
 	})
 
@@ -45,19 +45,11 @@ var _ = g.Describe("[builds][Slow] s2i build with environment file in sources", 
 			o.Expect(err).NotTo(o.HaveOccurred())
 
 			g.By("starting a test build")
-			buildName, err := oc.Run("start-build").Args("test").Output()
-			fmt.Fprintf(g.GinkgoWriter, "\nstart-build output:\n%s\n", buildName)
-			o.Expect(err).NotTo(o.HaveOccurred())
-
-			g.By("expecting the build is in Complete phase")
-			err = exutil.WaitForABuild(oc.REST().Builds(oc.Namespace()), buildName, exutil.CheckBuildSuccessFn, exutil.CheckBuildFailedFn)
-			if err != nil {
-				exutil.DumpBuildLogs("test", oc)
-			}
-			o.Expect(err).NotTo(o.HaveOccurred())
+			br, _ := exutil.StartBuildAndWait(oc, "test", "--from-dir", "test/extended/testdata/sti-environment-build-app")
+			br.AssertSuccess()
 
 			g.By("getting the Docker image reference from ImageStream")
-			imageName, err := exutil.GetDockerImageReference(oc.REST().ImageStreams(oc.Namespace()), "test", "latest")
+			imageName, err := exutil.GetDockerImageReference(oc.Client().ImageStreams(oc.Namespace()), "test", "latest")
 			o.Expect(err).NotTo(o.HaveOccurred())
 
 			g.By("instantiating a pod and service with the new image")

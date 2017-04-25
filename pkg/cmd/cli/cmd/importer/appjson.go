@@ -13,14 +13,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/apimachinery/registered"
 	"k8s.io/kubernetes/pkg/kubectl"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
-	"k8s.io/kubernetes/pkg/runtime"
 
 	"github.com/openshift/origin/pkg/client"
+	"github.com/openshift/origin/pkg/cmd/templates"
 	cmdutil "github.com/openshift/origin/pkg/cmd/util"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 	configcmd "github.com/openshift/origin/pkg/config/cmd"
@@ -29,28 +29,28 @@ import (
 	"github.com/openshift/origin/pkg/generate/appjson"
 )
 
-const (
-	appJSONLong = `
-Import app.json files as OpenShift objects
+const AppJSONV1GeneratorName = "app-json/v1"
 
-app.json defines the pattern of a simple, stateless web application that can be horizontally scaled.
-This command will transform a provided app.json object into its OpenShift equivalent.
-During transformation fields in the app.json syntax that are not relevant when running on top of
-a containerized platform will be ignored and a warning printed.
+var (
+	appJSONLong = templates.LongDesc(`
+		Import app.json files as OpenShift objects
 
-The command will create objects unless you pass the -o yaml or --as-template flags to generate a
-configuration file for later use.
+		app.json defines the pattern of a simple, stateless web application that can be horizontally scaled.
+		This command will transform a provided app.json object into its OpenShift equivalent.
+		During transformation fields in the app.json syntax that are not relevant when running on top of
+		a containerized platform will be ignored and a warning printed.
 
-Experimental: This command is under active development and may change without notice.`
+		The command will create objects unless you pass the -o yaml or --as-template flags to generate a
+		configuration file for later use.
 
-	appJSONExample = `  # Import a directory containing an app.json file
-  $ %[1]s app.json -f .
+		Experimental: This command is under active development and may change without notice.`)
 
-  # Turn an app.json file into a template
-  $ %[1]s app.json -f ./app.json -o yaml --as-template
-`
+	appJSONExample = templates.Examples(`
+		# Import a directory containing an app.json file
+	  $ %[1]s app.json -f .
 
-	AppJSONV1GeneratorName = "app-json/v1"
+	  # Turn an app.json file into a template
+	  $ %[1]s app.json -f ./app.json -o yaml --as-template`)
 )
 
 type AppJSONOptions struct {
@@ -64,7 +64,7 @@ type AppJSONOptions struct {
 	AsTemplate string
 
 	PrintObject    func(runtime.Object) error
-	OutputVersions []unversioned.GroupVersion
+	OutputVersions []schema.GroupVersion
 
 	Namespace string
 	Client    client.TemplateConfigsNamespacer
@@ -90,7 +90,7 @@ func NewCmdAppJSON(fullName string, f *clientcmd.Factory, in io.Reader, out, err
 			kcmdutil.CheckErr(options.Complete(f, cmd, args))
 			kcmdutil.CheckErr(options.Validate())
 			if err := options.Run(); err != nil {
-				// TODO: move met to kcmdutil
+				// TODO: move me to kcmdutil
 				if err == cmdutil.ErrExit {
 					os.Exit(1)
 				}
@@ -115,17 +115,17 @@ func NewCmdAppJSON(fullName string, f *clientcmd.Factory, in io.Reader, out, err
 func (o *AppJSONOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, args []string) error {
 	version, _ := cmd.Flags().GetString("output-version")
 	for _, v := range strings.Split(version, ",") {
-		gv, err := unversioned.ParseGroupVersion(v)
+		gv, err := schema.ParseGroupVersion(v)
 		if err != nil {
 			return fmt.Errorf("provided output-version %q is not valid: %v", v, err)
 		}
 		o.OutputVersions = append(o.OutputVersions, gv)
 	}
-	o.OutputVersions = append(o.OutputVersions, registered.EnabledVersions()...)
+	o.OutputVersions = append(o.OutputVersions, kapi.Registry.EnabledVersions()...)
 
 	o.Action.Bulk.Mapper = clientcmd.ResourceMapper(f)
 	o.Action.Bulk.Op = configcmd.Create
-	mapper, _ := f.Object(false)
+	mapper, _ := f.Object()
 	o.PrintObject = cmdutil.VersionedPrintObject(f.PrintObject, cmd, mapper, o.Action.Out)
 
 	o.Generator, _ = cmd.Flags().GetString("generator")

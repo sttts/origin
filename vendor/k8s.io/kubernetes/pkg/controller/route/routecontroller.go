@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,12 +23,20 @@ import (
 	"time"
 
 	"github.com/golang/glog"
-	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/kubernetes/pkg/api/v1"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
+	coreinformers "k8s.io/kubernetes/pkg/client/informers/informers_generated/externalversions/core/v1"
+	corelisters "k8s.io/kubernetes/pkg/client/listers/core/v1"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/util/metrics"
-	"k8s.io/kubernetes/pkg/util/wait"
+	nodeutil "k8s.io/kubernetes/pkg/util/node"
 )
 
 const (
@@ -42,25 +50,40 @@ const (
 )
 
 type RouteController struct {
-	routes      cloudprovider.Routes
-	kubeClient  clientset.Interface
-	clusterName string
-	clusterCIDR *net.IPNet
+	routes           cloudprovider.Routes
+	kubeClient       clientset.Interface
+	clusterName      string
+	clusterCIDR      *net.IPNet
+	nodeLister       corelisters.NodeLister
+	nodeListerSynced cache.InformerSynced
 }
 
-func New(routes cloudprovider.Routes, kubeClient clientset.Interface, clusterName string, clusterCIDR *net.IPNet) *RouteController {
-	if kubeClient != nil && kubeClient.Core().GetRESTClient().GetRateLimiter() != nil {
-		metrics.RegisterMetricAndTrackRateLimiterUsage("route_controller", kubeClient.Core().GetRESTClient().GetRateLimiter())
+func New(routes cloudprovider.Routes, kubeClient clientset.Interface, nodeInformer coreinformers.NodeInformer, clusterName string, clusterCIDR *net.IPNet) *RouteController {
+	if kubeClient != nil && kubeClient.Core().RESTClient().GetRateLimiter() != nil {
+		metrics.RegisterMetricAndTrackRateLimiterUsage("route_controller", kubeClient.Core().RESTClient().GetRateLimiter())
 	}
-	return &RouteController{
-		routes:      routes,
-		kubeClient:  kubeClient,
-		clusterName: clusterName,
-		clusterCIDR: clusterCIDR,
+	rc := &RouteController{
+		routes:           routes,
+		kubeClient:       kubeClient,
+		clusterName:      clusterName,
+		clusterCIDR:      clusterCIDR,
+		nodeLister:       nodeInformer.Lister(),
+		nodeListerSynced: nodeInformer.Informer().HasSynced,
 	}
+
+	return rc
 }
 
-func (rc *RouteController) Run(syncPeriod time.Duration) {
+func (rc *RouteController) Run(stopCh <-chan struct{}, syncPeriod time.Duration) {
+	defer utilruntime.HandleCrash()
+
+	glog.Info("Starting the route controller")
+
+	if !cache.WaitForCacheSync(stopCh, rc.nodeListerSynced) {
+		utilruntime.HandleError(fmt.Errorf("timed out waiting for caches to sync"))
+		return
+	}
+
 	// TODO: If we do just the full Resync every 5 minutes (default value)
 	// that means that we may wait up to 5 minutes before even starting
 	// creating a route for it. This is bad.
@@ -78,22 +101,20 @@ func (rc *RouteController) reconcileNodeRoutes() error {
 	if err != nil {
 		return fmt.Errorf("error listing routes: %v", err)
 	}
-	// TODO (cjcullen): use pkg/controller/framework.NewInformer to watch this
-	// and reduce the number of lists needed.
-	nodeList, err := rc.kubeClient.Core().Nodes().List(api.ListOptions{})
+	nodes, err := rc.nodeLister.List(labels.Everything())
 	if err != nil {
 		return fmt.Errorf("error listing nodes: %v", err)
 	}
-	return rc.reconcile(nodeList.Items, routeList)
+	return rc.reconcile(nodes, routeList)
 }
 
-func (rc *RouteController) reconcile(nodes []api.Node, routes []*cloudprovider.Route) error {
+func (rc *RouteController) reconcile(nodes []*v1.Node, routes []*cloudprovider.Route) error {
 	// nodeCIDRs maps nodeName->nodeCIDR
-	nodeCIDRs := make(map[string]string)
-	// routeMap maps routeTargetInstance->route
-	routeMap := make(map[string]*cloudprovider.Route)
+	nodeCIDRs := make(map[types.NodeName]string)
+	// routeMap maps routeTargetNode->route
+	routeMap := make(map[types.NodeName]*cloudprovider.Route)
 	for _, route := range routes {
-		routeMap[route.TargetInstance] = route
+		routeMap[route.TargetNode] = route
 	}
 
 	wg := sync.WaitGroup{}
@@ -104,17 +125,18 @@ func (rc *RouteController) reconcile(nodes []api.Node, routes []*cloudprovider.R
 		if node.Spec.PodCIDR == "" {
 			continue
 		}
+		nodeName := types.NodeName(node.Name)
 		// Check if we have a route for this node w/ the correct CIDR.
-		r := routeMap[node.Name]
+		r := routeMap[nodeName]
 		if r == nil || r.DestinationCIDR != node.Spec.PodCIDR {
 			// If not, create the route.
 			route := &cloudprovider.Route{
-				TargetInstance:  node.Name,
+				TargetNode:      nodeName,
 				DestinationCIDR: node.Spec.PodCIDR,
 			}
 			nameHint := string(node.UID)
 			wg.Add(1)
-			go func(nodeName string, nameHint string, route *cloudprovider.Route) {
+			go func(nodeName types.NodeName, nameHint string, route *cloudprovider.Route) {
 				defer wg.Done()
 				for i := 0; i < maxRetries; i++ {
 					startTime := time.Now()
@@ -133,16 +155,20 @@ func (rc *RouteController) reconcile(nodes []api.Node, routes []*cloudprovider.R
 						return
 					}
 				}
-			}(node.Name, nameHint, route)
+			}(nodeName, nameHint, route)
 		} else {
-			rc.updateNetworkingCondition(node.Name, true)
+			// Update condition only if it doesn't reflect the current state.
+			_, condition := v1.GetNodeCondition(&node.Status, v1.NodeNetworkUnavailable)
+			if condition == nil || condition.Status != v1.ConditionFalse {
+				rc.updateNetworkingCondition(types.NodeName(node.Name), true)
+			}
 		}
-		nodeCIDRs[node.Name] = node.Spec.PodCIDR
+		nodeCIDRs[nodeName] = node.Spec.PodCIDR
 	}
 	for _, route := range routes {
 		if rc.isResponsibleForRoute(route) {
 			// Check if this route applies to a node we know about & has correct CIDR.
-			if nodeCIDRs[route.TargetInstance] != route.DestinationCIDR {
+			if nodeCIDRs[route.TargetNode] != route.DestinationCIDR {
 				wg.Add(1)
 				// Delete the route.
 				go func(route *cloudprovider.Route, startTime time.Time) {
@@ -162,61 +188,37 @@ func (rc *RouteController) reconcile(nodes []api.Node, routes []*cloudprovider.R
 	return nil
 }
 
-func updateNetworkingCondition(node *api.Node, routeCreated bool) {
-	_, networkingCondition := api.GetNodeCondition(&node.Status, api.NodeNetworkUnavailable)
-	currentTime := unversioned.Now()
-	if routeCreated {
-		if networkingCondition != nil && networkingCondition.Status != api.ConditionFalse {
-			networkingCondition.Status = api.ConditionFalse
-			networkingCondition.Reason = "RouteCreated"
-			networkingCondition.Message = "RouteController created a route"
-			networkingCondition.LastTransitionTime = currentTime
-		} else if networkingCondition == nil {
-			node.Status.Conditions = append(node.Status.Conditions, api.NodeCondition{
-				Type:               api.NodeNetworkUnavailable,
-				Status:             api.ConditionFalse,
+func (rc *RouteController) updateNetworkingCondition(nodeName types.NodeName, routeCreated bool) error {
+	var err error
+	for i := 0; i < updateNodeStatusMaxRetries; i++ {
+		// Patch could also fail, even though the chance is very slim. So we still do
+		// patch in the retry loop.
+		currentTime := metav1.Now()
+		if routeCreated {
+			err = nodeutil.SetNodeCondition(rc.kubeClient, nodeName, v1.NodeCondition{
+				Type:               v1.NodeNetworkUnavailable,
+				Status:             v1.ConditionFalse,
 				Reason:             "RouteCreated",
 				Message:            "RouteController created a route",
 				LastTransitionTime: currentTime,
 			})
-		}
-	} else {
-		if networkingCondition != nil && networkingCondition.Status != api.ConditionTrue {
-			networkingCondition.Status = api.ConditionTrue
-			networkingCondition.Reason = "NoRouteCreated"
-			networkingCondition.Message = "RouteController failed to create a route"
-			networkingCondition.LastTransitionTime = currentTime
-		} else if networkingCondition == nil {
-			node.Status.Conditions = append(node.Status.Conditions, api.NodeCondition{
-				Type:               api.NodeNetworkUnavailable,
-				Status:             api.ConditionTrue,
+		} else {
+			err = nodeutil.SetNodeCondition(rc.kubeClient, nodeName, v1.NodeCondition{
+				Type:               v1.NodeNetworkUnavailable,
+				Status:             v1.ConditionTrue,
 				Reason:             "NoRouteCreated",
 				Message:            "RouteController failed to create a route",
 				LastTransitionTime: currentTime,
 			})
 		}
-	}
-}
-
-func (rc *RouteController) updateNetworkingCondition(nodeName string, routeCreated bool) error {
-	var err error
-	for i := 0; i < updateNodeStatusMaxRetries; i++ {
-		node, err := rc.kubeClient.Core().Nodes().Get(nodeName)
-		if err != nil {
-			glog.Errorf("Error geting node: %v", err)
-			continue
-		}
-		updateNetworkingCondition(node, routeCreated)
-		// TODO: Use Patch instead once #26381 is merged.
-		// See kubernetes/node-problem-detector#9 for details.
-		if _, err = rc.kubeClient.Core().Nodes().UpdateStatus(node); err == nil {
+		if err == nil {
 			return nil
 		}
-		if i+1 < updateNodeStatusMaxRetries {
-			glog.Errorf("Error updating node %s, retrying: %v", node.Name, err)
-		} else {
-			glog.Errorf("Error updating node %s: %v", node.Name, err)
+		if i == updateNodeStatusMaxRetries || !errors.IsConflict(err) {
+			glog.Errorf("Error updating node %s: %v", nodeName, err)
+			return err
 		}
+		glog.Errorf("Error updating node %s, retrying: %v", nodeName, err)
 	}
 	return err
 }

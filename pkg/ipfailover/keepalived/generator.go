@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"strconv"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client/restclient"
-	kclientcmd "k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 
 	dapi "github.com/openshift/origin/pkg/deploy/api"
 	"github.com/openshift/origin/pkg/generate/app"
@@ -17,44 +16,15 @@ const defaultInterface = "eth0"
 const libModulesVolumeName = "lib-modules"
 const libModulesPath = "/lib/modules"
 
-//  Get kube client configuration from a file containing credentials for
-//  connecting to the master.
-func getClientConfig(path string) (*restclient.Config, error) {
-	if 0 == len(path) {
-		return nil, fmt.Errorf("You must specify a .kubeconfig file path containing credentials for connecting to the master with --credentials")
-	}
-
-	rules := &kclientcmd.ClientConfigLoadingRules{ExplicitPath: path, Precedence: []string{}}
-	credentials, err := rules.Load()
-	if err != nil {
-		return nil, fmt.Errorf("Could not load credentials from %q: %v", path, err)
-	}
-
-	config, err := kclientcmd.NewDefaultClientConfig(*credentials, &kclientcmd.ConfigOverrides{}).ClientConfig()
-	if err != nil {
-		return nil, fmt.Errorf("Credentials %q error: %v", path, err)
-	}
-
-	if err = restclient.LoadTLSFiles(config); err != nil {
-		return nil, fmt.Errorf("Unable to load certificate info using credentials from %q: %v", path, err)
-	}
-
-	return config, nil
-}
-
 //  Generate the IP failover monitor (keepalived) container environment entries.
-func generateEnvEntries(name string, options *ipfailover.IPFailoverConfigCmdOptions, kconfig *restclient.Config) app.Environment {
+func generateEnvEntries(name string, options *ipfailover.IPFailoverConfigCmdOptions) app.Environment {
 	watchPort := strconv.Itoa(options.WatchPort)
 	replicas := strconv.FormatInt(int64(options.Replicas), 10)
-	insecureStr := strconv.FormatBool(kconfig.Insecure)
+	interval := strconv.Itoa(options.CheckInterval)
 	VRRPIDOffset := strconv.Itoa(options.VRRPIDOffset)
+	env := app.Environment{}
 
-	return app.Environment{
-		"OPENSHIFT_MASTER":    kconfig.Host,
-		"OPENSHIFT_CA_DATA":   string(kconfig.CAData),
-		"OPENSHIFT_KEY_DATA":  string(kconfig.KeyData),
-		"OPENSHIFT_CERT_DATA": string(kconfig.CertData),
-		"OPENSHIFT_INSECURE":  insecureStr,
+	env.Add(app.Environment{
 
 		"OPENSHIFT_HA_CONFIG_NAME":       name,
 		"OPENSHIFT_HA_VIRTUAL_IPS":       options.VirtualIPs,
@@ -63,8 +33,13 @@ func generateEnvEntries(name string, options *ipfailover.IPFailoverConfigCmdOpti
 		"OPENSHIFT_HA_VRRP_ID_OFFSET":    VRRPIDOffset,
 		"OPENSHIFT_HA_REPLICA_COUNT":     replicas,
 		"OPENSHIFT_HA_USE_UNICAST":       "false",
+		"OPENSHIFT_HA_IPTABLES_CHAIN":    options.IptablesChain,
+		"OPENSHIFT_HA_NOTIFY_SCRIPT":     options.NotifyScript,
+		"OPENSHIFT_HA_CHECK_SCRIPT":      options.CheckScript,
+		"OPENSHIFT_HA_CHECK_INTERVAL":    interval,
 		// "OPENSHIFT_HA_UNICAST_PEERS":     "127.0.0.1",
-	}
+	})
+	return env
 }
 
 //  Generate the IP failover monitor (keepalived) container configuration.
@@ -121,12 +96,7 @@ func generateContainerConfig(name string, options *ipfailover.IPFailoverConfigCm
 		return containers, nil
 	}
 
-	config, err := getClientConfig(options.Credentials)
-	if err != nil {
-		return containers, err
-	}
-
-	env := generateEnvEntries(name, options, config)
+	env := generateEnvEntries(name, options)
 
 	c := generateFailoverMonitorContainerConfig(name, options, env)
 	if c != nil {
@@ -165,8 +135,13 @@ func GenerateDeploymentConfig(name string, options *ipfailover.IPFailoverConfigC
 		return nil, err
 	}
 
+	labels := map[string]string{
+		"ipfailover": name,
+	}
 	podTemplate := &kapi.PodTemplateSpec{
-		ObjectMeta: kapi.ObjectMeta{Labels: selector},
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: labels,
+		},
 		Spec: kapi.PodSpec{
 			SecurityContext: &kapi.PodSecurityContext{
 				HostNetwork: true,
@@ -177,11 +152,10 @@ func GenerateDeploymentConfig(name string, options *ipfailover.IPFailoverConfigC
 			ServiceAccountName: options.ServiceAccount,
 		},
 	}
-
 	return &dapi.DeploymentConfig{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:   name,
-			Labels: selector,
+			Labels: labels,
 		},
 		Spec: dapi.DeploymentConfigSpec{
 			Strategy: dapi.DeploymentStrategy{
@@ -193,7 +167,6 @@ func GenerateDeploymentConfig(name string, options *ipfailover.IPFailoverConfigC
 			//       kubernetes would remove the need for this
 			//       manual intervention.
 			Replicas: options.Replicas,
-			Selector: selector,
 			Template: podTemplate,
 			Triggers: []dapi.DeploymentTriggerPolicy{
 				{Type: dapi.DeploymentTriggerOnConfigChange},

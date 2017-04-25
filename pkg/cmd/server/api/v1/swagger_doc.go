@@ -75,8 +75,12 @@ func (AssetExtensionsConfig) SwaggerDoc() map[string]string {
 }
 
 var map_AuditConfig = map[string]string{
-	"":        "AuditConfig holds configuration for the audit capabilities",
-	"enabled": "If this flag is set, basic audit log will be printed in the logs. The logs contains, method, user and a requested URL.",
+	"":                         "AuditConfig holds configuration for the audit capabilities",
+	"enabled":                  "If this flag is set, audit log will be printed in the logs. The logs contains, method, user and a requested URL.",
+	"auditFilePath":            "All requests coming to the apiserver will be logged to this file.",
+	"maximumFileRetentionDays": "Maximum number of days to retain old log files based on the timestamp encoded in their filename.",
+	"maximumRetainedFiles":     "Maximum number of old log files to retain.",
+	"maximumFileSizeMegabytes": "Maximum size in megabytes of the log file before it gets rotated. Defaults to 100MB.",
 }
 
 func (AuditConfig) SwaggerDoc() map[string]string {
@@ -115,6 +119,18 @@ func (CertInfo) SwaggerDoc() map[string]string {
 	return map_CertInfo
 }
 
+var map_ClientConnectionOverrides = map[string]string{
+	"":                   "ClientConnectionOverrides are a set of overrides to the default client connection settings.",
+	"acceptContentTypes": "AcceptContentTypes defines the Accept header sent by clients when connecting to a server, overriding the default value of 'application/json'. This field will control all connections to the server used by a particular client.",
+	"contentType":        "ContentType is the content type used when sending data to the server from this client.",
+	"qps":                "QPS controls the number of queries per second allowed for this connection.",
+	"burst":              "Burst allows extra queries to accumulate when a client is exceeding its rate.",
+}
+
+func (ClientConnectionOverrides) SwaggerDoc() map[string]string {
+	return map_ClientConnectionOverrides
+}
+
 var map_ControllerConfig = map[string]string{
 	"":                   "ControllerConfig holds configuration values for controllers",
 	"serviceServingCert": "ServiceServingCert holds configuration for service serving cert signer which creates cert/key pairs for pods fulfilling a service to serve with.",
@@ -137,7 +153,7 @@ func (DNSConfig) SwaggerDoc() map[string]string {
 
 var map_DefaultAdmissionConfig = map[string]string{
 	"":        "DefaultAdmissionConfig can be used to enable or disable various admission plugins. When this type is present as the `configuration` object under `pluginConfig` and *if* the admission plugin supports it, this will cause an \"off by default\" admission plugin to be enabled",
-	"Disable": "Disable turns off an admission plugin that is enabled by default.",
+	"disable": "Disable turns off an admission plugin that is enabled by default.",
 }
 
 func (DefaultAdmissionConfig) SwaggerDoc() map[string]string {
@@ -153,8 +169,10 @@ func (DenyAllPasswordIdentityProvider) SwaggerDoc() map[string]string {
 }
 
 var map_DockerConfig = map[string]string{
-	"":                "DockerConfig holds Docker related configuration options.",
-	"execHandlerName": "ExecHandlerName is the name of the handler to use for executing commands in Docker containers.",
+	"":                        "DockerConfig holds Docker related configuration options.",
+	"execHandlerName":         "ExecHandlerName is the name of the handler to use for executing commands in Docker containers.",
+	"dockerShimSocket":        "DockerShimSocket is the location of the dockershim socket the kubelet uses.",
+	"dockerShimRootDirectory": "DockershimRootDirectory is the dockershim root directory.",
 }
 
 func (DockerConfig) SwaggerDoc() map[string]string {
@@ -201,6 +219,7 @@ var map_GitHubIdentityProvider = map[string]string{
 	"clientID":      "ClientID is the oauth client ID",
 	"clientSecret":  "ClientSecret is the oauth client secret",
 	"organizations": "Organizations optionally restricts which organizations are allowed to log in",
+	"teams":         "Teams optionally restricts which teams are allowed to log in. Format is <org>/<team>.",
 }
 
 func (GitHubIdentityProvider) SwaggerDoc() map[string]string {
@@ -288,6 +307,7 @@ var map_ImagePolicyConfig = map[string]string{
 	"disableScheduledImport":                     "DisableScheduledImport allows scheduled background import of images to be disabled.",
 	"scheduledImageImportMinimumIntervalSeconds": "ScheduledImageImportMinimumIntervalSeconds is the minimum number of seconds that can elapse between when image streams scheduled for background import are checked against the upstream repository. The default value is 15 minutes.",
 	"maxScheduledImageImportsPerMinute":          "MaxScheduledImageImportsPerMinute is the maximum number of scheduled image streams that will be imported in the background per minute. The default value is 60. Set to -1 for unlimited.",
+	"allowedRegistriesForImport":                 "AllowedRegistriesForImport limits the docker registries that normal users may import images from. Set this list to the registries that you trust to contain valid Docker images and that you want applications to be able to import from. Users with permission to create Images or ImageStreamMappings via the API are not affected by this policy - typically only administrators or system integrations will have those permissions.",
 }
 
 func (ImagePolicyConfig) SwaggerDoc() map[string]string {
@@ -295,12 +315,12 @@ func (ImagePolicyConfig) SwaggerDoc() map[string]string {
 }
 
 var map_JenkinsPipelineConfig = map[string]string{
-	"":                  "JenkinsPipelineConfig holds configuration for the Jenkins pipeline strategy",
-	"enabled":           "If the enabled flag is set, a Jenkins server will be spawned from the provided template when the first build config in the project with type JenkinsPipeline is created. When not specified this option defaults to true.",
-	"templateNamespace": "TemplateNamespace contains the namespace name where the Jenkins template is stored",
-	"templateName":      "TemplateName is the name of the default Jenkins template",
-	"serviceName":       "ServiceName is the name of the Jenkins service OpenShift uses to detect whether a Jenkins pipeline handler has already been installed in a project. This value *must* match a service name in the provided template.",
-	"parameters":        "Parameters specifies a set of optional parameters to the Jenkins template.",
+	"": "JenkinsPipelineConfig holds configuration for the Jenkins pipeline strategy",
+	"autoProvisionEnabled": "AutoProvisionEnabled determines whether a Jenkins server will be spawned from the provided template when the first build config in the project with type JenkinsPipeline is created. When not specified this option defaults to true.",
+	"templateNamespace":    "TemplateNamespace contains the namespace name where the Jenkins template is stored",
+	"templateName":         "TemplateName is the name of the default Jenkins template",
+	"serviceName":          "ServiceName is the name of the Jenkins service OpenShift uses to detect whether a Jenkins pipeline handler has already been installed in a project. This value *must* match a service name in the provided template.",
+	"parameters":           "Parameters specifies a set of optional parameters to the Jenkins template.",
 }
 
 func (JenkinsPipelineConfig) SwaggerDoc() map[string]string {
@@ -341,6 +361,7 @@ var map_KubernetesMasterConfig = map[string]string{
 	"admissionConfig":          "AdmissionConfig contains admission control plugin configuration.",
 	"apiServerArguments":       "APIServerArguments are key value pairs that will be passed directly to the Kube apiserver that match the apiservers's command line arguments.  These are not migrated, but if you reference a value that does not exist the server will not start. These values may override other settings in KubernetesMasterConfig which may cause invalid configurations.",
 	"controllerArguments":      "ControllerArguments are key value pairs that will be passed directly to the Kube controller manager that match the controller manager's command line arguments.  These are not migrated, but if you reference a value that does not exist the server will not start. These values may override other settings in KubernetesMasterConfig which may cause invalid configurations.",
+	"schedulerArguments":       "SchedulerArguments are key value pairs that will be passed directly to the Kube scheduler that match the scheduler's command line arguments.  These are not migrated, but if you reference a value that does not exist the server will not start. These values may override other settings in KubernetesMasterConfig which may cause invalid configurations.",
 }
 
 func (KubernetesMasterConfig) SwaggerDoc() map[string]string {
@@ -413,10 +434,21 @@ func (LocalQuota) SwaggerDoc() map[string]string {
 	return map_LocalQuota
 }
 
+var map_MasterAuthConfig = map[string]string{
+	"":              "MasterAuthConfig configures authentication options in addition to the standard oauth token and client certificate authenticators",
+	"requestHeader": "RequestHeader holds options for setting up a front proxy against the the API.  It is optional.",
+}
+
+func (MasterAuthConfig) SwaggerDoc() map[string]string {
+	return map_MasterAuthConfig
+}
+
 var map_MasterClients = map[string]string{
 	"": "MasterClients holds references to `.kubeconfig` files that qualify master clients for OpenShift and Kubernetes",
-	"openshiftLoopbackKubeConfig":  "OpenShiftLoopbackKubeConfig is a .kubeconfig filename for system components to loopback to this master",
-	"externalKubernetesKubeConfig": "ExternalKubernetesKubeConfig is a .kubeconfig filename for proxying to kubernetes",
+	"openshiftLoopbackKubeConfig":                 "OpenShiftLoopbackKubeConfig is a .kubeconfig filename for system components to loopback to this master",
+	"externalKubernetesKubeConfig":                "ExternalKubernetesKubeConfig is a .kubeconfig filename for proxying to Kubernetes",
+	"openshiftLoopbackClientConnectionOverrides":  "OpenShiftLoopbackClientConnectionOverrides specifies client overrides for system components to loop back to this master.",
+	"externalKubernetesClientConnectionOverrides": "ExternalKubernetesClientConnectionOverrides specifies client overrides for proxying to Kubernetes.",
 }
 
 func (MasterClients) SwaggerDoc() map[string]string {
@@ -424,36 +456,38 @@ func (MasterClients) SwaggerDoc() map[string]string {
 }
 
 var map_MasterConfig = map[string]string{
-	"":                       "MasterConfig holds the necessary configuration options for the OpenShift master",
-	"servingInfo":            "ServingInfo describes how to start serving",
-	"corsAllowedOrigins":     "CORSAllowedOrigins",
-	"apiLevels":              "APILevels is a list of API levels that should be enabled on startup: v1 as examples",
-	"masterPublicURL":        "MasterPublicURL is how clients can access the OpenShift API server",
-	"controllers":            "Controllers is a list of the controllers that should be started. If set to \"none\", no controllers will start automatically. The default value is \"*\" which will start all controllers. When using \"*\", you may exclude controllers by prepending a \"-\" in front of their name. No other values are recognized at this time.",
-	"pauseControllers":       "PauseControllers instructs the master to not automatically start controllers, but instead to wait until a notification to the server is received before launching them.",
-	"controllerLeaseTTL":     "ControllerLeaseTTL enables controller election, instructing the master to attempt to acquire a lease before controllers start and renewing it within a number of seconds defined by this value. Setting this value non-negative forces pauseControllers=true. This value defaults off (0, or omitted) and controller election can be disabled with -1.",
-	"admissionConfig":        "AdmissionConfig contains admission control plugin configuration.",
-	"controllerConfig":       "ControllerConfig holds configuration values for controllers",
-	"disabledFeatures":       "DisabledFeatures is a list of features that should not be started.  We omitempty here because its very unlikely that anyone will want to manually disable features and we don't want to encourage it.",
-	"etcdStorageConfig":      "EtcdStorageConfig contains information about how API resources are stored in Etcd. These values are only relevant when etcd is the backing store for the cluster.",
-	"etcdClientInfo":         "EtcdClientInfo contains information about how to connect to etcd",
-	"kubeletClientInfo":      "KubeletClientInfo contains information about how to connect to kubelets",
-	"kubernetesMasterConfig": "KubernetesMasterConfig, if present start the kubernetes master in this process",
-	"etcdConfig":             "EtcdConfig, if present start etcd in this process",
-	"oauthConfig":            "OAuthConfig, if present start the /oauth endpoint in this process",
-	"assetConfig":            "AssetConfig, if present start the asset server in this process",
-	"dnsConfig":              "DNSConfig, if present start the DNS server in this process",
-	"serviceAccountConfig":   "ServiceAccountConfig holds options related to service accounts",
-	"masterClients":          "MasterClients holds all the client connection information for controllers and other system components",
-	"imageConfig":            "ImageConfig holds options that describe how to build image names for system components",
-	"imagePolicyConfig":      "ImagePolicyConfig controls limits and behavior for importing images",
-	"policyConfig":           "PolicyConfig holds information about where to locate critical pieces of bootstrapping policy",
-	"projectConfig":          "ProjectConfig holds information about project creation and defaults",
-	"routingConfig":          "RoutingConfig holds information about routing and route generation",
-	"networkConfig":          "NetworkConfig to be passed to the compiled in network plugin",
-	"volumeConfig":           "MasterVolumeConfig contains options for configuring volume plugins in the master node.",
-	"jenkinsPipelineConfig":  "JenkinsPipelineConfig holds information about the default Jenkins template used for JenkinsPipeline build strategy.",
-	"auditConfig":            "AuditConfig holds information related to auditing capabilities.",
+	"":                            "MasterConfig holds the necessary configuration options for the OpenShift master",
+	"servingInfo":                 "ServingInfo describes how to start serving",
+	"authConfig":                  "AuthConfig configures authentication options in addition to the standard oauth token and client certificate authenticators",
+	"corsAllowedOrigins":          "CORSAllowedOrigins",
+	"apiLevels":                   "APILevels is a list of API levels that should be enabled on startup: v1 as examples",
+	"masterPublicURL":             "MasterPublicURL is how clients can access the OpenShift API server",
+	"controllers":                 "Controllers is a list of the controllers that should be started. If set to \"none\", no controllers will start automatically. The default value is \"*\" which will start all controllers. When using \"*\", you may exclude controllers by prepending a \"-\" in front of their name. No other values are recognized at this time.",
+	"pauseControllers":            "PauseControllers instructs the master to not automatically start controllers, but instead to wait until a notification to the server is received before launching them.",
+	"controllerLeaseTTL":          "ControllerLeaseTTL enables controller election, instructing the master to attempt to acquire a lease before controllers start and renewing it within a number of seconds defined by this value. Setting this value non-negative forces pauseControllers=true. This value defaults off (0, or omitted) and controller election can be disabled with -1.",
+	"admissionConfig":             "AdmissionConfig contains admission control plugin configuration.",
+	"controllerConfig":            "ControllerConfig holds configuration values for controllers",
+	"disabledFeatures":            "DisabledFeatures is a list of features that should not be started.  We omitempty here because its very unlikely that anyone will want to manually disable features and we don't want to encourage it.",
+	"etcdStorageConfig":           "EtcdStorageConfig contains information about how API resources are stored in Etcd. These values are only relevant when etcd is the backing store for the cluster.",
+	"etcdClientInfo":              "EtcdClientInfo contains information about how to connect to etcd",
+	"kubeletClientInfo":           "KubeletClientInfo contains information about how to connect to kubelets",
+	"kubernetesMasterConfig":      "KubernetesMasterConfig, if present start the kubernetes master in this process",
+	"etcdConfig":                  "EtcdConfig, if present start etcd in this process",
+	"oauthConfig":                 "OAuthConfig, if present start the /oauth endpoint in this process",
+	"assetConfig":                 "AssetConfig, if present start the asset server in this process",
+	"dnsConfig":                   "DNSConfig, if present start the DNS server in this process",
+	"serviceAccountConfig":        "ServiceAccountConfig holds options related to service accounts",
+	"masterClients":               "MasterClients holds all the client connection information for controllers and other system components",
+	"imageConfig":                 "ImageConfig holds options that describe how to build image names for system components",
+	"imagePolicyConfig":           "ImagePolicyConfig controls limits and behavior for importing images",
+	"policyConfig":                "PolicyConfig holds information about where to locate critical pieces of bootstrapping policy",
+	"projectConfig":               "ProjectConfig holds information about project creation and defaults",
+	"routingConfig":               "RoutingConfig holds information about routing and route generation",
+	"networkConfig":               "NetworkConfig to be passed to the compiled in network plugin",
+	"volumeConfig":                "MasterVolumeConfig contains options for configuring volume plugins in the master node.",
+	"jenkinsPipelineConfig":       "JenkinsPipelineConfig holds information about the default Jenkins template used for JenkinsPipeline build strategy.",
+	"auditConfig":                 "AuditConfig holds information related to auditing capabilities.",
+	"enableTemplateServiceBroker": "EnableTemplateServiceBroker is a temporary switch which enables TemplateServiceBroker.",
 }
 
 func (MasterConfig) SwaggerDoc() map[string]string {
@@ -467,6 +501,7 @@ var map_MasterNetworkConfig = map[string]string{
 	"hostSubnetLength":       "HostSubnetLength is the number of bits to allocate to each host's subnet e.g. 8 would mean a /24 network on the host",
 	"serviceNetworkCIDR":     "ServiceNetwork is the CIDR string to specify the service networks",
 	"externalIPNetworkCIDRs": "ExternalIPNetworkCIDRs controls what values are acceptable for the service external IP field. If empty, no externalIP may be set. It may contain a list of CIDRs which are checked for access. If a CIDR is prefixed with !, IPs in that CIDR will be rejected. Rejections will be applied first, then the IP checked against one of the allowed CIDRs. You should ensure this range does not overlap with your nodes, pods, or service CIDRs for security reasons.",
+	"ingressIPNetworkCIDR":   "IngressIPNetworkCIDR controls the range to assign ingress ips from for services of type LoadBalancer on bare metal. If empty, ingress ips will not be assigned. It may contain a single CIDR that will be allocated from. For security reasons, you should ensure that this range does not overlap with the CIDRs reserved for external ips, nodes, pods, or services.",
 }
 
 func (MasterNetworkConfig) SwaggerDoc() map[string]string {
@@ -504,25 +539,29 @@ func (NodeAuthConfig) SwaggerDoc() map[string]string {
 }
 
 var map_NodeConfig = map[string]string{
-	"":                    "NodeConfig is the fully specified config starting an OpenShift node",
-	"nodeName":            "NodeName is the value used to identify this particular node in the cluster.  If possible, this should be your fully qualified hostname. If you're describing a set of static nodes to the master, this value must match one of the values in the list",
-	"nodeIP":              "Node may have multiple IPs, specify the IP to use for pod traffic routing If not specified, network parse/lookup on the nodeName is performed and the first non-loopback address is used",
-	"servingInfo":         "ServingInfo describes how to start serving",
-	"masterKubeConfig":    "MasterKubeConfig is a filename for the .kubeconfig file that describes how to connect this node to the master",
-	"dnsDomain":           "DNSDomain holds the domain suffix",
-	"dnsIP":               "DNSIP holds the IP",
-	"networkPluginName":   "Deprecated and maintained for backward compatibility, use NetworkConfig.NetworkPluginName instead",
-	"networkConfig":       "NetworkConfig provides network options for the node",
-	"volumeDirectory":     "VolumeDirectory is the directory that volumes will be stored under",
-	"imageConfig":         "ImageConfig holds options that describe how to build image names for system components",
-	"allowDisabledDocker": "AllowDisabledDocker if true, the Kubelet will ignore errors from Docker.  This means that a node can start on a machine that doesn't have docker started.",
-	"podManifestConfig":   "PodManifestConfig holds the configuration for enabling the Kubelet to create pods based from a manifest file(s) placed locally on the node",
-	"authConfig":          "AuthConfig holds authn/authz configuration options",
-	"dockerConfig":        "DockerConfig holds Docker related configuration options.",
-	"kubeletArguments":    "KubeletArguments are key value pairs that will be passed directly to the Kubelet that match the Kubelet's command line arguments.  These are not migrated or validated, so if you use them they may become invalid. These values override other settings in NodeConfig which may cause invalid configurations.",
-	"proxyArguments":      "ProxyArguments are key value pairs that will be passed directly to the Proxy that match the Proxy's command line arguments.  These are not migrated or validated, so if you use them they may become invalid. These values override other settings in NodeConfig which may cause invalid configurations.",
-	"iptablesSyncPeriod":  "IPTablesSyncPeriod is how often iptable rules are refreshed",
-	"volumeConfig":        "VolumeConfig contains options for configuring volumes on the node.",
+	"":                                "NodeConfig is the fully specified config starting an OpenShift node",
+	"nodeName":                        "NodeName is the value used to identify this particular node in the cluster.  If possible, this should be your fully qualified hostname. If you're describing a set of static nodes to the master, this value must match one of the values in the list",
+	"nodeIP":                          "Node may have multiple IPs, specify the IP to use for pod traffic routing If not specified, network parse/lookup on the nodeName is performed and the first non-loopback address is used",
+	"servingInfo":                     "ServingInfo describes how to start serving",
+	"masterKubeConfig":                "MasterKubeConfig is a filename for the .kubeconfig file that describes how to connect this node to the master",
+	"masterClientConnectionOverrides": "MasterClientConnectionOverrides provides overrides to the client connection used to connect to the master.",
+	"dnsDomain":                       "DNSDomain holds the domain suffix that will be used for the DNS search path inside each container. Defaults to 'cluster.local'.",
+	"dnsIP":                           "DNSIP is the IP address that pods will use to access cluster DNS. Defaults to the service IP of the Kubernetes master. This IP must be listening on port 53 for compatibility with libc resolvers (which cannot be configured to resolve names from any other port). When running more complex local DNS configurations, this is often set to the local address of a DNS proxy like dnsmasq, which then will consult either the local DNS (see dnsBindAddress) or the master DNS.",
+	"dnsBindAddress":                  "DNSBindAddress is the ip:port to serve DNS on. If this is not set, the DNS server will not be started. Because most DNS resolvers will only listen on port 53, if you select an alternative port you will need a DNS proxy like dnsmasq to answer queries for containers. A common configuration is dnsmasq configured on a node IP listening on 53 and delegating queries for dnsDomain to this process, while sending other queries to the host environments nameservers.",
+	"dnsNameservers":                  "DNSNameservers is a list of ip:port values of recursive nameservers to forward queries to when running a local DNS server if dnsBindAddress is set. If this value is empty, the DNS server will default to the nameservers listed in /etc/resolv.conf. If you have configured dnsmasq or another DNS proxy on the system, this value should be set to the upstream nameservers dnsmasq resolves with.",
+	"networkPluginName":               "Deprecated and maintained for backward compatibility, use NetworkConfig.NetworkPluginName instead",
+	"networkConfig":                   "NetworkConfig provides network options for the node",
+	"volumeDirectory":                 "VolumeDirectory is the directory that volumes will be stored under",
+	"imageConfig":                     "ImageConfig holds options that describe how to build image names for system components",
+	"allowDisabledDocker":             "AllowDisabledDocker if true, the Kubelet will ignore errors from Docker.  This means that a node can start on a machine that doesn't have docker started.",
+	"podManifestConfig":               "PodManifestConfig holds the configuration for enabling the Kubelet to create pods based from a manifest file(s) placed locally on the node",
+	"authConfig":                      "AuthConfig holds authn/authz configuration options",
+	"dockerConfig":                    "DockerConfig holds Docker related configuration options.",
+	"kubeletArguments":                "KubeletArguments are key value pairs that will be passed directly to the Kubelet that match the Kubelet's command line arguments.  These are not migrated or validated, so if you use them they may become invalid. These values override other settings in NodeConfig which may cause invalid configurations.",
+	"proxyArguments":                  "ProxyArguments are key value pairs that will be passed directly to the Proxy that match the Proxy's command line arguments.  These are not migrated or validated, so if you use them they may become invalid. These values override other settings in NodeConfig which may cause invalid configurations.",
+	"iptablesSyncPeriod":              "IPTablesSyncPeriod is how often iptable rules are refreshed",
+	"enableUnidling":                  "EnableUnidling controls whether or not the hybrid unidling proxy will be set up",
+	"volumeConfig":                    "VolumeConfig contains options for configuring volumes on the node.",
 }
 
 func (NodeConfig) SwaggerDoc() map[string]string {
@@ -531,7 +570,7 @@ func (NodeConfig) SwaggerDoc() map[string]string {
 
 var map_NodeNetworkConfig = map[string]string{
 	"":                  "NodeNetworkConfig provides network options for the node",
-	"networkPluginName": "NetworkPluginName is a string specifying the networking plugin Optional for OpenShift network plugin, node will auto detect network plugin configured by OpenShift master.",
+	"networkPluginName": "NetworkPluginName is a string specifying the networking plugin",
 	"mtu":               "Maximum transmission unit for the network packets",
 }
 
@@ -666,6 +705,16 @@ func (RFC2307Config) SwaggerDoc() map[string]string {
 	return map_RFC2307Config
 }
 
+var map_RegistryLocation = map[string]string{
+	"":           "RegistryLocation contains a location of the registry specified by the registry domain name. The domain name might include wildcards, like '*' or '??'.",
+	"domainName": "DomainName specifies a domain name for the registry In case the registry use non-standard (80 or 443) port, the port should be included in the domain name as well.",
+	"insecure":   "Insecure indicates whether the registry is secure (https) or insecure (http) By default (if not specified) the registry is assumed as secure.",
+}
+
+func (RegistryLocation) SwaggerDoc() map[string]string {
+	return map_RegistryLocation
+}
+
 var map_RemoteConnectionInfo = map[string]string{
 	"":    "RemoteConnectionInfo holds information necessary for establishing a remote connection",
 	"url": "URL is the remote URL to connect to",
@@ -674,6 +723,19 @@ var map_RemoteConnectionInfo = map[string]string{
 
 func (RemoteConnectionInfo) SwaggerDoc() map[string]string {
 	return map_RemoteConnectionInfo
+}
+
+var map_RequestHeaderAuthenticationOptions = map[string]string{
+	"":                    "RequestHeaderAuthenticationOptions provides options for setting up a front proxy against the entire API instead of against the /oauth endpoint.",
+	"clientCA":            "ClientCA is a file with the trusted signer certs.  It is required.",
+	"clientCommonNames":   "ClientCommonNames is a required list of common names to require a match from.",
+	"usernameHeaders":     "UsernameHeaders is the list of headers to check for user information.  First hit wins.",
+	"groupHeaders":        "GroupNameHeader is the set of headers to check for group information.  All are unioned.",
+	"extraHeaderPrefixes": "ExtraHeaderPrefixes is the set of request header prefixes to inspect for user extra. X-Remote-Extra- is suggested.",
+}
+
+func (RequestHeaderAuthenticationOptions) SwaggerDoc() map[string]string {
+	return map_RequestHeaderAuthenticationOptions
 }
 
 var map_RequestHeaderIdentityProvider = map[string]string{
@@ -740,6 +802,8 @@ var map_ServingInfo = map[string]string{
 	"bindNetwork":       "BindNetwork is the type of network to bind to - defaults to \"tcp4\", accepts \"tcp\", \"tcp4\", and \"tcp6\"",
 	"clientCA":          "ClientCA is the certificate bundle for all the signers that you'll recognize for incoming client certificates",
 	"namedCertificates": "NamedCertificates is a list of certificates to use to secure requests to specific hostnames",
+	"minTLSVersion":     "MinTLSVersion is the minimum TLS version supported. Values must match version names from https://golang.org/pkg/crypto/tls/#pkg-constants",
+	"cipherSuites":      "CipherSuites contains an overridden list of ciphers for the server to support. Values must match cipher suite IDs from https://golang.org/pkg/crypto/tls/#pkg-constants",
 }
 
 func (ServingInfo) SwaggerDoc() map[string]string {
@@ -817,7 +881,7 @@ func (UserAgentDenyRule) SwaggerDoc() map[string]string {
 
 var map_UserAgentMatchRule = map[string]string{
 	"":          "UserAgentMatchRule describes how to match a given request based on User-Agent and HTTPVerb",
-	"regex":     "UserAgentRegex is a regex that is checked against the User-Agent. Known variants of oc clients 1. oc accessing kube resources: oc/v1.2.0 (linux/amd64) kubernetes/bc4550d 2. oc accessing openshift resources: oc/v1.1.3 (linux/amd64) openshift/b348c2f 3. openshift kubectl accessing kube resources:  openshift/v1.2.0 (linux/amd64) kubernetes/bc4550d 4. openshit kubectl accessing openshift resources: openshift/v1.1.3 (linux/amd64) openshift/b348c2f 5. oadm accessing kube resources: oadm/v1.2.0 (linux/amd64) kubernetes/bc4550d 6. oadm accessing openshift resources: oadm/v1.1.3 (linux/amd64) openshift/b348c2f 7. openshift cli accessing kube resources: openshift/v1.2.0 (linux/amd64) kubernetes/bc4550d 8. openshift cli accessing openshift resources: openshift/v1.1.3 (linux/amd64) openshift/b348c2f",
+	"regex":     "UserAgentRegex is a regex that is checked against the User-Agent. Known variants of oc clients 1. oc accessing kube resources: oc/v1.2.0 (linux/amd64) kubernetes/bc4550d 2. oc accessing openshift resources: oc/v1.1.3 (linux/amd64) openshift/b348c2f 3. openshift kubectl accessing kube resources:  openshift/v1.2.0 (linux/amd64) kubernetes/bc4550d 4. openshift kubectl accessing openshift resources: openshift/v1.1.3 (linux/amd64) openshift/b348c2f 5. oadm accessing kube resources: oadm/v1.2.0 (linux/amd64) kubernetes/bc4550d 6. oadm accessing openshift resources: oadm/v1.1.3 (linux/amd64) openshift/b348c2f 7. openshift cli accessing kube resources: openshift/v1.2.0 (linux/amd64) kubernetes/bc4550d 8. openshift cli accessing openshift resources: openshift/v1.1.3 (linux/amd64) openshift/b348c2f",
 	"httpVerbs": "HTTPVerbs specifies which HTTP verbs should be matched.  An empty list means \"match all verbs\".",
 }
 

@@ -4,6 +4,7 @@
 /.project
 /.vagrant
 /.vscode
+/.settings
 /cpu.pprof
 /assets/app/config.local.js
 /assets/nbproject
@@ -11,6 +12,7 @@
 /examples/sample-app/logs/openshift.log
 /dind-*.rc
 /os-version-defs
+/.make/
 *.swp
 .vimrc
 .vagrant-openshift.json*

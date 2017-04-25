@@ -1,5 +1,3 @@
-// +build integration,!no-etcd
-
 package integration
 
 import (
@@ -8,14 +6,18 @@ import (
 	"strconv"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	restclient "k8s.io/client-go/rest"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client/restclient"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
 
+	"github.com/openshift/origin/pkg/authorization/authorizer/scope"
 	"github.com/openshift/origin/pkg/cmd/admin/policy"
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
 	"github.com/openshift/origin/pkg/cmd/server/bootstrappolicy"
+	"github.com/openshift/origin/pkg/cmd/server/origin"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
+	oauthapi "github.com/openshift/origin/pkg/oauth/api"
 	testutil "github.com/openshift/origin/test/util"
 	testserver "github.com/openshift/origin/test/util/server"
 )
@@ -28,6 +30,7 @@ type testRequest struct {
 
 func TestNodeAuth(t *testing.T) {
 	testutil.RequireEtcd(t)
+	defer testutil.DumpEtcdOnFailure(t)
 	// Server config
 	masterConfig, nodeConfig, adminKubeConfigFile, err := testserver.StartTestAllInOne()
 	if err != nil {
@@ -70,6 +73,25 @@ func TestNodeAuth(t *testing.T) {
 	if err := addBob.AddRole(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
+	// create a scoped token for bob that is only good for getting user info
+	bobUser, err := bobClient.Users().Get("~", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	whoamiOnlyBobToken := &oauthapi.OAuthAccessToken{
+		ObjectMeta: metav1.ObjectMeta{Name: "whoami-token-plus-some-padding-here-to-make-the-limit"},
+		ClientName: origin.OpenShiftCLIClientID,
+		ExpiresIn:  200,
+		Scopes:     []string{scope.UserInfo},
+		UserName:   bobUser.Name,
+		UserUID:    string(bobUser.UID),
+	}
+	if _, err := originAdminClient.OAuthAccessTokens().Create(whoamiOnlyBobToken); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, _, bobWhoamiOnlyConfig, err := testutil.GetClientForUser(*adminConfig, "bob")
+	bobWhoamiOnlyConfig.BearerToken = whoamiOnlyBobToken.Name
 
 	// Grant sa1 system:cluster-reader, which should let them read metrics and stats
 	addSA1 := &policy.RoleModificationOptions{
@@ -133,6 +155,11 @@ func TestNodeAuth(t *testing.T) {
 			KubeletClientConfig: kubeletClientConfig(bobConfig),
 			NodeViewer:          true,
 		},
+		// bob is normally a viewer, but when using a scoped token, he should end up denied
+		"bob-scoped": {
+			KubeletClientConfig: kubeletClientConfig(bobWhoamiOnlyConfig),
+			Forbidden:           true,
+		},
 		"alice": {
 			KubeletClientConfig: kubeletClientConfig(aliceConfig),
 			Forbidden:           true,
@@ -195,15 +222,15 @@ func TestNodeAuth(t *testing.T) {
 
 			// not found admin requests
 			{"GET", "/containerLogs/mynamespace/mypod/mycontainer", adminResultMissing},
-			{"POST", "/exec/mynamespace/mypod/mycontainer", adminResultMissing},
+			{"POST", "/exec/mynamespace/mypod/mycontainer?output=1", adminResultMissing},
 			{"POST", "/run/mynamespace/mypod/mycontainer", adminResultMissing},
-			{"POST", "/attach/mynamespace/mypod/mycontainer", adminResultMissing},
+			{"POST", "/attach/mynamespace/mypod/mycontainer?output=1", adminResultMissing},
 			{"POST", "/portForward/mynamespace/mypod/mycontainer", adminResultMissing},
 
 			// GET is supported in origin on /exec and /attach for backwards compatibility
 			// make sure node admin permissions are required
-			{"GET", "/exec/mynamespace/mypod/mycontainer", adminResultMissing},
-			{"GET", "/attach/mynamespace/mypod/mycontainer", adminResultMissing},
+			{"GET", "/exec/mynamespace/mypod/mycontainer?output=1", adminResultMissing},
+			{"GET", "/attach/mynamespace/mypod/mycontainer?output=1", adminResultMissing},
 		}
 
 		rt, err := kubeletclient.MakeTransport(tc.KubeletClientConfig)
@@ -225,7 +252,7 @@ func TestNodeAuth(t *testing.T) {
 			}
 			resp.Body.Close()
 			if resp.StatusCode != r.Result {
-				t.Errorf("%s: %s: expected %d, got %d", k, r.Path, r.Result, resp.StatusCode)
+				t.Errorf("%s: token=%s %s: expected %d, got %d", k, tc.KubeletClientConfig.BearerToken, r.Path, r.Result, resp.StatusCode)
 				continue
 			}
 		}

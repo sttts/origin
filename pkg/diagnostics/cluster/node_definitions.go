@@ -7,8 +7,9 @@ import (
 	"errors"
 	"fmt"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	osclient "github.com/openshift/origin/pkg/client"
@@ -47,7 +48,7 @@ other options for 'oadm manage-node').
 
 // NodeDefinitions is a Diagnostic for analyzing the nodes in a cluster.
 type NodeDefinitions struct {
-	KubeClient *kclient.Client
+	KubeClient kclientset.Interface
 	OsClient   *osclient.Client
 }
 
@@ -65,7 +66,7 @@ func (d *NodeDefinitions) CanRun() (bool, error) {
 	if d.KubeClient == nil || d.OsClient == nil {
 		return false, errors.New("must have kube and os client")
 	}
-	can, err := userCan(d.OsClient, authorizationapi.AuthorizationAttributes{
+	can, err := userCan(d.OsClient, authorizationapi.Action{
 		Verb:     "list",
 		Group:    kapi.GroupName,
 		Resource: "nodes",
@@ -81,7 +82,7 @@ func (d *NodeDefinitions) CanRun() (bool, error) {
 func (d *NodeDefinitions) Check() types.DiagnosticResult {
 	r := types.NewDiagnosticResult("NodeDefinition")
 
-	nodes, err := d.KubeClient.Nodes().List(kapi.ListOptions{})
+	nodes, err := d.KubeClient.Core().Nodes().List(metav1.ListOptions{})
 	if err != nil {
 		r.Error("DClu0001", err, fmt.Sprintf(clientErrorGettingNodes, err))
 		return r

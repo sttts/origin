@@ -4,65 +4,77 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
+	kv1core "k8s.io/client-go/kubernetes/typed/core/v1"
+	kclientv1 "k8s.io/client-go/pkg/api/v1"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client/cache"
-	"k8s.io/kubernetes/pkg/client/record"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
+	kclientsetexternal "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	kcoreinformers "k8s.io/kubernetes/pkg/client/informers/informers_generated/internalversion/core/internalversion"
 	kcontroller "k8s.io/kubernetes/pkg/controller"
-	"k8s.io/kubernetes/pkg/controller/framework"
-	"k8s.io/kubernetes/pkg/runtime"
-	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
-	"k8s.io/kubernetes/pkg/util/wait"
-	"k8s.io/kubernetes/pkg/util/workqueue"
 
 	osclient "github.com/openshift/origin/pkg/client"
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
-	deployutil "github.com/openshift/origin/pkg/deploy/util"
 )
 
 const (
 	// We must avoid creating new replication controllers until the deployment config and replication
 	// controller stores have synced. If it hasn't synced, to avoid a hot loop, we'll wait this long
 	// between checks.
-	StoreSyncedPollPeriod = 100 * time.Millisecond
-	// MaxRetries is the number of times a deployment config will be retried before it is dropped out
-	// of the queue.
-	MaxRetries = 5
+	storeSyncedPollPeriod = 100 * time.Millisecond
 )
 
 // NewDeploymentConfigController creates a new DeploymentConfigController.
-func NewDeploymentConfigController(dcInformer, rcInformer, podInformer framework.SharedIndexInformer, oc osclient.Interface, kc kclient.Interface, codec runtime.Codec) *DeploymentConfigController {
+func NewDeploymentConfigController(
+	dcInformer cache.SharedIndexInformer,
+	rcInformer kcoreinformers.ReplicationControllerInformer,
+	podInformer kcoreinformers.PodInformer,
+	oc osclient.Interface,
+	internalKubeClientset kclientset.Interface,
+	externalKubeClientset kclientsetexternal.Interface,
+	codec runtime.Codec,
+) *DeploymentConfigController {
 	eventBroadcaster := record.NewBroadcaster()
-	eventBroadcaster.StartRecordingToSink(kc.Events(""))
-	recorder := eventBroadcaster.NewRecorder(kapi.EventSource{Component: "deploymentconfig-controller"})
+	eventBroadcaster.StartRecordingToSink(&kv1core.EventSinkImpl{Interface: kv1core.New(externalKubeClientset.CoreV1().RESTClient()).Events("")})
+	recorder := eventBroadcaster.NewRecorder(kapi.Scheme, kclientv1.EventSource{Component: "deploymentconfig-controller"})
 
 	c := &DeploymentConfigController{
 		dn: oc,
-		rn: kc,
+		rn: internalKubeClientset.Core(),
 
 		queue: workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+
+		rcLister:        rcInformer.Lister(),
+		rcListerSynced:  rcInformer.Informer().HasSynced,
+		podLister:       podInformer.Lister(),
+		podListerSynced: podInformer.Informer().HasSynced,
 
 		recorder: recorder,
 		codec:    codec,
 	}
 
 	c.dcStore.Indexer = dcInformer.GetIndexer()
-	dcInformer.AddEventHandler(framework.ResourceEventHandlerFuncs{
+	dcInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    c.addDeploymentConfig,
 		UpdateFunc: c.updateDeploymentConfig,
 		DeleteFunc: c.deleteDeploymentConfig,
 	})
-	c.rcStore.Indexer = rcInformer.GetIndexer()
-	rcInformer.AddEventHandler(framework.ResourceEventHandlerFuncs{
-		AddFunc:    c.addReplicationController,
+	c.dcStoreSynced = dcInformer.HasSynced
+
+	rcInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		UpdateFunc: c.updateReplicationController,
 		DeleteFunc: c.deleteReplicationController,
 	})
-	c.podStore.Indexer = podInformer.GetIndexer()
 
-	c.dcStoreSynced = dcInformer.HasSynced
-	c.rcStoreSynced = rcInformer.HasSynced
-	c.podStoreSynced = podInformer.HasSynced
+	podInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		UpdateFunc: c.updatePod,
+		DeleteFunc: c.deletePod,
+	})
 
 	return c
 }
@@ -70,37 +82,24 @@ func NewDeploymentConfigController(dcInformer, rcInformer, podInformer framework
 // Run begins watching and syncing.
 func (c *DeploymentConfigController) Run(workers int, stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
+	defer c.queue.ShutDown()
+
+	glog.Infof("Starting deploymentconfig controller")
 
 	// Wait for the rc and dc stores to sync before starting any work in this controller.
-	ready := make(chan struct{})
-	go c.waitForSyncedStores(ready, stopCh)
-	select {
-	case <-ready:
-	case <-stopCh:
+	if !cache.WaitForCacheSync(stopCh, c.dcStoreSynced, c.rcListerSynced, c.podListerSynced) {
 		return
 	}
+
+	glog.Info("deploymentconfig controller caches are synced. Starting workers.")
 
 	for i := 0; i < workers; i++ {
 		go wait.Until(c.worker, time.Second, stopCh)
 	}
 
 	<-stopCh
+
 	glog.Infof("Shutting down deploymentconfig controller")
-	c.queue.ShutDown()
-}
-
-func (c *DeploymentConfigController) waitForSyncedStores(ready chan<- struct{}, stopCh <-chan struct{}) {
-	defer utilruntime.HandleCrash()
-
-	for !c.dcStoreSynced() || !c.rcStoreSynced() || !c.podStoreSynced() {
-		glog.V(4).Infof("Waiting for the dc, rc, and pod caches to sync before starting the deployment config controller workers")
-		select {
-		case <-time.After(StoreSyncedPollPeriod):
-		case <-stopCh:
-			return
-		}
-	}
-	close(ready)
 }
 
 func (c *DeploymentConfigController) addDeploymentConfig(obj interface{}) {
@@ -110,9 +109,15 @@ func (c *DeploymentConfigController) addDeploymentConfig(obj interface{}) {
 }
 
 func (c *DeploymentConfigController) updateDeploymentConfig(old, cur interface{}) {
-	dc := cur.(*deployapi.DeploymentConfig)
-	glog.V(4).Infof("Updating deployment config %q", dc.Name)
-	c.enqueueDeploymentConfig(dc)
+	// A periodic relist will send update events for all known configs.
+	newDc := cur.(*deployapi.DeploymentConfig)
+	oldDc := old.(*deployapi.DeploymentConfig)
+	if newDc.ResourceVersion == oldDc.ResourceVersion {
+		return
+	}
+
+	glog.V(4).Infof("Updating deployment config %q", newDc.Name)
+	c.enqueueDeploymentConfig(newDc)
 }
 
 func (c *DeploymentConfigController) deleteDeploymentConfig(obj interface{}) {
@@ -133,29 +138,16 @@ func (c *DeploymentConfigController) deleteDeploymentConfig(obj interface{}) {
 	c.enqueueDeploymentConfig(dc)
 }
 
-// addReplicationController figures out which deploymentconfig is managing this replication
-// controller and requeues the deployment config.
-// TODO: Determine if we need to resync here. Would be useful for adoption but we cannot
-// adopt right now.
-func (c *DeploymentConfigController) addReplicationController(obj interface{}) {
-	rc := obj.(*kapi.ReplicationController)
-	glog.V(4).Infof("Replication controller %q added.", rc.Name)
-	// We are waiting for the deployment config store to sync but still there are pathological
-	// cases of highly latent watches.
-	if dc, err := c.dcStore.GetConfigForController(rc); err == nil && dc != nil {
-		c.enqueueDeploymentConfig(dc)
-	}
-}
-
 // updateReplicationController figures out which deploymentconfig is managing this replication
 // controller and requeues the deployment config.
 func (c *DeploymentConfigController) updateReplicationController(old, cur interface{}) {
 	// A periodic relist will send update events for all known controllers.
-	if kapi.Semantic.DeepEqual(old, cur) {
+	curRC := cur.(*kapi.ReplicationController)
+	oldRC := old.(*kapi.ReplicationController)
+	if curRC.ResourceVersion == oldRC.ResourceVersion {
 		return
 	}
 
-	curRC := cur.(*kapi.ReplicationController)
 	glog.V(4).Infof("Replication controller %q updated.", curRC.Name)
 	if dc, err := c.dcStore.GetConfigForController(curRC); err == nil && dc != nil {
 		c.enqueueDeploymentConfig(dc)
@@ -185,6 +177,37 @@ func (c *DeploymentConfigController) deleteReplicationController(obj interface{}
 	}
 	glog.V(4).Infof("Replication controller %q deleted.", rc.Name)
 	if dc, err := c.dcStore.GetConfigForController(rc); err == nil && dc != nil {
+		c.enqueueDeploymentConfig(dc)
+	}
+}
+
+func (c *DeploymentConfigController) updatePod(old, cur interface{}) {
+	curPod := cur.(*kapi.Pod)
+	oldPod := old.(*kapi.Pod)
+	if curPod.ResourceVersion == oldPod.ResourceVersion {
+		return
+	}
+
+	if dc, err := c.dcStore.GetConfigForPod(curPod); err == nil && dc != nil {
+		c.enqueueDeploymentConfig(dc)
+	}
+}
+
+func (c *DeploymentConfigController) deletePod(obj interface{}) {
+	pod, ok := obj.(*kapi.Pod)
+	if !ok {
+		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+		if !ok {
+			glog.Errorf("Couldn't get object from tombstone %+v", obj)
+			return
+		}
+		pod, ok = tombstone.Obj.(*kapi.Pod)
+		if !ok {
+			glog.Errorf("Tombstone contained object that is not a pod: %+v", obj)
+			return
+		}
+	}
+	if dc, err := c.dcStore.GetConfigForPod(pod); err == nil && dc != nil {
 		c.enqueueDeploymentConfig(dc)
 	}
 }
@@ -222,13 +245,7 @@ func (c *DeploymentConfigController) work() bool {
 		return false
 	}
 
-	copied, err := deployutil.DeploymentConfigDeepCopy(dc)
-	if err != nil {
-		glog.Error(err.Error())
-		return false
-	}
-
-	err = c.Handle(copied)
+	err = c.Handle(dc)
 	c.handleErr(err, key)
 
 	return false

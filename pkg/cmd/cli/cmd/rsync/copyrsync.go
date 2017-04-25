@@ -10,9 +10,10 @@ import (
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-	kerrors "k8s.io/kubernetes/pkg/util/errors"
-	"k8s.io/kubernetes/pkg/util/sets"
+	kerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
 
+	cmdutil "github.com/openshift/origin/pkg/cmd/util"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 )
 
@@ -33,7 +34,7 @@ var rshExcludeFlags = sets.NewString("delete", "strategy", "quiet", "include", "
 
 func newRsyncStrategy(f *clientcmd.Factory, c *cobra.Command, o *RsyncOptions) (copyStrategy, error) {
 	// Determine the rsh command to pass to the local rsync command
-	rsh := siblingCommand(c, "rsh")
+	rsh := cmdutil.SiblingCommand(c, "rsh")
 	rshCmd := []string{rsh}
 	// Append all original flags to rsh command
 	c.Flags().Visit(func(flag *pflag.Flag) {
@@ -58,7 +59,7 @@ func newRsyncStrategy(f *clientcmd.Factory, c *cobra.Command, o *RsyncOptions) (
 	if o.Source.Local() {
 		podName = o.Destination.PodName
 	}
-	client, err := f.Client()
+	client, err := f.ClientSet()
 	if err != nil {
 		return nil, err
 	}

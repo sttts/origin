@@ -1,7 +1,7 @@
 package api
 
 import (
-	"k8s.io/kubernetes/pkg/auth/user"
+	"k8s.io/apiserver/pkg/authentication/user"
 )
 
 const (
@@ -41,7 +41,7 @@ type UserIdentityMapper interface {
 
 type Client interface {
 	GetId() string
-	ValidateSecret(secret string) bool
+	GetSecret() string
 	GetRedirectUri() string
 	GetUserData() interface{}
 }

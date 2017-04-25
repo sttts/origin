@@ -9,13 +9,15 @@ import (
 	"strings"
 	"time"
 
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/client/restclient"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
+	restclient "k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/kubernetes/pkg/api"
+	kclientsetexternal "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
+	kclientsetinternal "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/sets"
 
 	"github.com/openshift/origin/pkg/client"
 	cmdutil "github.com/openshift/origin/pkg/cmd/util"
@@ -240,6 +242,10 @@ func GetMasterFileReferences(config *MasterConfig) []*string {
 		refs = append(refs, &config.KubernetesMasterConfig.ProxyClientInfo.KeyFile)
 	}
 
+	if config.AuthConfig.RequestHeader != nil {
+		refs = append(refs, &config.AuthConfig.RequestHeader.ClientCA)
+	}
+
 	refs = append(refs, &config.ServiceAccountConfig.MasterCA)
 	refs = append(refs, &config.ServiceAccountConfig.PrivateKeyFile)
 	for i := range config.ServiceAccountConfig.PublicKeyFiles {
@@ -255,6 +261,8 @@ func GetMasterFileReferences(config *MasterConfig) []*string {
 		refs = append(refs, &config.ControllerConfig.ServiceServingCert.Signer.CertFile)
 		refs = append(refs, &config.ControllerConfig.ServiceServingCert.Signer.KeyFile)
 	}
+
+	refs = append(refs, &config.AuditConfig.AuditFilePath)
 
 	return refs
 }
@@ -289,35 +297,19 @@ func GetNodeFileReferences(config *NodeConfig) []*string {
 	return refs
 }
 
-// TODO: clients should be copied and instantiated from a common client config, tweaked, then
-// given to individual controllers and other infrastructure components.
-func GetKubeClient(kubeConfigFile string) (*kclient.Client, *restclient.Config, error) {
-	loadingRules := &clientcmd.ClientConfigLoadingRules{}
-	loadingRules.ExplicitPath = kubeConfigFile
-	loader := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{})
-
-	kubeConfig, err := loader.ClientConfig()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// This is an internal client which is shared by most controllers, so boost default QPS
-	// TODO: this should be configured by the caller, not in this method.
-	kubeConfig.QPS = 100.0
-	kubeConfig.Burst = 200
-
-	kubeConfig.WrapTransport = DefaultClientTransport
-	kubeClient, err := kclient.New(kubeConfig)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return kubeClient, kubeConfig, nil
+// SetProtobufClientDefaults sets the appropriate content types for defaulting to protobuf
+// client communications and increases the default QPS and burst. This is used to override
+// defaulted config supporting versions older than 1.3 for new configurations generated in 1.3+.
+func SetProtobufClientDefaults(overrides *ClientConnectionOverrides) {
+	overrides.AcceptContentTypes = "application/vnd.kubernetes.protobuf,application/json"
+	overrides.ContentType = "application/vnd.kubernetes.protobuf"
+	overrides.QPS *= 2
+	overrides.Burst *= 2
 }
 
 // TODO: clients should be copied and instantiated from a common client config, tweaked, then
 // given to individual controllers and other infrastructure components.
-func GetOpenShiftClient(kubeConfigFile string) (*client.Client, *restclient.Config, error) {
+func GetInternalKubeClient(kubeConfigFile string, overrides *ClientConnectionOverrides) (kclientsetinternal.Interface, *restclient.Config, error) {
 	loadingRules := &clientcmd.ClientConfigLoadingRules{}
 	loadingRules.ExplicitPath = kubeConfigFile
 	loader := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{})
@@ -327,10 +319,52 @@ func GetOpenShiftClient(kubeConfigFile string) (*client.Client, *restclient.Conf
 		return nil, nil, err
 	}
 
-	// This is an internal client which is shared by most controllers, so boost default QPS
-	// TODO: this should be configured by the caller, not in this method.
-	kubeConfig.QPS = 150.0
-	kubeConfig.Burst = 300
+	applyClientConnectionOverrides(overrides, kubeConfig)
+
+	kubeConfig.WrapTransport = DefaultClientTransport
+	clientset, err := kclientsetinternal.NewForConfig(kubeConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+	return clientset, kubeConfig, nil
+}
+
+// TODO: clients should be copied and instantiated from a common client config, tweaked, then
+// given to individual controllers and other infrastructure components.
+func GetExternalKubeClient(kubeConfigFile string, overrides *ClientConnectionOverrides) (kclientsetexternal.Interface, *restclient.Config, error) {
+	loadingRules := &clientcmd.ClientConfigLoadingRules{}
+	loadingRules.ExplicitPath = kubeConfigFile
+	loader := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{})
+
+	kubeConfig, err := loader.ClientConfig()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	applyClientConnectionOverrides(overrides, kubeConfig)
+
+	kubeConfig.WrapTransport = DefaultClientTransport
+	clientset, err := kclientsetexternal.NewForConfig(kubeConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+	return clientset, kubeConfig, nil
+}
+
+// TODO: clients should be copied and instantiated from a common client config, tweaked, then
+// given to individual controllers and other infrastructure components. Overrides are optional
+// and may alter the default configuration.
+func GetOpenShiftClient(kubeConfigFile string, overrides *ClientConnectionOverrides) (*client.Client, *restclient.Config, error) {
+	loadingRules := &clientcmd.ClientConfigLoadingRules{}
+	loadingRules.ExplicitPath = kubeConfigFile
+	loader := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{})
+
+	kubeConfig, err := loader.ClientConfig()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	applyClientConnectionOverrides(overrides, kubeConfig)
 
 	kubeConfig.WrapTransport = DefaultClientTransport
 	openshiftClient, err := client.New(kubeConfig)
@@ -339,6 +373,17 @@ func GetOpenShiftClient(kubeConfigFile string) (*client.Client, *restclient.Conf
 	}
 
 	return openshiftClient, kubeConfig, nil
+}
+
+// applyClientConnectionOverrides updates a kubeConfig with the overrides from the config.
+func applyClientConnectionOverrides(overrides *ClientConnectionOverrides, kubeConfig *restclient.Config) {
+	if overrides == nil {
+		return
+	}
+	kubeConfig.QPS = overrides.QPS
+	kubeConfig.Burst = int(overrides.Burst)
+	kubeConfig.ContentConfig.AcceptContentTypes = overrides.AcceptContentTypes
+	kubeConfig.ContentConfig.ContentType = overrides.ContentType
 }
 
 // DefaultClientTransport sets defaults for a client Transport that are suitable
@@ -391,7 +436,7 @@ func GetClientCertCAPool(options MasterConfig) (*x509.CertPool, error) {
 	roots := x509.NewCertPool()
 
 	// Add CAs for OAuth
-	certs, err := getOAuthClientCertCAs(options)
+	certs, err := GetOAuthClientCertCAs(options)
 	if err != nil {
 		return nil, err
 	}
@@ -411,7 +456,7 @@ func GetClientCertCAPool(options MasterConfig) (*x509.CertPool, error) {
 	return roots, nil
 }
 
-func getOAuthClientCertCAs(options MasterConfig) ([]*x509.Certificate, error) {
+func GetOAuthClientCertCAs(options MasterConfig) ([]*x509.Certificate, error) {
 	if !UseTLS(options.ServingInfo.ServingInfo) {
 		return nil, nil
 	}
@@ -439,6 +484,21 @@ func getOAuthClientCertCAs(options MasterConfig) ([]*x509.Certificate, error) {
 	return allCerts, nil
 }
 
+func GetRequestHeaderClientCertCAs(options MasterConfig) ([]*x509.Certificate, error) {
+	if !UseTLS(options.ServingInfo.ServingInfo) {
+		return nil, nil
+	}
+	if options.AuthConfig.RequestHeader == nil {
+		return nil, nil
+	}
+
+	certs, err := cmdutil.CertificatesFromFile(options.AuthConfig.RequestHeader.ClientCA)
+	if err != nil {
+		return nil, fmt.Errorf("Error reading %s: %s", options.AuthConfig.RequestHeader.ClientCA, err)
+	}
+	return certs, nil
+}
+
 func getAPIClientCertCAs(options MasterConfig) ([]*x509.Certificate, error) {
 	if !UseTLS(options.ServingInfo.ServingInfo) {
 		return nil, nil
@@ -450,6 +510,12 @@ func getAPIClientCertCAs(options MasterConfig) ([]*x509.Certificate, error) {
 func GetKubeletClientConfig(options MasterConfig) *kubeletclient.KubeletClientConfig {
 	config := &kubeletclient.KubeletClientConfig{
 		Port: options.KubeletClientInfo.Port,
+		PreferredAddressTypes: []string{
+			string(api.NodeHostName),
+			string(api.NodeInternalIP),
+			string(api.NodeExternalIP),
+			string(api.NodeLegacyHostIP),
+		},
 	}
 
 	if len(options.KubeletClientInfo.CA) > 0 {
@@ -548,7 +614,19 @@ func GetDisabledAPIVersionsForGroup(config KubernetesMasterConfig, apiGroup stri
 	return allowedVersions.Difference(enabledVersions).List()
 }
 
-func HasKubernetesAPIVersion(config KubernetesMasterConfig, groupVersion unversioned.GroupVersion) bool {
+func HasKubernetesAPIVersion(config KubernetesMasterConfig, groupVersion schema.GroupVersion) bool {
 	enabledVersions := GetEnabledAPIVersionsForGroup(config, groupVersion.Group)
 	return sets.NewString(enabledVersions...).Has(groupVersion.Version)
+}
+
+func CIDRsOverlap(cidr1, cidr2 string) bool {
+	_, ipNet1, err := net.ParseCIDR(cidr1)
+	if err != nil {
+		return false
+	}
+	_, ipNet2, err := net.ParseCIDR(cidr2)
+	if err != nil {
+		return false
+	}
+	return ipNet1.Contains(ipNet2.IP) || ipNet2.Contains(ipNet1.IP)
 }

@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,10 +23,15 @@ import (
 
 	cadvisorapi "github.com/google/cadvisor/info/v1"
 	cadvisorapiv2 "github.com/google/cadvisor/info/v2"
-	"k8s.io/kubernetes/pkg/api"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	clientv1 "k8s.io/client-go/pkg/api/v1"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/clock"
+	utiltesting "k8s.io/client-go/util/testing"
+	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/apis/componentconfig"
-	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
-	"k8s.io/kubernetes/pkg/client/record"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset/fake"
 	cadvisortest "k8s.io/kubernetes/pkg/kubelet/cadvisor/testing"
 	"k8s.io/kubernetes/pkg/kubelet/cm"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
@@ -36,12 +41,11 @@ import (
 	nettest "k8s.io/kubernetes/pkg/kubelet/network/testing"
 	kubepod "k8s.io/kubernetes/pkg/kubelet/pod"
 	podtest "k8s.io/kubernetes/pkg/kubelet/pod/testing"
+	"k8s.io/kubernetes/pkg/kubelet/secret"
 	"k8s.io/kubernetes/pkg/kubelet/server/stats"
 	"k8s.io/kubernetes/pkg/kubelet/status"
-	kubeletvolume "k8s.io/kubernetes/pkg/kubelet/volume"
-	"k8s.io/kubernetes/pkg/types"
-	"k8s.io/kubernetes/pkg/util"
-	utiltesting "k8s.io/kubernetes/pkg/util/testing"
+	statustest "k8s.io/kubernetes/pkg/kubelet/status/testing"
+	"k8s.io/kubernetes/pkg/kubelet/volumemanager"
 	"k8s.io/kubernetes/pkg/volume"
 	volumetest "k8s.io/kubernetes/pkg/volume/testing"
 )
@@ -58,7 +62,9 @@ func TestRunOnce(t *testing.T) {
 		Usage:    9 * mb,
 		Capacity: 10 * mb,
 	}, nil)
-	podManager := kubepod.NewBasicPodManager(podtest.NewFakeMirrorClient())
+	fakeSecretManager := secret.NewFakeManager()
+	podManager := kubepod.NewBasicPodManager(
+		podtest.NewFakeMirrorClient(), fakeSecretManager)
 	diskSpaceManager, _ := newDiskSpaceManager(cadvisor, DiskSpacePolicy{})
 	fakeRuntime := &containertest.FakeRuntime{}
 	basePath, err := utiltesting.MkTmpdir("kubelet")
@@ -72,66 +78,71 @@ func TestRunOnce(t *testing.T) {
 		cadvisor:            cadvisor,
 		nodeLister:          testNodeLister{},
 		nodeInfo:            testNodeInfo{},
-		statusManager:       status.NewManager(nil, podManager),
+		statusManager:       status.NewManager(nil, podManager, &statustest.FakePodDeletionSafetyProvider{}),
 		containerRefManager: kubecontainer.NewRefManager(),
 		podManager:          podManager,
 		os:                  &containertest.FakeOS{},
 		diskSpaceManager:    diskSpaceManager,
 		containerRuntime:    fakeRuntime,
 		reasonCache:         NewReasonCache(),
-		clock:               util.RealClock{},
+		clock:               clock.RealClock{},
 		kubeClient:          &fake.Clientset{},
 		hostname:            testKubeletHostname,
 		nodeName:            testKubeletHostname,
+		runtimeState:        newRuntimeState(time.Second),
 	}
 	kb.containerManager = cm.NewStubContainerManager()
 
 	plug := &volumetest.FakeVolumePlugin{PluginName: "fake", Host: nil}
 	kb.volumePluginMgr, err =
-		NewInitializedVolumePluginMgr(kb, []volume.VolumePlugin{plug})
+		NewInitializedVolumePluginMgr(kb, fakeSecretManager, []volume.VolumePlugin{plug})
 	if err != nil {
 		t.Fatalf("failed to initialize VolumePluginMgr: %v", err)
 	}
-	kb.volumeManager, err = kubeletvolume.NewVolumeManager(
+	kb.volumeManager, err = volumemanager.NewVolumeManager(
 		true,
-		kb.hostname,
+		kb.nodeName,
 		kb.podManager,
+		kb.statusManager,
 		kb.kubeClient,
 		kb.volumePluginMgr,
-		fakeRuntime)
+		fakeRuntime,
+		kb.mounter,
+		kb.getPodsDir(),
+		kb.recorder,
+		false, /* experimentalCheckNodeCapabilitiesBeforeMount */
+		false /* keepTerminatedPodVolumes */)
 
-	kb.networkPlugin, _ = network.InitNetworkPlugin([]network.NetworkPlugin{}, "", nettest.NewFakeHost(nil), componentconfig.HairpinNone, kb.nonMasqueradeCIDR)
+	kb.networkPlugin, _ = network.InitNetworkPlugin([]network.NetworkPlugin{}, "", nettest.NewFakeHost(nil), componentconfig.HairpinNone, kb.nonMasqueradeCIDR, network.UseDefaultMTU)
 	// TODO: Factor out "StatsProvider" from Kubelet so we don't have a cyclic dependency
 	volumeStatsAggPeriod := time.Second * 10
 	kb.resourceAnalyzer = stats.NewResourceAnalyzer(kb, volumeStatsAggPeriod, kb.containerRuntime)
-	nodeRef := &api.ObjectReference{
+	nodeRef := &clientv1.ObjectReference{
 		Kind:      "Node",
-		Name:      kb.nodeName,
+		Name:      string(kb.nodeName),
 		UID:       types.UID(kb.nodeName),
 		Namespace: "",
 	}
-	fakeKillPodFunc := func(pod *api.Pod, podStatus api.PodStatus, gracePeriodOverride *int64) error {
+	fakeKillPodFunc := func(pod *v1.Pod, podStatus v1.PodStatus, gracePeriodOverride *int64) error {
 		return nil
 	}
-	evictionManager, evictionAdmitHandler, err := eviction.NewManager(kb.resourceAnalyzer, eviction.Config{}, fakeKillPodFunc, kb.recorder, nodeRef, kb.clock)
-	if err != nil {
-		t.Fatalf("failed to initialize eviction manager: %v", err)
-	}
+	evictionManager, evictionAdmitHandler := eviction.NewManager(kb.resourceAnalyzer, eviction.Config{}, fakeKillPodFunc, nil, kb.recorder, nodeRef, kb.clock)
+
 	kb.evictionManager = evictionManager
-	kb.AddPodAdmitHandler(evictionAdmitHandler)
+	kb.admitHandlers.AddPodAdmitHandler(evictionAdmitHandler)
 	if err := kb.setupDataDirs(); err != nil {
 		t.Errorf("Failed to init data dirs: %v", err)
 	}
 
-	pods := []*api.Pod{
+	pods := []*v1.Pod{
 		{
-			ObjectMeta: api.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				UID:       "12345678",
 				Name:      "foo",
 				Namespace: "new",
 			},
-			Spec: api.PodSpec{
-				Containers: []api.Container{
+			Spec: v1.PodSpec{
+				Containers: []v1.Container{
 					{Name: "bar"},
 				},
 			},
@@ -139,7 +150,7 @@ func TestRunOnce(t *testing.T) {
 	}
 	podManager.SetPods(pods)
 	// The original test here is totally meaningless, because fakeruntime will always return an empty podStatus. While
-	// the originial logic of isPodRunning happens to return true when podstatus is empty, so the test can always pass.
+	// the original logic of isPodRunning happens to return true when podstatus is empty, so the test can always pass.
 	// Now the logic in isPodRunning is changed, to let the test pass, we set the podstatus directly in fake runtime.
 	// This is also a meaningless test, because the isPodRunning will also always return true after setting this. However,
 	// because runonce is never used in kubernetes now, we should deprioritize the cleanup work.

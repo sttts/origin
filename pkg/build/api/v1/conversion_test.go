@@ -3,11 +3,10 @@ package v1_test
 import (
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/conversion/queryparams"
 	knewer "k8s.io/kubernetes/pkg/api"
 	kolder "k8s.io/kubernetes/pkg/api/v1"
-	"k8s.io/kubernetes/pkg/conversion/queryparams"
-
-	"reflect"
 
 	newer "github.com/openshift/origin/pkg/build/api"
 	_ "github.com/openshift/origin/pkg/build/api/install"
@@ -55,39 +54,10 @@ func TestBinaryBuildRequestOptions(t *testing.T) {
 	}
 }
 
-func TestBuildConfigDefaulting(t *testing.T) {
-	buildConfig := &older.BuildConfig{
-		Spec: older.BuildConfigSpec{
-			CommonSpec: older.CommonSpec{
-				Source: older.BuildSource{
-					Type: older.BuildSourceBinary,
-				},
-				Strategy: older.BuildStrategy{
-					Type: older.DockerBuildStrategyType,
-				},
-			},
-		},
-	}
-
-	var internalBuild newer.BuildConfig
-	Convert(buildConfig, &internalBuild, nil)
-
-	binary := internalBuild.Spec.Source.Binary
-	if binary == (*newer.BinaryBuildSource)(nil) || *binary != (newer.BinaryBuildSource{}) {
-		t.Errorf("Expected non-nil but empty Source.Binary as default for Spec")
-	}
-
-	dockerStrategy := internalBuild.Spec.Strategy.DockerStrategy
-	// DeepEqual needed because DockerBuildStrategy contains slices
-	if dockerStrategy == (*newer.DockerBuildStrategy)(nil) || !reflect.DeepEqual(*dockerStrategy, newer.DockerBuildStrategy{}) {
-		t.Errorf("Expected non-nil but empty Strategy.DockerStrategy as default for Spec")
-	}
-}
-
 func TestV1APIBuildConfigConversion(t *testing.T) {
 	buildConfigs := []*older.BuildConfig{
 		{
-			ObjectMeta: kolder.ObjectMeta{Name: "config-id", Namespace: "namespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "config-id", Namespace: "namespace"},
 			Spec: older.BuildConfigSpec{
 				CommonSpec: older.CommonSpec{
 					Source: older.BuildSource{
@@ -127,7 +97,7 @@ func TestV1APIBuildConfigConversion(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: kolder.ObjectMeta{Name: "config-id", Namespace: "namespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "config-id", Namespace: "namespace"},
 			Spec: older.BuildConfigSpec{
 				CommonSpec: older.CommonSpec{
 					Source: older.BuildSource{
@@ -167,7 +137,7 @@ func TestV1APIBuildConfigConversion(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: kolder.ObjectMeta{Name: "config-id", Namespace: "namespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "config-id", Namespace: "namespace"},
 			Spec: older.BuildConfigSpec{
 				CommonSpec: older.CommonSpec{
 					Source: older.BuildSource{
@@ -258,7 +228,7 @@ func TestV1APIBuildConfigConversion(t *testing.T) {
 func TestAPIV1NoSourceBuildConfigConversion(t *testing.T) {
 	buildConfigs := []*newer.BuildConfig{
 		{
-			ObjectMeta: knewer.ObjectMeta{Name: "config-id", Namespace: "namespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "config-id", Namespace: "namespace"},
 			Spec: newer.BuildConfigSpec{
 				CommonSpec: newer.CommonSpec{
 					Source: newer.BuildSource{},
@@ -274,7 +244,7 @@ func TestAPIV1NoSourceBuildConfigConversion(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: knewer.ObjectMeta{Name: "config-id", Namespace: "namespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "config-id", Namespace: "namespace"},
 			Spec: newer.BuildConfigSpec{
 				CommonSpec: newer.CommonSpec{
 					Source: newer.BuildSource{},
@@ -290,7 +260,7 @@ func TestAPIV1NoSourceBuildConfigConversion(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: knewer.ObjectMeta{Name: "config-id", Namespace: "namespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "config-id", Namespace: "namespace"},
 			Spec: newer.BuildConfigSpec{
 				CommonSpec: newer.CommonSpec{
 					Source: newer.BuildSource{},
@@ -320,7 +290,7 @@ func TestAPIV1NoSourceBuildConfigConversion(t *testing.T) {
 
 func TestInvalidImageChangeTriggerRemoval(t *testing.T) {
 	buildConfig := older.BuildConfig{
-		ObjectMeta: kolder.ObjectMeta{Name: "config-id", Namespace: "namespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "config-id", Namespace: "namespace"},
 		Spec: older.BuildConfigSpec{
 			CommonSpec: older.CommonSpec{
 				Strategy: older.BuildStrategy{
@@ -365,7 +335,7 @@ func TestInvalidImageChangeTriggerRemoval(t *testing.T) {
 
 func TestImageChangeTriggerNilImageChangePointer(t *testing.T) {
 	buildConfig := older.BuildConfig{
-		ObjectMeta: kolder.ObjectMeta{Name: "config-id", Namespace: "namespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "config-id", Namespace: "namespace"},
 		Spec: older.BuildConfigSpec{
 			CommonSpec: older.CommonSpec{
 				Strategy: older.BuildStrategy{
@@ -390,5 +360,4 @@ func TestImageChangeTriggerNilImageChangePointer(t *testing.T) {
 			t.Errorf("Expected trigger to have ImageChange value")
 		}
 	}
-
 }

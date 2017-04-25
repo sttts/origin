@@ -8,16 +8,17 @@ import (
 
 	fuzz "github.com/google/gofuzz"
 
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/client/restclient"
-	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/diff"
-	"k8s.io/kubernetes/pkg/util/flowcontrol"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/diff"
+	restclient "k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd/api"
+	"k8s.io/client-go/util/flowcontrol"
 )
 
 type fakeLimiter struct {
 	FakeSaturation float64
+	FakeQPS        float32
 }
 
 func (t *fakeLimiter) TryAccept() bool {
@@ -28,13 +29,17 @@ func (t *fakeLimiter) Saturation() float64 {
 	return t.FakeSaturation
 }
 
+func (t *fakeLimiter) QPS() float32 {
+	return t.FakeQPS
+}
+
 func (t *fakeLimiter) Stop() {}
 
 func (t *fakeLimiter) Accept() {}
 
 type fakeCodec struct{}
 
-func (c *fakeCodec) Decode([]byte, *unversioned.GroupVersionKind, runtime.Object) (runtime.Object, *unversioned.GroupVersionKind, error) {
+func (c *fakeCodec) Decode([]byte, *schema.GroupVersionKind, runtime.Object) (runtime.Object, *schema.GroupVersionKind, error) {
 	return nil, nil, nil
 }
 
@@ -54,8 +59,8 @@ var fakeWrapperFunc = func(http.RoundTripper) http.RoundTripper {
 
 type fakeNegotiatedSerializer struct{}
 
-func (n *fakeNegotiatedSerializer) SupportedMediaTypes() []string {
-	return []string{}
+func (n *fakeNegotiatedSerializer) SupportedMediaTypes() []runtime.SerializerInfo {
+	return []runtime.SerializerInfo{}
 }
 
 func (n *fakeNegotiatedSerializer) SerializerForMediaType(mediaType string, params map[string]string) (s runtime.SerializerInfo, ok bool) {
@@ -118,7 +123,7 @@ func TestAnonymousConfig(t *testing.T) {
 
 		// this is the list of known security related fields, add to this list if a new field
 		// is added to restclient.Config, update AnonymousClientConfig to preserve the field otherwise.
-		expected.Impersonate = ""
+		expected.Impersonate = restclient.ImpersonationConfig{}
 		expected.BearerToken = ""
 		expected.Username = ""
 		expected.Password = ""

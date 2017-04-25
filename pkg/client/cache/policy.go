@@ -1,10 +1,9 @@
 package cache
 
 import (
-	kapi "k8s.io/kubernetes/pkg/api"
-	kapierrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/client/cache"
-	"k8s.io/kubernetes/pkg/controller/framework"
+	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/cache"
 
 	oapi "github.com/openshift/origin/pkg/api"
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
@@ -13,7 +12,7 @@ import (
 )
 
 type InformerToPolicyNamespacer struct {
-	framework.SharedIndexInformer
+	cache.SharedIndexInformer
 }
 
 // LastSyncResourceVersion exposes the LastSyncResourceVersion of the internal reflector
@@ -30,11 +29,15 @@ type indexerToPolicyLister struct {
 	namespace string
 }
 
-func (i *indexerToPolicyLister) List(options kapi.ListOptions) (*authorizationapi.PolicyList, error) {
+func (i *indexerToPolicyLister) List(options metav1.ListOptions) (*authorizationapi.PolicyList, error) {
 	policyList := &authorizationapi.PolicyList{}
-	matcher := policyregistry.Matcher(oapi.ListOptionsToSelectors(&options))
+	labelSel, fieldSel, err := oapi.ListOptionsToSelectors(&options)
+	if err != nil {
+		return nil, err
+	}
+	matcher := policyregistry.Matcher(labelSel, fieldSel)
 
-	if i.namespace == kapi.NamespaceAll {
+	if i.namespace == metav1.NamespaceAll {
 		returnedList := i.Indexer.List()
 		for i := range returnedList {
 			policy := returnedList[i].(*authorizationapi.Policy)
@@ -45,7 +48,7 @@ func (i *indexerToPolicyLister) List(options kapi.ListOptions) (*authorizationap
 		return policyList, nil
 	}
 
-	key := &authorizationapi.Policy{ObjectMeta: kapi.ObjectMeta{Namespace: i.namespace}}
+	key := &authorizationapi.Policy{ObjectMeta: metav1.ObjectMeta{Namespace: i.namespace}}
 	items, err := i.Indexer.Index(cache.NamespaceIndex, key)
 	if err != nil {
 		return policyList, err
@@ -60,9 +63,9 @@ func (i *indexerToPolicyLister) List(options kapi.ListOptions) (*authorizationap
 	return policyList, nil
 }
 
-func (i *indexerToPolicyLister) Get(name string) (*authorizationapi.Policy, error) {
-	keyObj := &authorizationapi.Policy{ObjectMeta: kapi.ObjectMeta{Namespace: i.namespace, Name: name}}
-	key, _ := framework.DeletionHandlingMetaNamespaceKeyFunc(keyObj)
+func (i *indexerToPolicyLister) Get(name string, options metav1.GetOptions) (*authorizationapi.Policy, error) {
+	keyObj := &authorizationapi.Policy{ObjectMeta: metav1.ObjectMeta{Namespace: i.namespace, Name: name}}
+	key, _ := cache.DeletionHandlingMetaNamespaceKeyFunc(keyObj)
 
 	item, exists, getErr := i.Indexer.GetByKey(key)
 	if getErr != nil {

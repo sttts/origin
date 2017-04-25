@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,9 +26,9 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/proxy"
-	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util/slice"
 )
 
@@ -82,6 +82,7 @@ func NewLoadBalancerRR() *LoadBalancerRR {
 }
 
 func (lb *LoadBalancerRR) NewService(svcPort proxy.ServicePortName, affinityType api.ServiceAffinity, ttlMinutes int) error {
+	glog.V(4).Infof("LoadBalancerRR NewService %q", svcPort)
 	lb.lock.Lock()
 	defer lb.lock.Unlock()
 	lb.newServiceInternal(svcPort, affinityType, ttlMinutes)
@@ -103,6 +104,13 @@ func (lb *LoadBalancerRR) newServiceInternal(svcPort proxy.ServicePortName, affi
 	return lb.services[svcPort]
 }
 
+func (lb *LoadBalancerRR) DeleteService(svcPort proxy.ServicePortName) {
+	glog.V(4).Infof("LoadBalancerRR DeleteService %q", svcPort)
+	lb.lock.Lock()
+	defer lb.lock.Unlock()
+	delete(lb.services, svcPort)
+}
+
 // return true if this service is using some form of session affinity.
 func isSessionAffinity(affinity *affinityPolicy) bool {
 	// Should never be empty string, but checking for it to be safe.
@@ -110,6 +118,16 @@ func isSessionAffinity(affinity *affinityPolicy) bool {
 		return false
 	}
 	return true
+}
+
+// ServiceHasEndpoints checks whether a service entry has endpoints.
+func (lb *LoadBalancerRR) ServiceHasEndpoints(svcPort proxy.ServicePortName) bool {
+	lb.lock.Lock()
+	defer lb.lock.Unlock()
+	state, exists := lb.services[svcPort]
+	// TODO: while nothing ever assigns nil to the map, *some* of the code using the map
+	// checks for it.  The code should all follow the same convention.
+	return exists && state != nil && len(state.endpoints) > 0
 }
 
 // NextEndpoint returns a service endpoint.
@@ -145,7 +163,7 @@ func (lb *LoadBalancerRR) NextEndpoint(svcPort proxy.ServicePortName, srcAddr ne
 				// Affinity wins.
 				endpoint := sessionAffinity.endpoint
 				sessionAffinity.lastUsed = time.Now()
-				glog.V(4).Infof("NextEndpoint for service %q from IP %s with sessionAffinity %+v: %s", svcPort, ipaddr, sessionAffinity, endpoint)
+				glog.V(4).Infof("NextEndpoint for service %q from IP %s with sessionAffinity %#v: %s", svcPort, ipaddr, sessionAffinity, endpoint)
 				return endpoint, nil
 			}
 		}
@@ -164,7 +182,7 @@ func (lb *LoadBalancerRR) NextEndpoint(svcPort proxy.ServicePortName, srcAddr ne
 		affinity.lastUsed = time.Now()
 		affinity.endpoint = endpoint
 		affinity.clientIP = ipaddr
-		glog.V(4).Infof("Updated affinity key %s: %+v", ipaddr, state.affinity.affinityMap[ipaddr])
+		glog.V(4).Infof("Updated affinity key %s: %#v", ipaddr, state.affinity.affinityMap[ipaddr])
 	}
 
 	return endpoint, nil
@@ -228,14 +246,15 @@ func (lb *LoadBalancerRR) updateAffinityMap(svcPort proxy.ServicePortName, newEn
 // OnEndpointsUpdate manages the registered service endpoints.
 // Registered endpoints are updated if found in the update set or
 // unregistered if missing from the update set.
-func (lb *LoadBalancerRR) OnEndpointsUpdate(allEndpoints []api.Endpoints) {
+func (lb *LoadBalancerRR) OnEndpointsUpdate(allEndpoints []*api.Endpoints) {
 	registeredEndpoints := make(map[proxy.ServicePortName]bool)
 	lb.lock.Lock()
 	defer lb.lock.Unlock()
 
 	// Update endpoints for services.
 	for i := range allEndpoints {
-		svcEndpoints := &allEndpoints[i]
+		// svcEndpoints object should NOT be modified.
+		svcEndpoints := allEndpoints[i]
 
 		// We need to build a map of portname -> all ip:ports for that
 		// portname.  Explode Endpoints.Subsets[*] into this structure.
@@ -281,7 +300,11 @@ func (lb *LoadBalancerRR) OnEndpointsUpdate(allEndpoints []api.Endpoints) {
 	for k := range lb.services {
 		if _, exists := registeredEndpoints[k]; !exists {
 			glog.V(2).Infof("LoadBalancerRR: Removing endpoints for %s", k)
-			delete(lb.services, k)
+			// Reset but don't delete.
+			state := lb.services[k]
+			state.endpoints = []string{}
+			state.index = 0
+			state.affinity.affinityMap = map[string]*affinityState{}
 		}
 	}
 }

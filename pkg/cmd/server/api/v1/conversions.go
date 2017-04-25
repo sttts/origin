@@ -1,18 +1,18 @@
 package v1
 
 import (
-	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/conversion"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/sets"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/conversion"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/openshift/origin/pkg/api/extension"
 	internal "github.com/openshift/origin/pkg/cmd/server/api"
 	"github.com/openshift/origin/pkg/cmd/server/bootstrappolicy"
 )
 
-func addDefaultingFuncs(scheme *runtime.Scheme) {
-	err := scheme.AddDefaultingFuncs(
+func addDefaultingFuncs(scheme *runtime.Scheme) error {
+	return scheme.AddDefaultingFuncs(
 		func(obj *MasterConfig) {
 			if len(obj.APILevels) == 0 {
 				obj.APILevels = internal.DefaultOpenShiftAPILevels
@@ -36,15 +36,39 @@ func addDefaultingFuncs(scheme *runtime.Scheme) {
 				obj.JenkinsPipelineConfig.TemplateNamespace = "openshift"
 			}
 			if len(obj.JenkinsPipelineConfig.TemplateName) == 0 {
-				obj.JenkinsPipelineConfig.TemplateName = "jenkins"
+				obj.JenkinsPipelineConfig.TemplateName = "jenkins-ephemeral"
 			}
 			if len(obj.JenkinsPipelineConfig.ServiceName) == 0 {
 				obj.JenkinsPipelineConfig.ServiceName = "jenkins"
 			}
-			if obj.JenkinsPipelineConfig.Enabled == nil {
+			if obj.JenkinsPipelineConfig.AutoProvisionEnabled == nil {
 				v := true
-				obj.JenkinsPipelineConfig.Enabled = &v
+				obj.JenkinsPipelineConfig.AutoProvisionEnabled = &v
 			}
+
+			if obj.MasterClients.OpenShiftLoopbackClientConnectionOverrides == nil {
+				obj.MasterClients.OpenShiftLoopbackClientConnectionOverrides = &ClientConnectionOverrides{}
+			}
+			// historical values
+			if obj.MasterClients.OpenShiftLoopbackClientConnectionOverrides.QPS <= 0 {
+				obj.MasterClients.OpenShiftLoopbackClientConnectionOverrides.QPS = 150.0
+			}
+			if obj.MasterClients.OpenShiftLoopbackClientConnectionOverrides.Burst <= 0 {
+				obj.MasterClients.OpenShiftLoopbackClientConnectionOverrides.Burst = 300
+			}
+			setDefault_ClientConnectionOverrides(obj.MasterClients.OpenShiftLoopbackClientConnectionOverrides)
+
+			if obj.MasterClients.ExternalKubernetesClientConnectionOverrides == nil {
+				obj.MasterClients.ExternalKubernetesClientConnectionOverrides = &ClientConnectionOverrides{}
+			}
+			// historical values
+			if obj.MasterClients.ExternalKubernetesClientConnectionOverrides.QPS <= 0 {
+				obj.MasterClients.ExternalKubernetesClientConnectionOverrides.QPS = 100.0
+			}
+			if obj.MasterClients.ExternalKubernetesClientConnectionOverrides.Burst <= 0 {
+				obj.MasterClients.ExternalKubernetesClientConnectionOverrides.Burst = 200
+			}
+			setDefault_ClientConnectionOverrides(obj.MasterClients.ExternalKubernetesClientConnectionOverrides)
 
 			// Populate the new NetworkConfig.ServiceNetworkCIDR field from the KubernetesMasterConfig.ServicesSubnet field if needed
 			if len(obj.NetworkConfig.ServiceNetworkCIDR) == 0 {
@@ -54,6 +78,17 @@ func addDefaultingFuncs(scheme *runtime.Scheme) {
 				} else {
 					// default ServiceClusterIPRange used by kubernetes if nothing is specified
 					obj.NetworkConfig.ServiceNetworkCIDR = "10.0.0.0/24"
+				}
+			}
+
+			// TODO Detect cloud provider when not using built-in kubernetes
+			kubeConfig := obj.KubernetesMasterConfig
+			noCloudProvider := kubeConfig != nil && (len(kubeConfig.ControllerArguments["cloud-provider"]) == 0 || kubeConfig.ControllerArguments["cloud-provider"][0] == "")
+
+			if noCloudProvider && len(obj.NetworkConfig.IngressIPNetworkCIDR) == 0 {
+				cidr := internal.DefaultIngressIPNetworkCIDR
+				if !(internal.CIDRsOverlap(cidr, obj.NetworkConfig.ClusterNetworkCIDR) || internal.CIDRsOverlap(cidr, obj.NetworkConfig.ServiceNetworkCIDR)) {
+					obj.NetworkConfig.IngressIPNetworkCIDR = cidr
 				}
 			}
 
@@ -80,6 +115,15 @@ func addDefaultingFuncs(scheme *runtime.Scheme) {
 			}
 		},
 		func(obj *NodeConfig) {
+			if obj.MasterClientConnectionOverrides == nil {
+				obj.MasterClientConnectionOverrides = &ClientConnectionOverrides{
+					// historical values
+					QPS:   10.0,
+					Burst: 20,
+				}
+			}
+			setDefault_ClientConnectionOverrides(obj.MasterClientConnectionOverrides)
+
 			// Defaults/migrations for NetworkConfig
 			if len(obj.NetworkConfig.NetworkPluginName) == 0 {
 				obj.NetworkConfig.NetworkPluginName = obj.DeprecatedNetworkPluginName
@@ -104,6 +148,12 @@ func addDefaultingFuncs(scheme *runtime.Scheme) {
 			if obj.AuthConfig.AuthorizationCacheSize == 0 {
 				obj.AuthConfig.AuthorizationCacheSize = 1000
 			}
+
+			// EnableUnidling by default
+			if obj.EnableUnidling == nil {
+				v := true
+				obj.EnableUnidling = &v
+			}
 		},
 		func(obj *EtcdStorageConfig) {
 			if len(obj.KubernetesStorageVersion) == 0 {
@@ -122,6 +172,12 @@ func addDefaultingFuncs(scheme *runtime.Scheme) {
 		func(obj *DockerConfig) {
 			if len(obj.ExecHandlerName) == 0 {
 				obj.ExecHandlerName = DockerExecHandlerNative
+			}
+			if len(obj.DockerShimSocket) == 0 {
+				obj.DockerShimSocket = "/var/run/dockershim.sock"
+			}
+			if len(obj.DockershimRootDirectory) == 0 {
+				obj.DockershimRootDirectory = "/var/lib/dockershim"
 			}
 		},
 		func(obj *ServingInfo) {
@@ -170,14 +226,10 @@ func addDefaultingFuncs(scheme *runtime.Scheme) {
 			}
 		},
 	)
-	if err != nil {
-		// If one of the conversion functions is malformed, detect it immediately.
-		panic(err)
-	}
 }
 
-func addConversionFuncs(scheme *runtime.Scheme) {
-	err := scheme.AddConversionFuncs(
+func addConversionFuncs(scheme *runtime.Scheme) error {
+	return scheme.AddConversionFuncs(
 		convert_runtime_Object_To_runtime_RawExtension,
 		convert_runtime_RawExtension_To_runtime_Object,
 
@@ -290,12 +342,10 @@ func addConversionFuncs(scheme *runtime.Scheme) {
 			return nil
 		},
 
-		api.Convert_resource_Quantity_To_resource_Quantity,
+		metav1.Convert_resource_Quantity_To_resource_Quantity,
+		metav1.Convert_bool_To_Pointer_bool,
+		metav1.Convert_Pointer_bool_To_bool,
 	)
-	if err != nil {
-		// If one of the conversion functions is malformed, detect it immediately.
-		panic(err)
-	}
 }
 
 // convert_runtime_Object_To_runtime_RawExtension attempts to convert runtime.Objects to the appropriate target.
@@ -307,6 +357,17 @@ func convert_runtime_Object_To_runtime_RawExtension(in *runtime.Object, out *run
 // appropriate output type.
 func convert_runtime_RawExtension_To_runtime_Object(in *runtime.RawExtension, out *runtime.Object, s conversion.Scope) error {
 	return extension.Convert_runtime_RawExtension_To_runtime_Object(internal.Scheme, in, out, s)
+}
+
+// setDefault_ClientConnectionOverrides defaults a client connection to the pre-1.3 settings of
+// being JSON only. Callers must explicitly opt-in to Protobuf support in 1.3+.
+func setDefault_ClientConnectionOverrides(overrides *ClientConnectionOverrides) {
+	if len(overrides.AcceptContentTypes) == 0 {
+		overrides.AcceptContentTypes = "application/json"
+	}
+	if len(overrides.ContentType) == 0 {
+		overrides.ContentType = "application/json"
+	}
 }
 
 var _ runtime.NestedObjectDecoder = &MasterConfig{}

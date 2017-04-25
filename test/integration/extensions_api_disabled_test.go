@@ -1,24 +1,25 @@
-// +build integration
-
 package integration
 
 import (
+	"strings"
 	"testing"
 
-	testutil "github.com/openshift/origin/test/util"
-	testserver "github.com/openshift/origin/test/util/server"
-
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/apis/autoscaling"
 	"k8s.io/kubernetes/pkg/apis/batch"
 	expapi "k8s.io/kubernetes/pkg/apis/extensions"
+
+	testutil "github.com/openshift/origin/test/util"
+	testserver "github.com/openshift/origin/test/util/server"
 )
 
 func TestExtensionsAPIDisabledAutoscaleBatchEnabled(t *testing.T) {
 	const projName = "ext-disabled-batch-enabled-proj"
 
 	testutil.RequireEtcd(t)
+	defer testutil.DumpEtcdOnFailure(t)
 	masterConfig, err := testserver.DefaultMasterOptions()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -61,14 +62,14 @@ func TestExtensionsAPIDisabledAutoscaleBatchEnabled(t *testing.T) {
 	}
 
 	validHPA := &autoscaling.HorizontalPodAutoscaler{
-		ObjectMeta: kapi.ObjectMeta{Name: "myjob"},
+		ObjectMeta: metav1.ObjectMeta{Name: "myjob"},
 		Spec: autoscaling.HorizontalPodAutoscalerSpec{
 			ScaleTargetRef: autoscaling.CrossVersionObjectReference{Name: "foo", Kind: "ReplicationController"},
 			MaxReplicas:    1,
 		},
 	}
 	validJob := &batch.Job{
-		ObjectMeta: kapi.ObjectMeta{Name: "myjob"},
+		ObjectMeta: metav1.ObjectMeta{Name: "myjob"},
 		Spec: batch.JobSpec{
 			Template: kapi.PodTemplateSpec{
 				Spec: kapi.PodSpec{
@@ -81,32 +82,26 @@ func TestExtensionsAPIDisabledAutoscaleBatchEnabled(t *testing.T) {
 
 	legacyAutoscalers := legacyExtensionsAutoscaling{
 		projectAdminKubeClient.Autoscaling().HorizontalPodAutoscalers(projName),
-		projectAdminKubeClient.ExtensionsClient.RESTClient,
+		projectAdminKubeClient.Extensions().RESTClient(),
 		projName,
 	}
 
 	// make sure extensions API objects cannot be listed or created
-	if _, err := legacyAutoscalers.List(kapi.ListOptions{}); !errors.IsNotFound(err) {
+	if _, err := legacyAutoscalers.List(metav1.ListOptions{}); !errors.IsNotFound(err) {
 		t.Fatalf("expected NotFound error listing HPA, got %v", err)
 	}
-	if _, err := legacyAutoscalers.Create(validHPA); !errors.IsNotFound(err) {
-		t.Fatalf("expected NotFound error creating HPA, got %v", err)
-	}
-	if _, err := projectAdminKubeClient.Extensions().Jobs(projName).List(kapi.ListOptions{}); !errors.IsNotFound(err) {
-		t.Fatalf("expected NotFound error listing jobs, got %v", err)
-	}
-	if _, err := projectAdminKubeClient.Extensions().Jobs(projName).Create(validJob); !errors.IsNotFound(err) {
-		t.Fatalf("expected NotFound error creating job, got %v", err)
+	if _, err := legacyAutoscalers.Create(validHPA); !strings.Contains(err.Error(), `not suitable for converting to "extensions/v1beta1"`) {
+		t.Fatalf("expected conversion error creating extensions/v1beta1 HPA, got %v", err)
 	}
 
 	// make sure autoscaling and batch API objects can be listed and created
-	if _, err := projectAdminKubeClient.Autoscaling().HorizontalPodAutoscalers(projName).List(kapi.ListOptions{}); err != nil {
+	if _, err := projectAdminKubeClient.Autoscaling().HorizontalPodAutoscalers(projName).List(metav1.ListOptions{}); err != nil {
 		t.Fatalf("unexpected error: %#v", err)
 	}
 	if _, err := projectAdminKubeClient.Autoscaling().HorizontalPodAutoscalers(projName).Create(validHPA); err != nil {
 		t.Fatalf("unexpected error: %#v", err)
 	}
-	if _, err := projectAdminKubeClient.Batch().Jobs(projName).List(kapi.ListOptions{}); err != nil {
+	if _, err := projectAdminKubeClient.Batch().Jobs(projName).List(metav1.ListOptions{}); err != nil {
 		t.Fatalf("unexpected error: %#v", err)
 	}
 	if _, err := projectAdminKubeClient.Batch().Jobs(projName).Create(validJob); err != nil {
@@ -131,12 +126,12 @@ func TestExtensionsAPIDisabledAutoscaleBatchEnabled(t *testing.T) {
 	}
 
 	// make sure the created objects got cleaned up by namespace deletion
-	if hpas, err := projectAdminKubeClient.Autoscaling().HorizontalPodAutoscalers(projName).List(kapi.ListOptions{}); err != nil {
+	if hpas, err := projectAdminKubeClient.Autoscaling().HorizontalPodAutoscalers(projName).List(metav1.ListOptions{}); err != nil {
 		t.Fatalf("unexpected error: %#v", err)
 	} else if len(hpas.Items) > 0 {
 		t.Fatalf("expected 0 HPA objects, got %#v", hpas.Items)
 	}
-	if jobs, err := projectAdminKubeClient.Batch().Jobs(projName).List(kapi.ListOptions{}); err != nil {
+	if jobs, err := projectAdminKubeClient.Batch().Jobs(projName).List(metav1.ListOptions{}); err != nil {
 		t.Fatalf("unexpected error: %#v", err)
 	} else if len(jobs.Items) > 0 {
 		t.Fatalf("expected 0 Job objects, got %#v", jobs.Items)
@@ -147,6 +142,7 @@ func TestExtensionsAPIDisabled(t *testing.T) {
 	const projName = "ext-disabled-proj"
 
 	testutil.RequireEtcd(t)
+	defer testutil.DumpEtcdOnFailure(t)
 	masterConfig, err := testserver.DefaultMasterOptions()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -189,22 +185,16 @@ func TestExtensionsAPIDisabled(t *testing.T) {
 
 	legacyAutoscalers := legacyExtensionsAutoscaling{
 		projectAdminKubeClient.Autoscaling().HorizontalPodAutoscalers(projName),
-		projectAdminKubeClient.AutoscalingClient.RESTClient,
+		projectAdminKubeClient.Autoscaling().RESTClient(),
 		projName,
 	}
 
 	// make sure extensions API objects cannot be listed or created
-	if _, err := legacyAutoscalers.List(kapi.ListOptions{}); !errors.IsNotFound(err) {
+	if _, err := legacyAutoscalers.List(metav1.ListOptions{}); !errors.IsNotFound(err) {
 		t.Fatalf("expected NotFound error listing HPA, got %v", err)
 	}
 	if _, err := legacyAutoscalers.Create(&autoscaling.HorizontalPodAutoscaler{}); !errors.IsNotFound(err) {
 		t.Fatalf("expected NotFound error creating HPA, got %v", err)
-	}
-	if _, err := projectAdminKubeClient.Extensions().Jobs(projName).List(kapi.ListOptions{}); !errors.IsNotFound(err) {
-		t.Fatalf("expected NotFound error listing jobs, got %v", err)
-	}
-	if _, err := projectAdminKubeClient.Extensions().Jobs(projName).Create(&batch.Job{}); !errors.IsNotFound(err) {
-		t.Fatalf("expected NotFound error creating job, got %v", err)
 	}
 
 	// Delete the containing project

@@ -9,50 +9,60 @@ import (
 
 	"github.com/golang/glog"
 
+	deployclient "github.com/openshift/origin/pkg/deploy/clientset/internalclientset/typed/deploy/internalversion"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilwait "k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apiserver/pkg/admission"
+	"k8s.io/client-go/util/cert"
+	"k8s.io/client-go/util/flowcontrol"
 	kctrlmgr "k8s.io/kubernetes/cmd/kube-controller-manager/app"
 	cmapp "k8s.io/kubernetes/cmd/kube-controller-manager/app/options"
-	"k8s.io/kubernetes/pkg/admission"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
-	clientadapter "k8s.io/kubernetes/pkg/client/unversioned/adapters/internalclientset"
+	kapiv1 "k8s.io/kubernetes/pkg/api/v1"
+	kclientsetexternal "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
+	kclientsetinternal "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/controller"
 	kresourcequota "k8s.io/kubernetes/pkg/controller/resourcequota"
 	sacontroller "k8s.io/kubernetes/pkg/controller/serviceaccount"
-	"k8s.io/kubernetes/pkg/registry/service/allocator"
-	etcdallocator "k8s.io/kubernetes/pkg/registry/service/allocator/etcd"
+	kubeadmission "k8s.io/kubernetes/pkg/kubeapiserver/admission"
+	"k8s.io/kubernetes/pkg/registry/core/service/allocator"
+	etcdallocator "k8s.io/kubernetes/pkg/registry/core/service/allocator/storage"
 	"k8s.io/kubernetes/pkg/serviceaccount"
-	kcrypto "k8s.io/kubernetes/pkg/util/crypto"
-	"k8s.io/kubernetes/pkg/util/flowcontrol"
-	utilwait "k8s.io/kubernetes/pkg/util/wait"
 	serviceaccountadmission "k8s.io/kubernetes/plugin/pkg/admission/serviceaccount"
 
+	builddefaults "github.com/openshift/origin/pkg/build/admission/defaults"
+	buildoverrides "github.com/openshift/origin/pkg/build/admission/overrides"
 	buildclient "github.com/openshift/origin/pkg/build/client"
+	buildpodcontroller "github.com/openshift/origin/pkg/build/controller/buildpod"
 	buildcontrollerfactory "github.com/openshift/origin/pkg/build/controller/factory"
 	buildstrategy "github.com/openshift/origin/pkg/build/controller/strategy"
+	osclient "github.com/openshift/origin/pkg/client"
+	oscache "github.com/openshift/origin/pkg/client/cache"
+	configapi "github.com/openshift/origin/pkg/cmd/server/api"
+	"github.com/openshift/origin/pkg/cmd/server/bootstrappolicy"
 	"github.com/openshift/origin/pkg/cmd/server/crypto"
 	cmdutil "github.com/openshift/origin/pkg/cmd/util"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
+	"github.com/openshift/origin/pkg/controller/shared"
 	deploycontroller "github.com/openshift/origin/pkg/deploy/controller/deployment"
 	deployconfigcontroller "github.com/openshift/origin/pkg/deploy/controller/deploymentconfig"
 	triggercontroller "github.com/openshift/origin/pkg/deploy/controller/generictrigger"
-	imagechangecontroller "github.com/openshift/origin/pkg/deploy/controller/imagechange"
 	"github.com/openshift/origin/pkg/dns"
 	imagecontroller "github.com/openshift/origin/pkg/image/controller"
 	projectcontroller "github.com/openshift/origin/pkg/project/controller"
-	securitycontroller "github.com/openshift/origin/pkg/security/controller"
-	"github.com/openshift/origin/pkg/security/mcs"
-	"github.com/openshift/origin/pkg/security/uid"
-	"github.com/openshift/origin/pkg/security/uidallocator"
-	servingcertcontroller "github.com/openshift/origin/pkg/service/controller/servingcert"
-
-	configapi "github.com/openshift/origin/pkg/cmd/server/api"
-	"github.com/openshift/origin/pkg/cmd/server/bootstrappolicy"
 	quota "github.com/openshift/origin/pkg/quota"
 	quotacontroller "github.com/openshift/origin/pkg/quota/controller"
 	"github.com/openshift/origin/pkg/quota/controller/clusterquotareconciliation"
 	sdnplugin "github.com/openshift/origin/pkg/sdn/plugin"
+	securitycontroller "github.com/openshift/origin/pkg/security/controller"
+	"github.com/openshift/origin/pkg/security/mcs"
+	"github.com/openshift/origin/pkg/security/uid"
+	"github.com/openshift/origin/pkg/security/uidallocator"
+	"github.com/openshift/origin/pkg/service/controller/ingressip"
+	servingcertcontroller "github.com/openshift/origin/pkg/service/controller/servingcert"
 	serviceaccountcontrollers "github.com/openshift/origin/pkg/serviceaccounts/controllers"
+	templatecontroller "github.com/openshift/origin/pkg/template/controller"
+	unidlingcontroller "github.com/openshift/origin/pkg/unidling/controller"
 )
 
 const (
@@ -61,6 +71,8 @@ const (
 
 	// from CMServer MinResyncPeriod
 	defaultReplenishmentSyncPeriod time.Duration = 12 * time.Hour
+
+	defaultIngressIPSyncPeriod time.Duration = 10 * time.Minute
 )
 
 // RunProjectAuthorizationCache starts the project authorization cache
@@ -88,16 +100,17 @@ func (c *MasterConfig) RunServiceAccountsController() {
 		return
 	}
 	options := sacontroller.DefaultServiceAccountsControllerOptions()
-	options.ServiceAccounts = []kapi.ServiceAccount{}
+	options.ServiceAccounts = []kapiv1.ServiceAccount{}
 
 	for _, saName := range c.Options.ServiceAccountConfig.ManagedNames {
-		sa := kapi.ServiceAccount{}
+		sa := kapiv1.ServiceAccount{}
 		sa.Name = saName
 
 		options.ServiceAccounts = append(options.ServiceAccounts, sa)
 	}
 
-	sacontroller.NewServiceAccountsController(clientadapter.FromUnversionedClient(c.KubeClient()), options).Run()
+	//REBASE: add new args to NewServiceAccountsController
+	go sacontroller.NewServiceAccountsController(c.Informers.KubernetesInformers().Core().V1().ServiceAccounts(), c.Informers.KubernetesInformers().Core().V1().Namespaces(), c.KubeClientsetExternal(), options).Run(1, utilwait.NeverStop)
 }
 
 // RunServiceAccountTokensController starts the service account token controller
@@ -117,7 +130,7 @@ func (c *MasterConfig) RunServiceAccountTokensController(cm *cmapp.CMServer) {
 		if err != nil {
 			glog.Fatalf("Error reading master ca file for Service Account Token Manager: %s: %v", c.Options.ServiceAccountConfig.MasterCA, err)
 		}
-		if _, err := kcrypto.CertsFromPEM(rootCA); err != nil {
+		if _, err := cert.ParseCertsPEM(rootCA); err != nil {
 			glog.Fatalf("Error parsing master ca file for Service Account Token Manager: %s: %v", c.Options.ServiceAccountConfig.MasterCA, err)
 		}
 	}
@@ -127,7 +140,7 @@ func (c *MasterConfig) RunServiceAccountTokensController(cm *cmapp.CMServer) {
 		if err != nil {
 			glog.Fatalf("Error reading ca file for Service Serving Certificate Signer: %s: %v", c.Options.ControllerConfig.ServiceServingCert.Signer.CertFile, err)
 		}
-		if _, err := kcrypto.CertsFromPEM(servingServingCA); err != nil {
+		if _, err := crypto.CertsFromPEM(servingServingCA); err != nil {
 			glog.Fatalf("Error parsing ca file for Service Serving Certificate Signer: %s: %v", c.Options.ControllerConfig.ServiceServingCert.Signer.CertFile, err)
 		}
 
@@ -147,16 +160,16 @@ func (c *MasterConfig) RunServiceAccountTokensController(cm *cmapp.CMServer) {
 		ServiceServingCA: servingServingCABundle,
 	}
 
-	go sacontroller.NewTokensController(clientadapter.FromUnversionedClient(c.KubeClient()), options).Run(int(cm.ConcurrentSATokenSyncs), utilwait.NeverStop)
+	go sacontroller.NewTokensController(c.KubeClientsetExternal(), options).Run(int(cm.ConcurrentSATokenSyncs), utilwait.NeverStop)
 }
 
 // RunServiceAccountPullSecretsControllers starts the service account pull secret controllers
 func (c *MasterConfig) RunServiceAccountPullSecretsControllers() {
-	serviceaccountcontrollers.NewDockercfgDeletedController(c.KubeClient(), serviceaccountcontrollers.DockercfgDeletedControllerOptions{}).Run()
-	serviceaccountcontrollers.NewDockercfgTokenDeletedController(c.KubeClient(), serviceaccountcontrollers.DockercfgTokenDeletedControllerOptions{}).Run()
+	serviceaccountcontrollers.NewDockercfgDeletedController(c.KubeClientsetInternal(), serviceaccountcontrollers.DockercfgDeletedControllerOptions{}).Run()
+	serviceaccountcontrollers.NewDockercfgTokenDeletedController(c.KubeClientsetInternal(), serviceaccountcontrollers.DockercfgTokenDeletedControllerOptions{}).Run()
 
 	dockerURLsIntialized := make(chan struct{})
-	dockercfgController := serviceaccountcontrollers.NewDockercfgController(c.KubeClient(), serviceaccountcontrollers.DockercfgControllerOptions{DockerURLsIntialized: dockerURLsIntialized})
+	dockercfgController := serviceaccountcontrollers.NewDockercfgController(c.KubeClientsetInternal(), serviceaccountcontrollers.DockercfgControllerOptions{DockerURLsIntialized: dockerURLsIntialized})
 	go dockercfgController.Run(5, utilwait.NeverStop)
 
 	dockerRegistryControllerOptions := serviceaccountcontrollers.DockerRegistryServiceControllerOptions{
@@ -165,7 +178,7 @@ func (c *MasterConfig) RunServiceAccountPullSecretsControllers() {
 		DockercfgController:  dockercfgController,
 		DockerURLsIntialized: dockerURLsIntialized,
 	}
-	go serviceaccountcontrollers.NewDockerRegistryServiceController(c.KubeClient(), dockerRegistryControllerOptions).Run(10, make(chan struct{}))
+	go serviceaccountcontrollers.NewDockerRegistryServiceController(c.KubeClientsetInternal(), dockerRegistryControllerOptions).Run(10, make(chan struct{}))
 }
 
 // RunAssetServer starts the asset server for the OpenShift UI.
@@ -203,10 +216,19 @@ func (c *MasterConfig) RunDNSServer() {
 		return
 	}
 
+	services, err := dns.NewCachedServiceAccessor(c.Informers.InternalKubernetesInformers().Core().InternalVersion().Services())
+	if err != nil {
+		glog.Fatalf("Could not start DNS: failed to add ClusterIP index: %v", err)
+	}
+
 	go func() {
-		s := dns.NewServer(config, c.DNSServerClient())
-		s.MetricsName = "apiserver"
-		err := s.ListenAndServe()
+		s := dns.NewServer(
+			config,
+			services,
+			c.Informers.InternalKubernetesInformers().Core().InternalVersion().Endpoints().Lister(),
+			"apiserver",
+		)
+		err = s.ListenAndServe()
 		glog.Fatalf("Could not start DNS: %v", err)
 	}()
 
@@ -222,23 +244,42 @@ func (c *MasterConfig) RunProjectCache() {
 }
 
 // RunBuildController starts the build sync loop for builds and buildConfig processing.
-func (c *MasterConfig) RunBuildController() {
+func (c *MasterConfig) RunBuildController(informers shared.InformerFactory) error {
 	// initialize build controller
 	dockerImage := c.ImageFor("docker-builder")
 	stiImage := c.ImageFor("sti-builder")
 
 	storageVersion := c.Options.EtcdStorageConfig.OpenShiftStorageVersion
-	groupVersion := unversioned.GroupVersion{Group: "", Version: storageVersion}
+	groupVersion := schema.GroupVersion{Group: "", Version: storageVersion}
 	codec := kapi.Codecs.LegacyCodec(groupVersion)
 
-	admissionControl := admission.NewFromPlugins(clientadapter.FromUnversionedClient(c.PrivilegedLoopbackKubernetesClient), []string{"SecurityContextConstraint"}, "")
+	pluginInitializer := kubeadmission.NewPluginInitializer(
+		c.KubeClientsetInternal(),
+		c.Informers.InternalKubernetesInformers(),
+		nil, // api authorizer, only used by PSP
+		nil, // cloud config
+	)
+	admissionControl, err := admission.InitPlugin("SecurityContextConstraint", nil, pluginInitializer)
+	if err != nil {
+		return err
+	}
 
-	osclient, kclient := c.BuildControllerClients()
+	buildDefaults, err := builddefaults.NewBuildDefaults(c.Options.AdmissionConfig.PluginConfig)
+	if err != nil {
+		return err
+	}
+	buildOverrides, err := buildoverrides.NewBuildOverrides(c.Options.AdmissionConfig.PluginConfig)
+	if err != nil {
+		return err
+	}
+
+	osclient, internalKubeClientset, externalKubeClientset := c.BuildControllerClients()
 	factory := buildcontrollerfactory.BuildControllerFactory{
-		KubeClient:   kclient,
-		OSClient:     osclient,
-		BuildUpdater: buildclient.NewOSClientBuildClient(osclient),
-		BuildLister:  buildclient.NewOSClientBuildClient(osclient),
+		KubeClient:         internalKubeClientset,
+		ExternalKubeClient: externalKubeClientset,
+		OSClient:           osclient,
+		BuildUpdater:       buildclient.NewOSClientBuildClient(osclient),
+		BuildLister:        buildclient.NewOSClientBuildClient(osclient),
 		DockerBuildStrategy: &buildstrategy.DockerBuildStrategy{
 			Image: dockerImage,
 			// TODO: this will be set to --storage-version (the internal schema we use)
@@ -254,43 +295,47 @@ func (c *MasterConfig) RunBuildController() {
 			// TODO: this will be set to --storage-version (the internal schema we use)
 			Codec: codec,
 		},
+		BuildDefaults:  buildDefaults,
+		BuildOverrides: buildOverrides,
 	}
 
 	controller := factory.Create()
 	controller.Run()
 	deleteController := factory.CreateDeleteController()
 	deleteController.Run()
+	return nil
 }
 
 // RunBuildPodController starts the build/pod status sync loop for build status
 func (c *MasterConfig) RunBuildPodController() {
-	osclient, kclient := c.BuildPodControllerClients()
-	factory := buildcontrollerfactory.BuildPodControllerFactory{
-		OSClient:     osclient,
-		KubeClient:   kclient,
-		BuildUpdater: buildclient.NewOSClientBuildClient(osclient),
-	}
-	controller := factory.Create()
-	controller.Run()
-	deletecontroller := factory.CreateDeleteController()
-	deletecontroller.Run()
+	buildInfomer := c.Informers.Builds().Informer()
+	podInformer := c.Informers.InternalKubernetesInformers().Core().InternalVersion().Pods()
+	osclient, kclientInternal, kclientExternal := c.BuildPodControllerClients()
+
+	controller := buildpodcontroller.NewBuildPodController(buildInfomer, podInformer, kclientInternal, kclientExternal, osclient)
+	go controller.Run(5, utilwait.NeverStop)
 }
 
 // RunBuildImageChangeTriggerController starts the build image change trigger controller process.
 func (c *MasterConfig) RunBuildImageChangeTriggerController() {
 	bcClient, _ := c.BuildImageChangeTriggerControllerClients()
 	bcInstantiator := buildclient.NewOSClientBuildConfigInstantiatorClient(bcClient)
-	factory := buildcontrollerfactory.ImageChangeControllerFactory{Client: bcClient, BuildConfigInstantiator: bcInstantiator}
-	factory.Create().Run()
+	bcIndex := &oscache.StoreToBuildConfigListerImpl{Indexer: c.Informers.BuildConfigs().Indexer()}
+	bcIndexSynced := c.Informers.BuildConfigs().Informer().HasSynced
+	factory := buildcontrollerfactory.ImageChangeControllerFactory{Client: bcClient, BuildConfigInstantiator: bcInstantiator, BuildConfigIndex: bcIndex, BuildConfigIndexSynced: bcIndexSynced}
+	go func() {
+		factory.Create().Run()
+	}()
 }
 
 // RunBuildConfigChangeController starts the build config change trigger controller process.
 func (c *MasterConfig) RunBuildConfigChangeController() {
-	bcClient, kClient := c.BuildConfigChangeControllerClients()
+	bcClient, internalKubeClientset, externalKubeClientset := c.BuildConfigChangeControllerClients()
 	bcInstantiator := buildclient.NewOSClientBuildConfigInstantiatorClient(bcClient)
 	factory := buildcontrollerfactory.BuildConfigControllerFactory{
 		Client:                  bcClient,
-		KubeClient:              kClient,
+		KubeClient:              internalKubeClientset,
+		ExternalKubeClient:      externalKubeClientset,
 		BuildConfigInstantiator: bcInstantiator,
 	}
 	factory.Create().Run()
@@ -298,11 +343,12 @@ func (c *MasterConfig) RunBuildConfigChangeController() {
 
 // RunDeploymentController starts the deployment controller process.
 func (c *MasterConfig) RunDeploymentController() {
-	rcInformer := c.Informers.ReplicationControllers().Informer()
-	podInformer := c.Informers.Pods().Informer()
-	_, kclient := c.DeploymentControllerClients()
+	// TODO these should be external
+	rcInformer := c.Informers.InternalKubernetesInformers().Core().InternalVersion().ReplicationControllers()
+	podInformer := c.Informers.InternalKubernetesInformers().Core().InternalVersion().Pods()
+	_, internalKubeClientset, externalKubeClientset := c.DeploymentControllerClients()
 
-	_, kclientConfig, err := configapi.GetKubeClient(c.Options.MasterClients.OpenShiftLoopbackKubeConfig)
+	_, kclientConfig, err := configapi.GetInternalKubeClient(c.Options.MasterClients.OpenShiftLoopbackKubeConfig, c.Options.MasterClients.OpenShiftLoopbackClientConnectionOverrides)
 	if err != nil {
 		glog.Fatalf("Unable to initialize deployment controller: %v", err)
 	}
@@ -317,52 +363,36 @@ func (c *MasterConfig) RunDeploymentController() {
 	controller := deploycontroller.NewDeploymentController(
 		rcInformer,
 		podInformer,
-		kclient,
+		internalKubeClientset,
+		externalKubeClientset,
 		bootstrappolicy.DeployerServiceAccountName,
 		c.ImageFor("deployer"),
 		env,
-		c.EtcdHelper.Codec(),
+		c.ExternalVersionCodec,
 	)
-
-	// TODO: Make the stop channel actually work.
-	stopCh := make(chan struct{})
-	// TODO: Make the number of workers configurable.
-	go controller.Run(5, stopCh)
+	go controller.Run(5, utilwait.NeverStop)
 }
 
 // RunDeploymentConfigController starts the deployment config controller process.
 func (c *MasterConfig) RunDeploymentConfigController() {
 	dcInfomer := c.Informers.DeploymentConfigs().Informer()
-	rcInformer := c.Informers.ReplicationControllers().Informer()
-	podInformer := c.Informers.Pods().Informer()
-	osclient, kclient := c.DeploymentConfigControllerClients()
+	rcInformer := c.Informers.InternalKubernetesInformers().Core().InternalVersion().ReplicationControllers()
+	podInformer := c.Informers.InternalKubernetesInformers().Core().InternalVersion().Pods()
+	osclient, kclientInternal, kclientExternal := c.DeploymentConfigControllerClients()
 
-	controller := deployconfigcontroller.NewDeploymentConfigController(dcInfomer, rcInformer, podInformer, osclient, kclient, c.EtcdHelper.Codec())
-	// TODO: Make the stop channel actually work.
-	stopCh := make(chan struct{})
-	// TODO: Make the number of workers configurable.
-	go controller.Run(5, stopCh)
+	controller := deployconfigcontroller.NewDeploymentConfigController(dcInfomer, rcInformer, podInformer, osclient, kclientInternal, kclientExternal, c.ExternalVersionCodec)
+	go controller.Run(5, utilwait.NeverStop)
 }
 
 // RunDeploymentTriggerController starts the deployment trigger controller process.
 func (c *MasterConfig) RunDeploymentTriggerController() {
 	dcInfomer := c.Informers.DeploymentConfigs().Informer()
+	rcInformer := c.Informers.InternalKubernetesInformers().Core().InternalVersion().ReplicationControllers().Informer()
 	streamInformer := c.Informers.ImageStreams().Informer()
-	osclient, kclient := c.DeploymentTriggerControllerClients()
+	osclient := c.DeploymentTriggerControllerClient()
 
-	controller := triggercontroller.NewDeploymentTriggerController(dcInfomer, streamInformer, osclient, kclient, c.EtcdHelper.Codec())
-	// TODO: Make the stop channel actually work.
-	stopCh := make(chan struct{})
-	// TODO: Make the number of workers configurable.
-	go controller.Run(5, stopCh)
-}
-
-// RunDeploymentImageChangeTriggerController starts the image change trigger controller process.
-func (c *MasterConfig) RunDeploymentImageChangeTriggerController() {
-	osclient := c.DeploymentImageChangeTriggerControllerClient()
-	factory := imagechangecontroller.ImageChangeControllerFactory{Client: osclient}
-	controller := factory.Create()
-	controller.Run()
+	controller := triggercontroller.NewDeploymentTriggerController(dcInfomer, rcInformer, streamInformer, osclient, c.ExternalVersionCodec)
+	go controller.Run(5, utilwait.NeverStop)
 }
 
 // RunSDNController runs openshift-sdn if the said network plugin is provided
@@ -373,7 +403,7 @@ func (c *MasterConfig) RunSDNController() {
 	}
 }
 
-func (c *MasterConfig) RunServiceServingCertController(client *kclient.Client) {
+func (c *MasterConfig) RunServiceServingCertController(client kclientsetinternal.Interface) {
 	if c.Options.ControllerConfig.ServiceServingCert.Signer == nil {
 		return
 	}
@@ -382,20 +412,31 @@ func (c *MasterConfig) RunServiceServingCertController(client *kclient.Client) {
 		glog.Fatalf("service serving cert controller failed: %v", err)
 	}
 
-	servingCertController := servingcertcontroller.NewServiceServingCertController(client, client, ca, "cluster.local", 2*time.Minute)
+	servingCertController := servingcertcontroller.NewServiceServingCertController(client.Core(), client.Core(), ca, "cluster.local", 2*time.Minute)
 	go servingCertController.Run(1, make(chan struct{}))
+
+	servingCertUpdateController := servingcertcontroller.NewServiceServingCertUpdateController(client.Core(), client.Core(), ca, "cluster.local", 20*time.Minute)
+	go servingCertUpdateController.Run(5, make(chan struct{}))
 }
 
 // RunImageImportController starts the image import trigger controller process.
 func (c *MasterConfig) RunImageImportController() {
 	osclient := c.ImageImportControllerClient()
-	importRate := float32(c.Options.ImagePolicyConfig.MaxScheduledImageImportsPerMinute) / float32(time.Minute/time.Second)
-	importBurst := c.Options.ImagePolicyConfig.MaxScheduledImageImportsPerMinute * 2
+
+	var limiter flowcontrol.RateLimiter = nil
+	if c.Options.ImagePolicyConfig.MaxScheduledImageImportsPerMinute <= 0 {
+		limiter = flowcontrol.NewFakeAlwaysRateLimiter()
+	} else {
+		importRate := float32(c.Options.ImagePolicyConfig.MaxScheduledImageImportsPerMinute) / float32(time.Minute/time.Second)
+		importBurst := c.Options.ImagePolicyConfig.MaxScheduledImageImportsPerMinute * 2
+		limiter = flowcontrol.NewTokenBucketRateLimiter(importRate, importBurst)
+	}
+
 	factory := imagecontroller.ImportControllerFactory{
 		Client:               osclient,
 		ResyncInterval:       10 * time.Minute,
 		MinimumCheckInterval: time.Duration(c.Options.ImagePolicyConfig.ScheduledImageImportMinimumIntervalSeconds) * time.Second,
-		ImportRateLimiter:    flowcontrol.NewTokenBucketRateLimiter(importRate, importBurst),
+		ImportRateLimiter:    limiter,
 		ScheduleEnabled:      !c.Options.ImagePolicyConfig.DisableScheduledImport,
 	}
 	controller, scheduledController := factory.Create()
@@ -417,14 +458,19 @@ func (c *MasterConfig) RunSecurityAllocationController() {
 
 	// TODO: move range initialization to run_config
 	uidRange, err := uid.ParseRange(alloc.UIDAllocatorRange)
-
 	if err != nil {
 		glog.Fatalf("Unable to describe UID range: %v", err)
 	}
+
+	opts, err := c.RESTOptionsGetter.GetRESTOptions(schema.GroupResource{Resource: "securityuidranges"})
+	if err != nil {
+		glog.Fatalf("Unable to load storage options for security UID ranges")
+	}
+
 	var etcdAlloc *etcdallocator.Etcd
 	uidAllocator := uidallocator.New(uidRange, func(max int, rangeSpec string) allocator.Interface {
 		mem := allocator.NewContiguousAllocationMap(max, rangeSpec)
-		etcdAlloc = etcdallocator.NewEtcd(mem, "/ranges/uids", kapi.Resource("uidallocation"), c.EtcdHelper)
+		etcdAlloc = etcdallocator.NewEtcd(mem, "/ranges/uids", kapi.Resource("uidallocation"), opts.StorageConfig)
 		return etcdAlloc
 	})
 	mcsRange, err := mcs.ParseRange(alloc.MCSAllocatorRange)
@@ -434,7 +480,7 @@ func (c *MasterConfig) RunSecurityAllocationController() {
 
 	kclient := c.SecurityAllocationControllerClient()
 
-	repair := securitycontroller.NewRepair(time.Minute, kclient.Namespaces(), uidRange, etcdAlloc)
+	repair := securitycontroller.NewRepair(time.Minute, kclient.Core().Namespaces(), uidRange, etcdAlloc)
 	if err := repair.RunOnce(); err != nil {
 		// TODO: v scary, may need to use direct etcd calls?
 		// If the security controller fails during RunOnce it could mean a
@@ -451,7 +497,7 @@ func (c *MasterConfig) RunSecurityAllocationController() {
 	factory := securitycontroller.AllocationFactory{
 		UIDAllocator: uidAllocator,
 		MCSAllocator: securitycontroller.DefaultMCSAllocation(uidRange, mcsRange, alloc.MCSLabelsPerProject),
-		Client:       kclient.Namespaces(),
+		Client:       kclient.Core().Namespaces(),
 		// TODO: reuse namespace cache
 	}
 	controller := factory.Create()
@@ -475,14 +521,15 @@ func (c *MasterConfig) RunResourceQuotaManager(cm *cmapp.CMServer) {
 		replenishmentSyncPeriodFunc = kctrlmgr.ResyncPeriod(cm)
 	}
 
-	osClient, kClient := c.ResourceQuotaManagerClients()
-	resourceQuotaRegistry := quota.NewAllResourceQuotaRegistry(osClient, kClient)
+	osClient, _, kClientExternal := c.ResourceQuotaManagerClients()
+	resourceQuotaRegistry := quota.NewAllResourceQuotaRegistry(c.Informers, osClient, kClientExternal)
 	resourceQuotaControllerOptions := &kresourcequota.ResourceQuotaControllerOptions{
-		KubeClient:                kClient,
+		KubeClient:                kClientExternal,
+		ResourceQuotaInformer:     c.Informers.KubernetesInformers().Core().V1().ResourceQuotas(),
 		ResyncPeriod:              controller.StaticResyncPeriodFunc(resourceQuotaSyncPeriod),
 		Registry:                  resourceQuotaRegistry,
 		GroupKindsToReplenish:     quota.AllEvaluatedGroupKinds,
-		ControllerFactory:         quotacontroller.NewAllResourceReplenishmentControllerFactory(c.Informers, osClient, kClient),
+		ControllerFactory:         quotacontroller.NewAllResourceReplenishmentControllerFactory(c.Informers, osClient),
 		ReplenishmentResyncPeriod: replenishmentSyncPeriodFunc,
 	}
 	go kresourcequota.NewResourceQuotaController(resourceQuotaControllerOptions).Run(concurrentResourceQuotaSyncs, utilwait.NeverStop)
@@ -497,8 +544,8 @@ func (c *MasterConfig) RunClusterQuotaMappingController() {
 }
 
 func (c *MasterConfig) RunClusterQuotaReconciliationController() {
-	osClient, kClient := c.ResourceQuotaManagerClients()
-	resourceQuotaRegistry := quota.NewAllResourceQuotaRegistry(osClient, kClient)
+	osClient, _, kClientExternal := c.ResourceQuotaManagerClients()
+	resourceQuotaRegistry := quota.NewAllResourceQuotaRegistry(c.Informers, osClient, kClientExternal)
 	groupKindsToReplenish := quota.AllEvaluatedGroupKinds
 
 	options := clusterquotareconciliation.ClusterQuotaReconcilationControllerOptions{
@@ -508,11 +555,44 @@ func (c *MasterConfig) RunClusterQuotaReconciliationController() {
 
 		Registry:                  resourceQuotaRegistry,
 		ResyncPeriod:              defaultResourceQuotaSyncPeriod,
-		ControllerFactory:         quotacontroller.NewAllResourceReplenishmentControllerFactory(c.Informers, osClient, kClient),
+		ControllerFactory:         quotacontroller.NewAllResourceReplenishmentControllerFactory(c.Informers, osClient),
 		ReplenishmentResyncPeriod: controller.StaticResyncPeriodFunc(defaultReplenishmentSyncPeriod),
 		GroupKindsToReplenish:     groupKindsToReplenish,
 	}
 	controller := clusterquotareconciliation.NewClusterQuotaReconcilationController(options)
 	c.ClusterQuotaMappingController.GetClusterQuotaMapper().AddListener(controller)
 	go controller.Run(5, utilwait.NeverStop)
+}
+
+// RunIngressIPController starts the ingress ip controller if IngressIPNetworkCIDR is configured.
+func (c *MasterConfig) RunIngressIPController(internalKubeClientset kclientsetinternal.Interface, externalKubeClientset kclientsetexternal.Interface) {
+	if len(c.Options.NetworkConfig.IngressIPNetworkCIDR) == 0 {
+		return
+	}
+
+	_, ipNet, err := net.ParseCIDR(c.Options.NetworkConfig.IngressIPNetworkCIDR)
+	if err != nil {
+		// should have been caught with validation
+		glog.Fatalf("Unable to start ingress ip controller: %v", err)
+	}
+	if ipNet.IP.IsUnspecified() {
+		return
+	}
+	ingressIPController := ingressip.NewIngressIPController(internalKubeClientset, externalKubeClientset, ipNet, defaultIngressIPSyncPeriod)
+	go ingressIPController.Run(utilwait.NeverStop)
+}
+
+// RunUnidlingController starts the unidling controller
+func (c *MasterConfig) RunUnidlingController() {
+	oc, kc, extensionsClient := c.UnidlingControllerClients()
+	resyncPeriod := 2 * time.Hour
+	scaleNamespacer := osclient.NewDelegatingScaleNamespacer(oc, extensionsClient)
+	dcCoreClient := deployclient.New(oc.RESTClient)
+	cont := unidlingcontroller.NewUnidlingController(scaleNamespacer, kc.Core(), kc.Core(), dcCoreClient, kc.Core(), resyncPeriod)
+
+	cont.Run(utilwait.NeverStop)
+}
+
+func (c *MasterConfig) RunTemplateController() {
+	go templatecontroller.NewTemplateInstanceController(c.PrivilegedLoopbackClientConfig).Run(utilwait.NeverStop)
 }

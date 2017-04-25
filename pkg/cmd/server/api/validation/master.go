@@ -6,20 +6,22 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	knet "k8s.io/apimachinery/pkg/util/net"
+	"k8s.io/apimachinery/pkg/util/sets"
+	kuval "k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	apiserveroptions "k8s.io/kubernetes/cmd/kube-apiserver/app/options"
-	controlleroptions "k8s.io/kubernetes/cmd/kube-controller-manager/app/options"
+	kcmoptions "k8s.io/kubernetes/cmd/kube-controller-manager/app/options"
 	kvalidation "k8s.io/kubernetes/pkg/api/validation"
 	"k8s.io/kubernetes/pkg/serviceaccount"
-	knet "k8s.io/kubernetes/pkg/util/net"
-	"k8s.io/kubernetes/pkg/util/sets"
-	kuval "k8s.io/kubernetes/pkg/util/validation"
-	"k8s.io/kubernetes/pkg/util/validation/field"
 
 	"github.com/openshift/origin/pkg/cmd/server/api"
 	"github.com/openshift/origin/pkg/cmd/server/bootstrappolicy"
+	"github.com/openshift/origin/pkg/cmd/server/cm"
 	"github.com/openshift/origin/pkg/security/mcs"
 	"github.com/openshift/origin/pkg/security/uid"
 	"github.com/openshift/origin/pkg/util/labelselector"
@@ -158,6 +160,8 @@ func ValidateMasterConfig(config *api.MasterConfig, fldPath *field.Path) Validat
 		}
 	}
 
+	validationResults.AddErrors(ValidateIngressIPNetworkCIDR(config, fldPath.Child("networkConfig", "ingressIPNetworkCIDR").Index(0))...)
+
 	validationResults.AddErrors(ValidateKubeConfig(config.MasterClients.OpenShiftLoopbackKubeConfig, fldPath.Child("masterClients", "openShiftLoopbackKubeConfig"))...)
 
 	if len(config.MasterClients.ExternalKubernetesKubeConfig) > 0 {
@@ -181,9 +185,63 @@ func ValidateMasterConfig(config *api.MasterConfig, fldPath *field.Path) Validat
 
 	if config.AdmissionConfig.PluginConfig != nil {
 		validationResults.AddErrors(ValidateAdmissionPluginConfig(config.AdmissionConfig.PluginConfig, fldPath.Child("admissionConfig", "pluginConfig"))...)
+		validationResults.Append(ValidateAdmissionPluginConfigConflicts(config))
+	}
+	if len(config.AdmissionConfig.PluginOrderOverride) != 0 {
+		validationResults.AddWarnings(field.Invalid(fldPath.Child("admissionConfig", "pluginOrderOverride"), config.AdmissionConfig.PluginOrderOverride, "specified admission ordering is being phased out.  Convert to DefaultAdmissionConfig in admissionConfig.pluginConfig."))
 	}
 
 	validationResults.Append(ValidateControllerConfig(config.ControllerConfig, fldPath.Child("controllerConfig")))
+
+	validationResults.Append(ValidateAuditConfig(config.AuditConfig, fldPath.Child("auditConfig")))
+
+	validationResults.Append(ValidateMasterAuthConfig(config.AuthConfig, fldPath.Child("authConfig")))
+
+	return validationResults
+}
+
+func ValidateMasterAuthConfig(config api.MasterAuthConfig, fldPath *field.Path) ValidationResults {
+	validationResults := ValidationResults{}
+
+	if config.RequestHeader == nil {
+		return validationResults
+	}
+
+	if len(config.RequestHeader.ClientCA) == 0 {
+		validationResults.AddErrors(field.Required(fldPath.Child("requestHeader.clientCA"), "must be specified for a secure connection"))
+	}
+	if len(config.RequestHeader.ClientCommonNames) == 0 {
+		validationResults.AddErrors(field.Required(fldPath.Child("requestHeader.clientCommonNames"), "must be specified for a secure connection"))
+	}
+	if len(config.RequestHeader.UsernameHeaders) == 0 {
+		validationResults.AddErrors(field.Required(fldPath.Child("requestHeader.usernameHeaders"), "must be specified for a secure connection"))
+	}
+	if len(config.RequestHeader.GroupHeaders) == 0 {
+		validationResults.AddErrors(field.Required(fldPath.Child("requestHeader.groupHeaders"), "must be specified for a secure connection"))
+	}
+	if len(config.RequestHeader.ExtraHeaderPrefixes) == 0 {
+		validationResults.AddErrors(field.Required(fldPath.Child("requestHeader.extraHeaderPrefixes"), "must be specified for a secure connection"))
+	}
+
+	return validationResults
+}
+
+func ValidateAuditConfig(config api.AuditConfig, fldPath *field.Path) ValidationResults {
+	validationResults := ValidationResults{}
+
+	if len(config.AuditFilePath) == 0 {
+		// for backwards compatibility reasons we can't error this out
+		validationResults.AddWarnings(field.Required(fldPath.Child("auditFilePath"), "audit can now be logged to a separate file"))
+	}
+	if config.MaximumFileRetentionDays < 0 {
+		validationResults.AddErrors(field.Invalid(fldPath.Child("maximumFileRetentionDays"), config.MaximumFileRetentionDays, "must be greater than or equal to 0"))
+	}
+	if config.MaximumRetainedFiles < 0 {
+		validationResults.AddErrors(field.Invalid(fldPath.Child("maximumRetainedFiles"), config.MaximumRetainedFiles, "must be greater than or equal to 0"))
+	}
+	if config.MaximumFileSizeMegabytes < 0 {
+		validationResults.AddErrors(field.Invalid(fldPath.Child("maximumFileSizeMegabytes"), config.MaximumFileSizeMegabytes, "must be greater than or equal to 0"))
+	}
 
 	return validationResults
 }
@@ -285,9 +343,7 @@ func ValidateServiceAccountConfig(config api.ServiceAccountConfig, builtInKubern
 		privateKeyFilePath := fldPath.Child("privateKeyFile")
 		if fileErrs := ValidateFile(config.PrivateKeyFile, privateKeyFilePath); len(fileErrs) > 0 {
 			validationResults.AddErrors(fileErrs...)
-		} else if privateKey, err := serviceaccount.ReadPrivateKey(config.PrivateKeyFile); err != nil {
-			validationResults.AddErrors(field.Invalid(privateKeyFilePath, config.PrivateKeyFile, err.Error()))
-		} else if err := privateKey.Validate(); err != nil {
+		} else if _, err := serviceaccount.ReadPrivateKey(config.PrivateKeyFile); err != nil {
 			validationResults.AddErrors(field.Invalid(privateKeyFilePath, config.PrivateKeyFile, err.Error()))
 		}
 	} else if builtInKubernetes {
@@ -301,7 +357,7 @@ func ValidateServiceAccountConfig(config api.ServiceAccountConfig, builtInKubern
 		idxPath := fldPath.Child("publicKeyFiles").Index(i)
 		if fileErrs := ValidateFile(publicKeyFile, idxPath); len(fileErrs) > 0 {
 			validationResults.AddErrors(fileErrs...)
-		} else if _, err := serviceaccount.ReadPublicKey(publicKeyFile); err != nil {
+		} else if _, err := serviceaccount.ReadPublicKeys(publicKeyFile); err != nil {
 			validationResults.AddErrors(field.Invalid(idxPath, publicKeyFile, err.Error()))
 		}
 	}
@@ -419,6 +475,28 @@ func ValidateImagePolicyConfig(config api.ImagePolicyConfig, fldPath *field.Path
 	if config.MaxScheduledImageImportsPerMinute == 0 || config.MaxScheduledImageImportsPerMinute < -1 {
 		errs = append(errs, field.Invalid(fldPath.Child("maxScheduledImageImportsPerMinute"), config.MaxScheduledImageImportsPerMinute, "must be a positive integer or -1"))
 	}
+	if config.AllowedRegistriesForImport != nil {
+		for i, registry := range *config.AllowedRegistriesForImport {
+			if len(registry.DomainName) == 0 {
+				errs = append(errs, field.Invalid(fldPath.Index(i).Child("allowedRegistriesForImport", "domainName"), registry.DomainName, "cannot be an empty string"))
+			}
+			parts := strings.Split(registry.DomainName, ":")
+			// Check for ':8080'
+			if len(parts) == 0 || len(parts[0]) == 0 {
+				errs = append(errs, field.Invalid(fldPath.Index(i).Child("allowedRegistriesForImport", "domainName"), registry.DomainName, "invalid domain specified, must be registry.url.local[:port]"))
+			}
+			// Check for 'foo:bar:1234'
+			if len(parts) > 2 {
+				errs = append(errs, field.Invalid(fldPath.Index(i).Child("allowedRegistriesForImport", "domainName"), registry.DomainName, "invalid format, must be registry.url.local[:port]"))
+			}
+			// Check for 'foo:bar'
+			if len(parts) == 2 {
+				if _, err := strconv.Atoi(parts[1]); err != nil {
+					errs = append(errs, field.Invalid(fldPath.Index(i).Child("allowedRegistriesForImport", "domainName"), registry.DomainName, "invalid port format, must be a number"))
+				}
+			}
+		}
+	}
 	return errs
 }
 
@@ -505,8 +583,11 @@ func ValidateKubernetesMasterConfig(config *api.KubernetesMasterConfig, fldPath 
 	if config.AdmissionConfig.PluginConfig != nil {
 		validationResults.AddErrors(ValidateAdmissionPluginConfig(config.AdmissionConfig.PluginConfig, fldPath.Child("admissionConfig", "pluginConfig"))...)
 	}
+	if len(config.AdmissionConfig.PluginOrderOverride) != 0 {
+		validationResults.AddWarnings(field.Invalid(fldPath.Child("admissionConfig", "pluginOrderOverride"), config.AdmissionConfig.PluginOrderOverride, "specified admission ordering is being phased out.  Convert to DefaultAdmissionConfig in admissionConfig.pluginConfig."))
+	}
 
-	validationResults.AddErrors(ValidateAPIServerExtendedArguments(config.APIServerArguments, fldPath.Child("apiServerArguments"))...)
+	validationResults.Append(ValidateAPIServerExtendedArguments(config.APIServerArguments, fldPath.Child("apiServerArguments")))
 	validationResults.AddErrors(ValidateControllerExtendedArguments(config.ControllerArguments, fldPath.Child("controllerArguments"))...)
 
 	return validationResults
@@ -581,12 +662,23 @@ func ValidateRoutingConfig(config api.RoutingConfig, fldPath *field.Path) field.
 	return allErrs
 }
 
-func ValidateAPIServerExtendedArguments(config api.ExtendedArguments, fldPath *field.Path) field.ErrorList {
-	return ValidateExtendedArguments(config, apiserveroptions.NewAPIServer().AddFlags, fldPath)
+func ValidateAPIServerExtendedArguments(config api.ExtendedArguments, fldPath *field.Path) ValidationResults {
+	validationResults := ValidationResults{}
+
+	validationResults.AddErrors(ValidateExtendedArguments(config, apiserveroptions.NewServerRunOptions().AddFlags, fldPath)...)
+
+	if len(config["admission-control"]) > 0 {
+		validationResults.AddWarnings(field.Invalid(fldPath.Key("admission-control"), config["admission-control"], "specified admission ordering is being phased out.  Convert to DefaultAdmissionConfig in admissionConfig.pluginConfig."))
+	}
+	if len(config["admission-control-config-file"]) > 0 {
+		validationResults.AddWarnings(field.Invalid(fldPath.Key("admission-control-config-file"), config["admission-control-config-file"], "specify a single admission control config file is being phased out.  Convert to admissionConfig.pluginConfig, one file per plugin."))
+	}
+
+	return validationResults
 }
 
 func ValidateControllerExtendedArguments(config api.ExtendedArguments, fldPath *field.Path) field.ErrorList {
-	return ValidateExtendedArguments(config, controlleroptions.NewCMServer().AddFlags, fldPath)
+	return ValidateExtendedArguments(config, cm.OriginControllerManagerAddFlags(kcmoptions.NewCMServer()), fldPath)
 }
 
 func ValidateAdmissionPluginConfig(pluginConfig map[string]api.AdmissionPluginConfig, fieldPath *field.Path) field.ErrorList {
@@ -601,4 +693,53 @@ func ValidateAdmissionPluginConfig(pluginConfig map[string]api.AdmissionPluginCo
 	}
 	return allErrs
 
+}
+
+func ValidateAdmissionPluginConfigConflicts(masterConfig *api.MasterConfig) ValidationResults {
+	validationResults := ValidationResults{}
+
+	if masterConfig.KubernetesMasterConfig != nil {
+		// check for collisions between openshift and kube plugin config
+		for pluginName, kubeConfig := range masterConfig.KubernetesMasterConfig.AdmissionConfig.PluginConfig {
+			if openshiftConfig, exists := masterConfig.AdmissionConfig.PluginConfig[pluginName]; exists && !reflect.DeepEqual(kubeConfig, openshiftConfig) {
+				validationResults.AddWarnings(field.Invalid(field.NewPath("kubernetesMasterConfig", "admissionConfig", "pluginConfig").Key(pluginName), masterConfig.AdmissionConfig.PluginConfig[pluginName], "conflicts with kubernetesMasterConfig.admissionConfig.pluginConfig.  Separate admission chains are being phased out.  Convert to admissionConfig.pluginConfig."))
+			}
+		}
+	}
+
+	return validationResults
+}
+
+func ValidateIngressIPNetworkCIDR(config *api.MasterConfig, fldPath *field.Path) (errors field.ErrorList) {
+	cidr := config.NetworkConfig.IngressIPNetworkCIDR
+	if len(cidr) == 0 {
+		return
+	}
+
+	addError := func(errMessage string) {
+		errors = append(errors, field.Invalid(fldPath, cidr, errMessage))
+	}
+
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		addError(fmt.Sprintf("must be a valid CIDR notation IP range (e.g. %s)", api.DefaultIngressIPNetworkCIDR))
+		return
+	}
+
+	// TODO Detect cloud provider when not using built-in kubernetes
+	kubeConfig := config.KubernetesMasterConfig
+	noCloudProvider := kubeConfig != nil && (len(kubeConfig.ControllerArguments["cloud-provider"]) == 0 || kubeConfig.ControllerArguments["cloud-provider"][0] == "")
+
+	if noCloudProvider {
+		if api.CIDRsOverlap(cidr, config.NetworkConfig.ClusterNetworkCIDR) {
+			addError("conflicts with cluster network CIDR")
+		}
+		if api.CIDRsOverlap(cidr, config.NetworkConfig.ServiceNetworkCIDR) {
+			addError("conflicts with service network CIDR")
+		}
+	} else if !ipNet.IP.IsUnspecified() {
+		addError("should not be provided when a cloud-provider is enabled")
+	}
+
+	return
 }

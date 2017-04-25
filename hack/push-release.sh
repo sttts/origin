@@ -5,17 +5,8 @@
 # Set OS_PUSH_BASE_IMAGES=true to push base images
 # Set OS_PUSH_BASE_REGISTRY to prefix the destination images
 #
-
-set -o errexit
-set -o nounset
-set -o pipefail
-
 STARTTIME=$(date +%s)
-OS_ROOT=$(dirname "${BASH_SOURCE}")/..
-source "${OS_ROOT}/hack/lib/init.sh"
-
-# Go to the top of the tree.
-cd "${OS_ROOT}"
+source "$(dirname "${BASH_SOURCE}")/lib/init.sh"
 
 # Allow a release to be repushed with a tag
 tag="${OS_PUSH_TAG:-}"
@@ -75,7 +66,7 @@ if [[ "${tag}" == ":latest" ]]; then
   if [[ "${OS_PUSH_BASE_IMAGES-}" != "" ]]; then
     for image in "${base_images[@]}"; do
       if [[ "${OS_PUSH_BASE_REGISTRY-}" != "" ]]; then
-        docker tag -f "${image}:${source_tag}" "${OS_PUSH_BASE_REGISTRY}${image}${tag}"
+        docker tag "${image}:${source_tag}" "${OS_PUSH_BASE_REGISTRY}${image}${tag}"
       fi
       docker push ${PUSH_OPTS} "${OS_PUSH_BASE_REGISTRY-}${image}${tag}"
     done
@@ -89,7 +80,7 @@ if [[ "${tag}" != ":latest" ]]; then
       docker pull "${OS_PUSH_BASE_REGISTRY-}${image}:${source_tag}"
     done
   else
-    echo "WARNING: Pushing local :${source_tag} images to ${OS_PUSH_BASE_REGISTRY-}*${tag}"
+    os::log::warning "Pushing local :${source_tag} images to ${OS_PUSH_BASE_REGISTRY-}*${tag}"
     if [[ -z "${OS_PUSH_ALWAYS:-}" ]]; then
       echo "  CTRL+C to cancel, or any other key to continue"
       read
@@ -99,7 +90,7 @@ fi
 
 if [[ "${OS_PUSH_BASE_REGISTRY-}" != "" || "${tag}" != "" ]]; then
   for image in "${images[@]}"; do
-    docker tag -f "${image}:${source_tag}" "${OS_PUSH_BASE_REGISTRY-}${image}${tag}"
+    docker tag "${image}:${source_tag}" "${OS_PUSH_BASE_REGISTRY-}${image}${tag}"
   done
 fi
 

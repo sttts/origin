@@ -3,13 +3,15 @@ package buildconfig
 import (
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	kapi "k8s.io/kubernetes/pkg/api"
 
 	buildapi "github.com/openshift/origin/pkg/build/api"
 )
 
 func TestBuildConfigStrategy(t *testing.T) {
-	ctx := kapi.NewDefaultContext()
+	ctx := apirequest.NewDefaultContext()
 	if !Strategy.NamespaceScoped() {
 		t.Errorf("BuildConfig is namespace scoped")
 	}
@@ -17,7 +19,7 @@ func TestBuildConfigStrategy(t *testing.T) {
 		t.Errorf("BuildConfig should not allow create on update")
 	}
 	buildConfig := &buildapi.BuildConfig{
-		ObjectMeta: kapi.ObjectMeta{Name: "config-id", Namespace: "namespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "config-id", Namespace: "namespace"},
 		Spec: buildapi.BuildConfigSpec{
 			RunPolicy: buildapi.BuildRunPolicySerial,
 			Triggers: []buildapi.BuildTriggerPolicy{
@@ -52,7 +54,7 @@ func TestBuildConfigStrategy(t *testing.T) {
 		},
 	}
 	newBC := &buildapi.BuildConfig{
-		ObjectMeta: kapi.ObjectMeta{Name: "config-id", Namespace: "namespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "config-id", Namespace: "namespace"},
 		Spec: buildapi.BuildConfigSpec{
 			RunPolicy: buildapi.BuildRunPolicySerial,
 			Triggers: []buildapi.BuildTriggerPolicy{
@@ -86,7 +88,7 @@ func TestBuildConfigStrategy(t *testing.T) {
 			LastVersion: 9,
 		},
 	}
-	Strategy.PrepareForCreate(buildConfig)
+	Strategy.PrepareForCreate(ctx, buildConfig)
 	errs := Strategy.Validate(ctx, buildConfig)
 	if len(errs) != 0 {
 		t.Errorf("Unexpected error validating %v", errs)
@@ -94,19 +96,19 @@ func TestBuildConfigStrategy(t *testing.T) {
 
 	// lastversion cannot go backwards
 	newBC.Status.LastVersion = 9
-	Strategy.PrepareForUpdate(newBC, buildConfig)
+	Strategy.PrepareForUpdate(ctx, newBC, buildConfig)
 	if newBC.Status.LastVersion != buildConfig.Status.LastVersion {
 		t.Errorf("Expected version=%d, got %d", buildConfig.Status.LastVersion, newBC.Status.LastVersion)
 	}
 
 	// lastversion can go forwards
 	newBC.Status.LastVersion = 11
-	Strategy.PrepareForUpdate(newBC, buildConfig)
+	Strategy.PrepareForUpdate(ctx, newBC, buildConfig)
 	if newBC.Status.LastVersion != 11 {
 		t.Errorf("Expected version=%d, got %d", 11, newBC.Status.LastVersion)
 	}
 
-	Strategy.PrepareForCreate(buildConfig)
+	Strategy.PrepareForCreate(ctx, buildConfig)
 	errs = Strategy.Validate(ctx, buildConfig)
 	if len(errs) != 0 {
 		t.Errorf("Unexpected error validating %v", errs)

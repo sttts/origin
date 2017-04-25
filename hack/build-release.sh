@@ -4,18 +4,11 @@
 # image to be built prior to executing this command via hack/build-base-images.sh.
 
 # NOTE:   only committed code is built.
-
-set -o errexit
-set -o nounset
-set -o pipefail
-
 STARTTIME=$(date +%s)
-OS_ROOT=$(dirname "${BASH_SOURCE}")/..
-source "${OS_ROOT}/hack/lib/init.sh"
-os::log::stacktrace::install
+source "$(dirname "${BASH_SOURCE}")/lib/init.sh"
 
-# Go to the top of the tree.
-cd "${OS_ROOT}"
+export OS_BUILD_ENV_FROM_ARCHIVE=y
+export OS_BUILD_ENV_PRESERVE=_output/local
 
 context="${OS_ROOT}/_output/buildenv-context"
 
@@ -35,8 +28,6 @@ trap "os::build::environment::cleanup ${container}" EXIT
   echo "++ Building release ${OS_GIT_VERSION}"
 )
 os::build::environment::withsource "${container}" "${OS_GIT_COMMIT:-HEAD}"
-# Get the command output
-docker cp "${container}:/go/src/github.com/openshift/origin/_output/local/releases" "${OS_OUTPUT}"
 echo "${OS_GIT_COMMIT}" > "${OS_LOCAL_RELEASEPATH}/.commit"
 
 ret=$?; ENDTIME=$(date +%s); echo "$0 took $(($ENDTIME - $STARTTIME)) seconds"; exit "$ret"

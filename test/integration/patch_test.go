@@ -1,5 +1,3 @@
-// +build integration
-
 package integration
 
 import (
@@ -10,11 +8,13 @@ import (
 
 	"github.com/pborman/uuid"
 
+	kapierrs "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	apiendpointhandlers "k8s.io/apiserver/pkg/endpoints/handlers"
+	restclient "k8s.io/client-go/rest"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kapierrs "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/apiserver"
-	"k8s.io/kubernetes/pkg/client/restclient"
 
 	templatesapi "github.com/openshift/origin/pkg/template/api"
 	testutil "github.com/openshift/origin/test/util"
@@ -24,6 +24,7 @@ import (
 func TestPatchConflicts(t *testing.T) {
 
 	testutil.RequireEtcd(t)
+	defer testutil.DumpEtcdOnFailure(t)
 
 	_, clusterAdminKubeConfig, err := testserver.StartTestMasterAPI()
 
@@ -36,7 +37,7 @@ func TestPatchConflicts(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	clusterAdminKubeClient, err := testutil.GetClusterAdminKubeClient(clusterAdminKubeConfig)
+	clusterAdminKubeClientset, err := testutil.GetClusterAdminKubeClient(clusterAdminKubeConfig)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -44,22 +45,22 @@ func TestPatchConflicts(t *testing.T) {
 	objName := "myobj"
 	ns := "patch-namespace"
 
-	if _, err := clusterAdminKubeClient.Namespaces().Create(&kapi.Namespace{ObjectMeta: kapi.ObjectMeta{Name: ns}}); err != nil {
+	if _, err := clusterAdminKubeClientset.Core().Namespaces().Create(&kapi.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
 		t.Fatalf("Error creating namespace:%v", err)
 	}
-	if _, err := clusterAdminKubeClient.Secrets(ns).Create(&kapi.Secret{ObjectMeta: kapi.ObjectMeta{Name: objName}}); err != nil {
+	if _, err := clusterAdminKubeClientset.Core().Secrets(ns).Create(&kapi.Secret{ObjectMeta: metav1.ObjectMeta{Name: objName}}); err != nil {
 		t.Fatalf("Error creating k8s resource:%v", err)
 	}
-	if _, err := clusterAdminClient.Templates(ns).Create(&templatesapi.Template{ObjectMeta: kapi.ObjectMeta{Name: objName}}); err != nil {
+	if _, err := clusterAdminClient.Templates(ns).Create(&templatesapi.Template{ObjectMeta: metav1.ObjectMeta{Name: objName}}); err != nil {
 		t.Fatalf("Error creating origin resource:%v", err)
 	}
 
 	testcases := []struct {
-		client   *restclient.RESTClient
+		client   restclient.Interface
 		resource string
 	}{
 		{
-			client:   clusterAdminKubeClient.RESTClient,
+			client:   clusterAdminKubeClientset.Core().RESTClient(),
 			resource: "secrets",
 		},
 		{
@@ -74,13 +75,13 @@ func TestPatchConflicts(t *testing.T) {
 		// Force patch to deal with resourceVersion conflicts applying non-conflicting patches
 		// ensure it handles reapplies without internal errors
 		wg := sync.WaitGroup{}
-		for i := 0; i < (2 * apiserver.MaxPatchConflicts); i++ {
+		for i := 0; i < (2 * apiendpointhandlers.MaxRetryWhenPatchConflicts); i++ {
 			wg.Add(1)
 			go func(labelName string) {
 				defer wg.Done()
 				labelValue := uuid.NewRandom().String()
 
-				obj, err := tc.client.Patch(kapi.StrategicMergePatchType).
+				obj, err := tc.client.Patch(types.StrategicMergePatchType).
 					Namespace(ns).
 					Resource(tc.resource).
 					Name(objName).
@@ -112,8 +113,8 @@ func TestPatchConflicts(t *testing.T) {
 		}
 		wg.Wait()
 
-		if successes < apiserver.MaxPatchConflicts {
-			t.Errorf("Expected at least %d successful patches for %s, got %d", apiserver.MaxPatchConflicts, tc.resource, successes)
+		if successes < apiendpointhandlers.MaxRetryWhenPatchConflicts {
+			t.Errorf("Expected at least %d successful patches for %s, got %d", apiendpointhandlers.MaxRetryWhenPatchConflicts, tc.resource, successes)
 		} else {
 			t.Logf("Got %d successful patches for %s", successes, tc.resource)
 		}

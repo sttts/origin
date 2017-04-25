@@ -1,6 +1,6 @@
 package api
 
-import "k8s.io/kubernetes/pkg/fields"
+import "k8s.io/apimachinery/pkg/fields"
 
 // ClusterPolicyToSelectableFields returns a label set that represents the object
 // changes to the returned keys require registering conversions for existing versions using Scheme.AddFieldLabelConversionFunc
@@ -52,5 +52,14 @@ func RoleBindingToSelectableFields(roleBinding *RoleBinding) fields.Set {
 	return fields.Set{
 		"metadata.name":      roleBinding.Name,
 		"metadata.namespace": roleBinding.Namespace,
+	}
+}
+
+// RoleBindingRestrictionToSelectableFields returns a label set that be used to
+// identify a RoleBindingRestriction object.
+func RoleBindingRestrictionToSelectableFields(rbr *RoleBindingRestriction) fields.Set {
+	return fields.Set{
+		"metadata.name":      rbr.Name,
+		"metadata.namespace": rbr.Namespace,
 	}
 }

@@ -3,18 +3,18 @@ package shared
 import (
 	"reflect"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/tools/cache"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client/cache"
-	"k8s.io/kubernetes/pkg/controller/framework"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/watch"
 
 	ocache "github.com/openshift/origin/pkg/client/cache"
 	quotaapi "github.com/openshift/origin/pkg/quota/api"
 )
 
 type ClusterResourceQuotaInformer interface {
-	Informer() framework.SharedIndexInformer
+	Informer() cache.SharedIndexInformer
 	// still use an indexer, no telling what someone will want to index on someday
 	Indexer() cache.Indexer
 	Lister() *ocache.IndexerToClusterResourceQuotaLister
@@ -26,7 +26,7 @@ type clusterResourceQuotaInformer struct {
 	*sharedInformerFactory
 }
 
-func (f *clusterResourceQuotaInformer) Informer() framework.SharedIndexInformer {
+func (f *clusterResourceQuotaInformer) Informer() cache.SharedIndexInformer {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
@@ -40,16 +40,16 @@ func (f *clusterResourceQuotaInformer) Informer() framework.SharedIndexInformer 
 	lw := f.customListerWatchers.GetListerWatcher(kapi.Resource("clusterresourcequotas"))
 	if lw == nil {
 		lw = &cache.ListWatch{
-			ListFunc: func(options kapi.ListOptions) (runtime.Object, error) {
+			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 				return f.originClient.ClusterResourceQuotas().List(options)
 			},
-			WatchFunc: func(options kapi.ListOptions) (watch.Interface, error) {
+			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
 				return f.originClient.ClusterResourceQuotas().Watch(options)
 			},
 		}
 	}
 
-	informer = framework.NewSharedIndexInformer(
+	informer = cache.NewSharedIndexInformer(
 		lw,
 		informerObj,
 		f.defaultResync,

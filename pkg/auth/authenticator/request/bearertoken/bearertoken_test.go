@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	"k8s.io/kubernetes/pkg/auth/authenticator"
-	"k8s.io/kubernetes/pkg/auth/user"
+	"k8s.io/apiserver/pkg/authentication/authenticator"
+	"k8s.io/apiserver/pkg/authentication/user"
 )
 
 func TestBearerToken(t *testing.T) {
@@ -77,7 +77,7 @@ func TestBearerToken(t *testing.T) {
 			RemoveHeader:                 true,
 			ExpectedUserName:             "",
 			ExpectedOK:                   false,
-			ExpectedErr:                  false,
+			ExpectedErr:                  true,
 			ExpectedAuthorizationHeaders: []string{"Bearer 123"},
 		},
 		"error bearer token": {

@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/kubernetes/pkg/api"
 )
 
@@ -35,7 +36,7 @@ func TestNamespaceGenerate(t *testing.T) {
 				"name": "foo",
 			},
 			expected: &api.Namespace{
-				ObjectMeta: api.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "foo",
 				},
 			},
@@ -80,7 +81,7 @@ func TestNamespaceGenerate(t *testing.T) {
 			t.Errorf("%v: expected error and didn't get one", index)
 			continue // loop, no expected output object
 		case !test.expectErr && err != nil:
-			t.Errorf("%v: expected error and didn't get one", index)
+			t.Errorf("%v: unexpected error %v", index, err)
 			continue // loop, no output object
 		case !test.expectErr && err == nil:
 			// do nothing and drop through

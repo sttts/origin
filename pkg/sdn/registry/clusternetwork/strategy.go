@@ -3,12 +3,13 @@ package clusternetwork
 import (
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/storage"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
-	"k8s.io/kubernetes/pkg/registry/generic"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/validation/field"
 
 	"github.com/openshift/origin/pkg/sdn/api"
 	"github.com/openshift/origin/pkg/sdn/api/validation"
@@ -23,7 +24,7 @@ type sdnStrategy struct {
 // objects via the REST API.
 var Strategy = sdnStrategy{kapi.Scheme}
 
-func (sdnStrategy) PrepareForUpdate(obj, old runtime.Object) {}
+func (sdnStrategy) PrepareForUpdate(ctx apirequest.Context, obj, old runtime.Object) {}
 
 // NamespaceScoped is false for sdns
 func (sdnStrategy) NamespaceScoped() bool {
@@ -34,7 +35,7 @@ func (sdnStrategy) GenerateName(base string) string {
 	return base
 }
 
-func (sdnStrategy) PrepareForCreate(obj runtime.Object) {
+func (sdnStrategy) PrepareForCreate(ctx apirequest.Context, obj runtime.Object) {
 }
 
 // Canonicalize normalizes the object after validation.
@@ -42,7 +43,7 @@ func (sdnStrategy) Canonicalize(obj runtime.Object) {
 }
 
 // Validate validates a new sdn
-func (sdnStrategy) Validate(ctx kapi.Context, obj runtime.Object) field.ErrorList {
+func (sdnStrategy) Validate(ctx apirequest.Context, obj runtime.Object) field.ErrorList {
 	return validation.ValidateClusterNetwork(obj.(*api.ClusterNetwork))
 }
 
@@ -56,18 +57,29 @@ func (sdnStrategy) AllowUnconditionalUpdate() bool {
 }
 
 // ValidateUpdate is the default update validation for a ClusterNetwork
-func (sdnStrategy) ValidateUpdate(ctx kapi.Context, obj, old runtime.Object) field.ErrorList {
+func (sdnStrategy) ValidateUpdate(ctx apirequest.Context, obj, old runtime.Object) field.ErrorList {
 	return validation.ValidateClusterNetworkUpdate(obj.(*api.ClusterNetwork), old.(*api.ClusterNetwork))
 }
 
+// GetAttrs returns labels and fields of a given object for filtering purposes
+func GetAttrs(o runtime.Object) (labels.Set, fields.Set, error) {
+	obj, ok := o.(*api.ClusterNetwork)
+	if !ok {
+		return nil, nil, fmt.Errorf("not a ClusterNetwork")
+	}
+	return labels.Set(obj.Labels), SelectableFields(obj), nil
+}
+
 // Matcher returns a generic matcher for a given label and field selector.
-func Matcher(label labels.Selector, field fields.Selector) generic.Matcher {
-	return generic.MatcherFunc(func(obj runtime.Object) (bool, error) {
-		network, ok := obj.(*api.ClusterNetwork)
-		if !ok {
-			return false, fmt.Errorf("not a ClusterNetwork")
-		}
-		fields := api.ClusterNetworkToSelectableFields(network)
-		return label.Matches(labels.Set(network.Labels)) && field.Matches(fields), nil
-	})
+func Matcher(label labels.Selector, field fields.Selector) storage.SelectionPredicate {
+	return storage.SelectionPredicate{
+		Label:    label,
+		Field:    field,
+		GetAttrs: GetAttrs,
+	}
+}
+
+// SelectableFields returns a field set that can be used for filter selection
+func SelectableFields(obj *api.ClusterNetwork) fields.Set {
+	return api.ClusterNetworkToSelectableFields(obj)
 }

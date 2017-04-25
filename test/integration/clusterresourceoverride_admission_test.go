@@ -1,31 +1,32 @@
-// +build integration,etcd
-
 package integration
 
 import (
 	"testing"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kapi "k8s.io/kubernetes/pkg/api"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 
 	"github.com/openshift/origin/pkg/cmd/server/api"
 	"github.com/openshift/origin/pkg/cmd/server/bootstrappolicy"
 	overrideapi "github.com/openshift/origin/pkg/quota/admission/clusterresourceoverride/api"
 	testutil "github.com/openshift/origin/test/util"
 	testserver "github.com/openshift/origin/test/util/server"
-	kapi "k8s.io/kubernetes/pkg/api"
-	apierrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/resource"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
 
 	_ "github.com/openshift/origin/pkg/quota/admission/clusterresourceoverride/api/install"
 )
 
 func TestClusterResourceOverridePluginWithNoLimits(t *testing.T) {
+	defer testutil.DumpEtcdOnFailure(t)
 	config := &overrideapi.ClusterResourceOverrideConfig{
 		LimitCPUToMemoryPercent:     100,
 		CPURequestToLimitPercent:    50,
 		MemoryRequestToLimitPercent: 50,
 	}
-	kubeClient := setupClusterResourceOverrideTest(t, config)
-	podHandler := kubeClient.Pods(testutil.Namespace())
+	kubeClientset := setupClusterResourceOverrideTest(t, config)
+	podHandler := kubeClientset.Core().Pods(testutil.Namespace())
 
 	// test with no limits object present
 
@@ -33,8 +34,11 @@ func TestClusterResourceOverridePluginWithNoLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if memory := podCreated.Spec.Containers[0].Resources.Limits.Memory(); memory.Cmp(resource.MustParse("2Gi")) != 0 {
+		t.Errorf("limitlesspod: Memory limit did not match expected 2Gi: %#v", memory)
+	}
 	if memory := podCreated.Spec.Containers[0].Resources.Requests.Memory(); memory.Cmp(resource.MustParse("1Gi")) != 0 {
-		t.Errorf("limitlesspod: Memory did not match expected 1Gi: %#v", memory)
+		t.Errorf("limitlesspod: Memory req did not match expected 1Gi: %#v", memory)
 	}
 	if cpu := podCreated.Spec.Containers[0].Resources.Limits.Cpu(); cpu.Cmp(resource.MustParse("2")) != 0 {
 		t.Errorf("limitlesspod: CPU limit did not match expected 2 core: %#v", cpu)
@@ -45,14 +49,15 @@ func TestClusterResourceOverridePluginWithNoLimits(t *testing.T) {
 }
 
 func TestClusterResourceOverridePluginWithLimits(t *testing.T) {
+	defer testutil.DumpEtcdOnFailure(t)
 	config := &overrideapi.ClusterResourceOverrideConfig{
 		LimitCPUToMemoryPercent:     100,
 		CPURequestToLimitPercent:    50,
 		MemoryRequestToLimitPercent: 50,
 	}
-	kubeClient := setupClusterResourceOverrideTest(t, config)
-	podHandler := kubeClient.Pods(testutil.Namespace())
-	limitHandler := kubeClient.LimitRanges(testutil.Namespace())
+	kubeClientset := setupClusterResourceOverrideTest(t, config)
+	podHandler := kubeClientset.Core().Pods(testutil.Namespace())
+	limitHandler := kubeClientset.Core().LimitRanges(testutil.Namespace())
 
 	// test with limits object with defaults;
 	// I wanted to test with a limits object without defaults to see limits forbid an empty resource spec,
@@ -67,7 +72,7 @@ func TestClusterResourceOverridePluginWithLimits(t *testing.T) {
 		MaxLimitRequestRatio: kapi.ResourceList{},
 	}
 	limit := &kapi.LimitRange{
-		ObjectMeta: kapi.ObjectMeta{Name: "limit"},
+		ObjectMeta: metav1.ObjectMeta{Name: "limit"},
 		Spec:       kapi.LimitRangeSpec{Limits: []kapi.LimitRangeItem{limitItem}},
 	}
 	_, err := limitHandler.Create(limit)
@@ -100,7 +105,8 @@ func TestClusterResourceOverridePluginWithLimits(t *testing.T) {
 	}
 }
 
-func setupClusterResourceOverrideTest(t *testing.T, pluginConfig *overrideapi.ClusterResourceOverrideConfig) kclient.Interface {
+func setupClusterResourceOverrideTest(t *testing.T, pluginConfig *overrideapi.ClusterResourceOverrideConfig) kclientset.Interface {
+	testutil.RequireEtcd(t)
 	masterConfig, err := testserver.DefaultMasterOptions()
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +128,7 @@ func setupClusterResourceOverrideTest(t *testing.T, pluginConfig *overrideapi.Cl
 	if err != nil {
 		t.Fatal(err)
 	}
-	clusterAdminKubeClient, err := testutil.GetClusterAdminKubeClient(clusterAdminKubeConfig)
+	clusterAdminKubeClientset, err := testutil.GetClusterAdminKubeClient(clusterAdminKubeConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,8 +145,10 @@ func setupClusterResourceOverrideTest(t *testing.T, pluginConfig *overrideapi.Cl
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkErr(t, testserver.WaitForServiceAccounts(clusterAdminKubeClient, testutil.Namespace(), []string{bootstrappolicy.DefaultServiceAccountName}))
-	return clusterAdminKubeClient
+	if err := testserver.WaitForServiceAccounts(clusterAdminKubeClientset, testutil.Namespace(), []string{bootstrappolicy.DefaultServiceAccountName}); err != nil {
+		t.Fatal(err)
+	}
+	return clusterAdminKubeClientset
 }
 
 func testClusterResourceOverridePod(name string, memory string, cpu string) *kapi.Pod {
@@ -150,7 +158,7 @@ func testClusterResourceOverridePod(name string, memory string, cpu string) *kap
 	}
 	container := kapi.Container{Name: name, Image: "scratch", Resources: resources}
 	pod := &kapi.Pod{
-		ObjectMeta: kapi.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec:       kapi.PodSpec{Containers: []kapi.Container{container}},
 	}
 	return pod

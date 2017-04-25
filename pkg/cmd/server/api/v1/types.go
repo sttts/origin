@@ -1,16 +1,16 @@
 package v1
 
 import (
-	"k8s.io/kubernetes/pkg/api/resource"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 type ExtendedArguments map[string][]string
 
 // NodeConfig is the fully specified config starting an OpenShift node
 type NodeConfig struct {
-	unversioned.TypeMeta `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
 
 	// NodeName is the value used to identify this particular node in the cluster.  If possible, this should be your fully qualified hostname.
 	// If you're describing a set of static nodes to the master, this value must match one of the values in the list
@@ -26,11 +26,32 @@ type NodeConfig struct {
 	// MasterKubeConfig is a filename for the .kubeconfig file that describes how to connect this node to the master
 	MasterKubeConfig string `json:"masterKubeConfig"`
 
-	// DNSDomain holds the domain suffix
+	// MasterClientConnectionOverrides provides overrides to the client connection used to connect to the master.
+	MasterClientConnectionOverrides *ClientConnectionOverrides `json:"masterClientConnectionOverrides"`
+
+	// DNSDomain holds the domain suffix that will be used for the DNS search path inside each container. Defaults to
+	// 'cluster.local'.
 	DNSDomain string `json:"dnsDomain"`
 
-	// DNSIP holds the IP
+	// DNSIP is the IP address that pods will use to access cluster DNS. Defaults to the service IP of the Kubernetes
+	// master. This IP must be listening on port 53 for compatibility with libc resolvers (which cannot be configured
+	// to resolve names from any other port). When running more complex local DNS configurations, this is often set
+	// to the local address of a DNS proxy like dnsmasq, which then will consult either the local DNS (see
+	// dnsBindAddress) or the master DNS.
 	DNSIP string `json:"dnsIP"`
+
+	// DNSBindAddress is the ip:port to serve DNS on. If this is not set, the DNS server will not be started.
+	// Because most DNS resolvers will only listen on port 53, if you select an alternative port you will need
+	// a DNS proxy like dnsmasq to answer queries for containers. A common configuration is dnsmasq configured
+	// on a node IP listening on 53 and delegating queries for dnsDomain to this process, while sending other
+	// queries to the host environments nameservers.
+	DNSBindAddress string `json:"dnsBindAddress"`
+
+	// DNSNameservers is a list of ip:port values of recursive nameservers to forward queries to when running
+	// a local DNS server if dnsBindAddress is set. If this value is empty, the DNS server will default to
+	// the nameservers listed in /etc/resolv.conf. If you have configured dnsmasq or another DNS proxy on the
+	// system, this value should be set to the upstream nameservers dnsmasq resolves with.
+	DNSNameservers []string `json:"dnsNameservers"`
 
 	// Deprecated and maintained for backward compatibility, use NetworkConfig.NetworkPluginName instead
 	DeprecatedNetworkPluginName string `json:"networkPluginName,omitempty"`
@@ -69,6 +90,9 @@ type NodeConfig struct {
 
 	// IPTablesSyncPeriod is how often iptable rules are refreshed
 	IPTablesSyncPeriod string `json:"iptablesSyncPeriod"`
+
+	// EnableUnidling controls whether or not the hybrid unidling proxy will be set up
+	EnableUnidling *bool `json:"enableUnidling"`
 
 	// VolumeConfig contains options for configuring volumes on the node.
 	VolumeConfig NodeVolumeConfig `json:"volumeConfig"`
@@ -114,8 +138,7 @@ type NodeAuthConfig struct {
 // NodeNetworkConfig provides network options for the node
 type NodeNetworkConfig struct {
 	// NetworkPluginName is a string specifying the networking plugin
-	// Optional for OpenShift network plugin, node will auto detect network plugin configured by OpenShift master.
-	NetworkPluginName string `json:"networkPluginName,omitempty"`
+	NetworkPluginName string `json:"networkPluginName"`
 	// Maximum transmission unit for the network packets
 	MTU uint32 `json:"mtu"`
 }
@@ -125,6 +148,10 @@ type DockerConfig struct {
 	// ExecHandlerName is the name of the handler to use for executing
 	// commands in Docker containers.
 	ExecHandlerName DockerExecHandlerType `json:"execHandlerName"`
+	// DockerShimSocket is the location of the dockershim socket the kubelet uses.
+	DockerShimSocket string `json:"dockerShimSocket"`
+	// DockershimRootDirectory is the dockershim root directory.
+	DockershimRootDirectory string `json:"dockerShimRootDirectory"`
 }
 
 type DockerExecHandlerType string
@@ -146,10 +173,14 @@ type FeatureList []string
 
 // MasterConfig holds the necessary configuration options for the OpenShift master
 type MasterConfig struct {
-	unversioned.TypeMeta `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
 
 	// ServingInfo describes how to start serving
 	ServingInfo HTTPServingInfo `json:"servingInfo"`
+
+	// AuthConfig configures authentication options in addition to the standard
+	// oauth token and client certificate authenticators
+	AuthConfig MasterAuthConfig `json:"authConfig"`
 
 	// CORSAllowedOrigins
 	CORSAllowedOrigins []string `json:"corsAllowedOrigins"`
@@ -239,21 +270,55 @@ type MasterConfig struct {
 
 	// AuditConfig holds information related to auditing capabilities.
 	AuditConfig AuditConfig `json:"auditConfig"`
+
+	// EnableTemplateServiceBroker is a temporary switch which enables TemplateServiceBroker.
+	EnableTemplateServiceBroker bool `json:"enableTemplateServiceBroker"`
+}
+
+// MasterAuthConfig configures authentication options in addition to the standard
+// oauth token and client certificate authenticators
+type MasterAuthConfig struct {
+	// RequestHeader holds options for setting up a front proxy against the the API.  It is optional.
+	RequestHeader *RequestHeaderAuthenticationOptions `json:"requestHeader"`
+}
+
+// RequestHeaderAuthenticationOptions provides options for setting up a front proxy against the entire
+// API instead of against the /oauth endpoint.
+type RequestHeaderAuthenticationOptions struct {
+	// ClientCA is a file with the trusted signer certs.  It is required.
+	ClientCA string `json:"clientCA"`
+	// ClientCommonNames is a required list of common names to require a match from.
+	ClientCommonNames []string `json:"clientCommonNames"`
+
+	// UsernameHeaders is the list of headers to check for user information.  First hit wins.
+	UsernameHeaders []string `json:"usernameHeaders"`
+	// GroupNameHeader is the set of headers to check for group information.  All are unioned.
+	GroupHeaders []string `json:"groupHeaders"`
+	// ExtraHeaderPrefixes is the set of request header prefixes to inspect for user extra. X-Remote-Extra- is suggested.
+	ExtraHeaderPrefixes []string `json:"extraHeaderPrefixes"`
 }
 
 // AuditConfig holds configuration for the audit capabilities
 type AuditConfig struct {
-	// If this flag is set, basic audit log will be printed in the logs.
+	// If this flag is set, audit log will be printed in the logs.
 	// The logs contains, method, user and a requested URL.
 	Enabled bool `json:"enabled"`
+	// All requests coming to the apiserver will be logged to this file.
+	AuditFilePath string `json:"auditFilePath"`
+	// Maximum number of days to retain old log files based on the timestamp encoded in their filename.
+	MaximumFileRetentionDays int `json:"maximumFileRetentionDays"`
+	// Maximum number of old log files to retain.
+	MaximumRetainedFiles int `json:"maximumRetainedFiles"`
+	// Maximum size in megabytes of the log file before it gets rotated. Defaults to 100MB.
+	MaximumFileSizeMegabytes int `json:"maximumFileSizeMegabytes"`
 }
 
 // JenkinsPipelineConfig holds configuration for the Jenkins pipeline strategy
 type JenkinsPipelineConfig struct {
-	// If the enabled flag is set, a Jenkins server will be spawned from the provided
+	// AutoProvisionEnabled determines whether a Jenkins server will be spawned from the provided
 	// template when the first build config in the project with type JenkinsPipeline
 	// is created. When not specified this option defaults to true.
-	Enabled *bool `json:"enabled"`
+	AutoProvisionEnabled *bool `json:"autoProvisionEnabled"`
 	// TemplateNamespace contains the namespace name where the Jenkins template is stored
 	TemplateNamespace string `json:"templateNamespace"`
 	// TemplateName is the name of the default Jenkins template
@@ -280,6 +345,28 @@ type ImagePolicyConfig struct {
 	// MaxScheduledImageImportsPerMinute is the maximum number of scheduled image streams that will be imported in the
 	// background per minute. The default value is 60. Set to -1 for unlimited.
 	MaxScheduledImageImportsPerMinute int `json:"maxScheduledImageImportsPerMinute"`
+	// AllowedRegistriesForImport limits the docker registries that normal users may import
+	// images from. Set this list to the registries that you trust to contain valid Docker
+	// images and that you want applications to be able to import from. Users with
+	// permission to create Images or ImageStreamMappings via the API are not affected by
+	// this policy - typically only administrators or system integrations will have those
+	// permissions.
+	AllowedRegistriesForImport *AllowedRegistries `json:"allowedRegistriesForImport,omitempty"`
+}
+
+// AllowedRegistries represents a list of registries allowed for the image import.
+type AllowedRegistries []RegistryLocation
+
+// RegistryLocation contains a location of the registry specified by the registry domain
+// name. The domain name might include wildcards, like '*' or '??'.
+type RegistryLocation struct {
+	// DomainName specifies a domain name for the registry
+	// In case the registry use non-standard (80 or 443) port, the port should be included
+	// in the domain name as well.
+	DomainName string `json:"domainName"`
+	// Insecure indicates whether the registry is secure (https) or insecure (http)
+	// By default (if not specified) the registry is assumed as secure.
+	Insecure bool `json:"insecure,omitempty"`
 }
 
 //  holds the necessary configuration options for
@@ -356,7 +443,7 @@ type UserAgentMatchRule struct {
 	// 1. oc accessing kube resources: oc/v1.2.0 (linux/amd64) kubernetes/bc4550d
 	// 2. oc accessing openshift resources: oc/v1.1.3 (linux/amd64) openshift/b348c2f
 	// 3. openshift kubectl accessing kube resources:  openshift/v1.2.0 (linux/amd64) kubernetes/bc4550d
-	// 4. openshit kubectl accessing openshift resources: openshift/v1.1.3 (linux/amd64) openshift/b348c2f
+	// 4. openshift kubectl accessing openshift resources: openshift/v1.1.3 (linux/amd64) openshift/b348c2f
 	// 5. oadm accessing kube resources: oadm/v1.2.0 (linux/amd64) kubernetes/bc4550d
 	// 6. oadm accessing openshift resources: oadm/v1.1.3 (linux/amd64) openshift/b348c2f
 	// 7. openshift cli accessing kube resources: openshift/v1.2.0 (linux/amd64) kubernetes/bc4550d
@@ -398,6 +485,11 @@ type MasterNetworkConfig struct {
 	// CIDR will be rejected. Rejections will be applied first, then the IP checked against one of the allowed CIDRs. You
 	// should ensure this range does not overlap with your nodes, pods, or service CIDRs for security reasons.
 	ExternalIPNetworkCIDRs []string `json:"externalIPNetworkCIDRs"`
+	// IngressIPNetworkCIDR controls the range to assign ingress ips from for services of type LoadBalancer on bare
+	// metal. If empty, ingress ips will not be assigned. It may contain a single CIDR that will be allocated from.
+	// For security reasons, you should ensure that this range does not overlap with the CIDRs reserved for external ips,
+	// nodes, pods, or services.
+	IngressIPNetworkCIDR string `json:"ingressIPNetworkCIDR"`
 }
 
 // ImageConfig holds the necessary configuration options for building image names for system components
@@ -475,6 +567,12 @@ type ServingInfo struct {
 	ClientCA string `json:"clientCA"`
 	// NamedCertificates is a list of certificates to use to secure requests to specific hostnames
 	NamedCertificates []NamedCertificate `json:"namedCertificates"`
+	// MinTLSVersion is the minimum TLS version supported.
+	// Values must match version names from https://golang.org/pkg/crypto/tls/#pkg-constants
+	MinTLSVersion string `json:"minTLSVersion,omitempty"`
+	// CipherSuites contains an overridden list of ciphers for the server to support.
+	// Values must match cipher suite IDs from https://golang.org/pkg/crypto/tls/#pkg-constants
+	CipherSuites []string `json:"cipherSuites,omitempty"`
 }
 
 // NamedCertificate specifies a certificate/key, and the names it should be served for
@@ -501,8 +599,28 @@ type HTTPServingInfo struct {
 type MasterClients struct {
 	// OpenShiftLoopbackKubeConfig is a .kubeconfig filename for system components to loopback to this master
 	OpenShiftLoopbackKubeConfig string `json:"openshiftLoopbackKubeConfig"`
-	// ExternalKubernetesKubeConfig is a .kubeconfig filename for proxying to kubernetes
+	// ExternalKubernetesKubeConfig is a .kubeconfig filename for proxying to Kubernetes
 	ExternalKubernetesKubeConfig string `json:"externalKubernetesKubeConfig"`
+
+	// OpenShiftLoopbackClientConnectionOverrides specifies client overrides for system components to loop back to this master.
+	OpenShiftLoopbackClientConnectionOverrides *ClientConnectionOverrides `json:"openshiftLoopbackClientConnectionOverrides"`
+	// ExternalKubernetesClientConnectionOverrides specifies client overrides for proxying to Kubernetes.
+	ExternalKubernetesClientConnectionOverrides *ClientConnectionOverrides `json:"externalKubernetesClientConnectionOverrides"`
+}
+
+// ClientConnectionOverrides are a set of overrides to the default client connection settings.
+type ClientConnectionOverrides struct {
+	// AcceptContentTypes defines the Accept header sent by clients when connecting to a server, overriding the
+	// default value of 'application/json'. This field will control all connections to the server used by a particular
+	// client.
+	AcceptContentTypes string `json:"acceptContentTypes"`
+	// ContentType is the content type used when sending data to the server from this client.
+	ContentType string `json:"contentType"`
+
+	// QPS controls the number of queries per second allowed for this connection.
+	QPS float32 `json:"qps"`
+	// Burst allows extra queries to accumulate when a client is exceeding its rate.
+	Burst int32 `json:"burst"`
 }
 
 // DNSConfig holds the necessary configuration options for DNS
@@ -655,7 +773,7 @@ type SessionConfig struct {
 
 // SessionSecrets list the secrets to use to sign/encrypt and authenticate/decrypt created sessions.
 type SessionSecrets struct {
-	unversioned.TypeMeta `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
 
 	// Secrets is a list of secrets
 	// New sessions are signed and encrypted using the first secret.
@@ -687,7 +805,7 @@ type IdentityProvider struct {
 
 // BasicAuthPasswordIdentityProvider provides identities for users authenticating using HTTP basic auth credentials
 type BasicAuthPasswordIdentityProvider struct {
-	unversioned.TypeMeta `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
 
 	// RemoteConnectionInfo contains information about how to connect to the external basic auth server
 	RemoteConnectionInfo `json:",inline"`
@@ -695,17 +813,17 @@ type BasicAuthPasswordIdentityProvider struct {
 
 // AllowAllPasswordIdentityProvider provides identities for users authenticating using non-empty passwords
 type AllowAllPasswordIdentityProvider struct {
-	unversioned.TypeMeta `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
 }
 
 // DenyAllPasswordIdentityProvider provides no identities for users
 type DenyAllPasswordIdentityProvider struct {
-	unversioned.TypeMeta `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
 }
 
 // HTPasswdPasswordIdentityProvider provides identities for users authenticating using htpasswd credentials
 type HTPasswdPasswordIdentityProvider struct {
-	unversioned.TypeMeta `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
 
 	// File is a reference to your htpasswd file
 	File string `json:"file"`
@@ -713,7 +831,7 @@ type HTPasswdPasswordIdentityProvider struct {
 
 // LDAPPasswordIdentityProvider provides identities for users authenticating using LDAP credentials
 type LDAPPasswordIdentityProvider struct {
-	unversioned.TypeMeta `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
 	// URL is an RFC 2255 URL which specifies the LDAP search parameters to use. The syntax of the URL is
 	//    ldap://host:port/basedn?attribute?scope?filter
 	URL string `json:"url"`
@@ -752,7 +870,7 @@ type LDAPAttributeMapping struct {
 
 // KeystonePasswordIdentityProvider provides identities for users authenticating using keystone password credentials
 type KeystonePasswordIdentityProvider struct {
-	unversioned.TypeMeta `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
 	// RemoteConnectionInfo contains information about how to connect to the keystone server
 	RemoteConnectionInfo `json:",inline"`
 	// Domain Name is required for keystone v3
@@ -761,7 +879,7 @@ type KeystonePasswordIdentityProvider struct {
 
 // RequestHeaderIdentityProvider provides identities for users authenticating using request header credentials
 type RequestHeaderIdentityProvider struct {
-	unversioned.TypeMeta `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
 
 	// LoginURL is a URL to redirect unauthenticated /authorize requests to
 	// Unauthenticated requests from OAuth clients which expect interactive logins will be redirected here
@@ -796,7 +914,7 @@ type RequestHeaderIdentityProvider struct {
 
 // GitHubIdentityProvider provides identities for users authenticating using GitHub credentials
 type GitHubIdentityProvider struct {
-	unversioned.TypeMeta `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
 
 	// ClientID is the oauth client ID
 	ClientID string `json:"clientID"`
@@ -804,11 +922,13 @@ type GitHubIdentityProvider struct {
 	ClientSecret StringSource `json:"clientSecret"`
 	// Organizations optionally restricts which organizations are allowed to log in
 	Organizations []string `json:"organizations"`
+	// Teams optionally restricts which teams are allowed to log in. Format is <org>/<team>.
+	Teams []string `json:"teams"`
 }
 
 // GitLabIdentityProvider provides identities for users authenticating using GitLab credentials
 type GitLabIdentityProvider struct {
-	unversioned.TypeMeta `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
 
 	// CA is the optional trusted certificate authority bundle to use when making requests to the server
 	// If empty, the default system roots are used
@@ -823,7 +943,7 @@ type GitLabIdentityProvider struct {
 
 // GoogleIdentityProvider provides identities for users authenticating using Google credentials
 type GoogleIdentityProvider struct {
-	unversioned.TypeMeta `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
 
 	// ClientID is the oauth client ID
 	ClientID string `json:"clientID"`
@@ -836,7 +956,7 @@ type GoogleIdentityProvider struct {
 
 // OpenIDIdentityProvider provides identities for users authenticating using OpenID credentials
 type OpenIDIdentityProvider struct {
-	unversioned.TypeMeta `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
 
 	// CA is the optional trusted certificate authority bundle to use when making requests to the server
 	// If empty, the default system roots are used
@@ -947,8 +1067,10 @@ type KubernetesMasterConfig struct {
 	ServicesNodePortRange string `json:"servicesNodePortRange"`
 	// StaticNodeNames is the list of nodes that are statically known
 	StaticNodeNames []string `json:"staticNodeNames"`
+
 	// SchedulerConfigFile points to a file that describes how to set up the scheduler. If empty, you get the default scheduling rules.
 	SchedulerConfigFile string `json:"schedulerConfigFile"`
+
 	// PodEvictionTimeout controls grace period for deleting pods on failed nodes.
 	// It takes valid time duration string. If empty, you get the default pod eviction timeout.
 	PodEvictionTimeout string `json:"podEvictionTimeout"`
@@ -967,6 +1089,10 @@ type KubernetesMasterConfig struct {
 	// the server will not start. These values may override other settings in KubernetesMasterConfig which may cause invalid
 	// configurations.
 	ControllerArguments ExtendedArguments `json:"controllerArguments"`
+	// SchedulerArguments are key value pairs that will be passed directly to the Kube scheduler that match the scheduler's
+	// command line arguments.  These are not migrated, but if you reference a value that does not exist the server will not
+	// start. These values may override other settings in KubernetesMasterConfig which may cause invalid configurations.
+	SchedulerArguments ExtendedArguments `json:"schedulerArguments"`
 }
 
 // CertInfo relates a certificate with a private key
@@ -1026,7 +1152,7 @@ type StringSourceSpec struct {
 
 // LDAPSyncConfig holds the necessary configuration options to define an LDAP group sync
 type LDAPSyncConfig struct {
-	unversioned.TypeMeta `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
 	// Host is the scheme, host and port of the LDAP server to connect to:
 	// scheme://host:port
 	URL string `json:"url"`
@@ -1218,8 +1344,8 @@ type ServiceServingCert struct {
 // When this type is present as the `configuration` object under `pluginConfig` and *if* the admission plugin supports it,
 // this will cause an "off by default" admission plugin to be enabled
 type DefaultAdmissionConfig struct {
-	unversioned.TypeMeta `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
 
 	// Disable turns off an admission plugin that is enabled by default.
-	Disable bool
+	Disable bool `json:"disable"`
 }

@@ -7,10 +7,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/openshift/origin/pkg/cmd/server/cm"
+	kflag "k8s.io/apiserver/pkg/util/flag"
 	controllerapp "k8s.io/kubernetes/cmd/kube-controller-manager/app"
 	controlleroptions "k8s.io/kubernetes/cmd/kube-controller-manager/app/options"
-	"k8s.io/kubernetes/pkg/util"
-	kflag "k8s.io/kubernetes/pkg/util/flag"
+	"k8s.io/kubernetes/pkg/util/logs"
 )
 
 const controllersLong = `
@@ -29,8 +30,8 @@ func NewControllersCommand(name, fullName string, out io.Writer) *cobra.Command 
 		Run: func(c *cobra.Command, args []string) {
 			startProfiler()
 
-			util.InitLogs()
-			defer util.FlushLogs()
+			logs.InitLogs()
+			defer logs.FlushLogs()
 
 			if err := controllerapp.Run(controllerOptions); err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -42,7 +43,7 @@ func NewControllersCommand(name, fullName string, out io.Writer) *cobra.Command 
 
 	flags := cmd.Flags()
 	flags.SetNormalizeFunc(kflag.WordSepNormalizeFunc)
-	controllerOptions.AddFlags(flags)
+	cm.OriginControllerManagerAddFlags(controllerOptions)(flags)
 
 	return cmd
 }

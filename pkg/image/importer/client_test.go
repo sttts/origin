@@ -37,11 +37,11 @@ func (r *mockRetriever) Repository(ctx gocontext.Context, registry *url.URL, rep
 }
 
 type mockRepository struct {
-	repoErr, getErr, getTagErr, tagErr, untagErr, allTagErr, err error
+	repoErr, getErr, getByTagErr, getTagErr, tagErr, untagErr, allTagErr, err error
 
 	blobs *mockBlobStore
 
-	manifest *schema1.SignedManifest
+	manifest distribution.Manifest
 	tags     map[string]string
 }
 
@@ -59,6 +59,11 @@ func (r *mockRepository) Exists(ctx context.Context, dgst digest.Digest) (bool, 
 	return false, r.getErr
 }
 func (r *mockRepository) Get(ctx context.Context, dgst digest.Digest, options ...distribution.ManifestServiceOption) (distribution.Manifest, error) {
+	for _, option := range options {
+		if _, ok := option.(distribution.WithTagOption); ok {
+			return r.manifest, r.getByTagErr
+		}
+	}
 	return r.manifest, r.getErr
 }
 func (r *mockRepository) Delete(ctx context.Context, dgst digest.Digest) error {
@@ -74,6 +79,8 @@ func (r *mockRepository) Tags(ctx context.Context) distribution.TagService {
 type mockBlobStore struct {
 	distribution.BlobStore
 
+	blobs map[digest.Digest][]byte
+
 	statErr, serveErr, openErr error
 }
 
@@ -87,6 +94,14 @@ func (r *mockBlobStore) ServeBlob(ctx context.Context, w http.ResponseWriter, re
 
 func (r *mockBlobStore) Open(ctx context.Context, dgst digest.Digest) (distribution.ReadSeekCloser, error) {
 	return nil, r.openErr
+}
+
+func (r *mockBlobStore) Get(ctx context.Context, dgst digest.Digest) ([]byte, error) {
+	b, exists := r.blobs[dgst]
+	if !exists {
+		return nil, distribution.ErrBlobUnknown
+	}
+	return b, nil
 }
 
 type mockTagService struct {
@@ -184,7 +199,7 @@ func TestDockerV1Fallback(t *testing.T) {
 	}
 
 	retriever := &mockRetriever{err: fmt.Errorf("does not support v2 API")}
-	im := NewImageStreamImporter(retriever, 5, nil)
+	im := NewImageStreamImporter(retriever, 5, nil, nil)
 	if err := im.Import(ctx, isi); err != nil {
 		t.Fatal(err)
 	}

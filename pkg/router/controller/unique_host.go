@@ -2,13 +2,15 @@ package controller
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/golang/glog"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/watch"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/util/sets"
-	"k8s.io/kubernetes/pkg/watch"
 
 	routeapi "github.com/openshift/origin/pkg/route/api"
+	"github.com/openshift/origin/pkg/route/api/validation"
 	"github.com/openshift/origin/pkg/router"
 )
 
@@ -23,16 +25,11 @@ func HostForRoute(route *routeapi.Route) string {
 type HostToRouteMap map[string][]*routeapi.Route
 type RouteToHostMap map[string]string
 
-// RejectionRecorder is an object capable of recording why a route was rejected
-type RejectionRecorder interface {
-	RecordRouteRejection(route *routeapi.Route, reason, message string)
-}
-
 var LogRejections = logRecorder{}
 
 type logRecorder struct{}
 
-func (_ logRecorder) RecordRouteRejection(route *routeapi.Route, reason, message string) {
+func (logRecorder) RecordRouteRejection(route *routeapi.Route, reason, message string) {
 	glog.V(4).Infof("Rejected route %s: %s: %s", route.Name, reason, message)
 }
 
@@ -48,15 +45,19 @@ type UniqueHost struct {
 	routeToHost RouteToHostMap
 	// nil means different than empty
 	allowedNamespaces sets.String
+
+	disableOwnershipCheck bool
 }
 
 // NewUniqueHost creates a plugin wrapper that ensures only unique routes are passed into
 // the underlying plugin. Recorder is an interface for indicating why a route was
 // rejected.
-func NewUniqueHost(plugin router.Plugin, fn RouteHostFunc, recorder RejectionRecorder) *UniqueHost {
+func NewUniqueHost(plugin router.Plugin, fn RouteHostFunc, disableOwnershipCheck bool, recorder RejectionRecorder) *UniqueHost {
 	return &UniqueHost{
 		plugin:       plugin,
 		hostForRoute: fn,
+
+		disableOwnershipCheck: disableOwnershipCheck,
 
 		recorder: recorder,
 
@@ -84,6 +85,11 @@ func (p *UniqueHost) HandleEndpoints(eventType watch.EventType, endpoints *kapi.
 	return p.plugin.HandleEndpoints(eventType, endpoints)
 }
 
+// HandleNode processes watch events on the Node resource and calls the router
+func (p *UniqueHost) HandleNode(eventType watch.EventType, node *kapi.Node) error {
+	return p.plugin.HandleNode(eventType, node)
+}
+
 // HandleRoute processes watch events on the Route resource.
 // TODO: this function can probably be collapsed with the router itself, as a function that
 //   determines which component needs to be recalculated (which template) and then does so
@@ -103,13 +109,28 @@ func (p *UniqueHost) HandleRoute(eventType watch.EventType, route *routeapi.Rout
 	}
 	route.Spec.Host = host
 
+	// Run time check to defend against older routes. Validate that the
+	// route host name conforms to DNS requirements.
+	if errs := validation.ValidateHostName(route); len(errs) > 0 {
+		glog.V(4).Infof("Route %s - invalid host name %s", routeName, host)
+		errMessages := make([]string, len(errs))
+		for i := 0; i < len(errs); i++ {
+			errMessages[i] = errs[i].Error()
+		}
+
+		err := fmt.Errorf("host name validation errors: %s", strings.Join(errMessages, ", "))
+		p.recorder.RecordRouteRejection(route, "InvalidHost", err.Error())
+		return err
+	}
+
 	// ensure hosts can only be claimed by one namespace at a time
 	// TODO: this could be abstracted above this layer?
 	if old, ok := p.hostToRoute[host]; ok {
 		oldest := old[0]
 
 		// multiple paths can be added from the namespace of the oldest route
-		if oldest.Namespace == route.Namespace {
+		// unless the ownership checks are disabled.
+		if p.disableOwnershipCheck || oldest.Namespace == route.Namespace {
 			added := false
 			for i := range old {
 				if old[i].Spec.Path == route.Spec.Path {
@@ -131,6 +152,24 @@ func (p *UniqueHost) HandleRoute(eventType watch.EventType, route *routeapi.Rout
 				}
 			}
 			if !added {
+				// Clean out any old form of this route
+				next := []*routeapi.Route{}
+				for i := range old {
+					if routeNameKey(old[i]) != routeNameKey(route) {
+						next = append(next, old[i])
+					}
+				}
+				old = next
+
+				// We need to reset the oldest in case we removed it, but if it was the only
+				// item, we'll just use ourselves since we'll become the oldest, and for
+				// the append below, it doesn't matter
+				if len(next) > 0 {
+					oldest = old[0]
+				} else {
+					oldest = route
+				}
+
 				if routeapi.RouteLessThan(route, oldest) {
 					p.hostToRoute[host] = append([]*routeapi.Route{route}, old...)
 				} else {
@@ -181,7 +220,12 @@ func (p *UniqueHost) HandleRoute(eventType watch.EventType, route *routeapi.Rout
 						next = append(next, old[i])
 					}
 				}
-				p.hostToRoute[host] = next
+
+				if len(next) > 0 {
+					p.hostToRoute[host] = next
+				} else {
+					delete(p.hostToRoute, host)
+				}
 			}
 		}
 		delete(p.routeToHost, routeName)
@@ -190,7 +234,7 @@ func (p *UniqueHost) HandleRoute(eventType watch.EventType, route *routeapi.Rout
 	return nil
 }
 
-// HandleAllowedNamespaces limits the scope of valid routes to only those that match
+// HandleNamespaces limits the scope of valid routes to only those that match
 // the provided namespace list.
 func (p *UniqueHost) HandleNamespaces(namespaces sets.String) error {
 	p.allowedNamespaces = namespaces
@@ -211,8 +255,8 @@ func (p *UniqueHost) HandleNamespaces(namespaces sets.String) error {
 	return p.plugin.HandleNamespaces(namespaces)
 }
 
-func (p *UniqueHost) SetLastSyncProcessed(processed bool) error {
-	return p.plugin.SetLastSyncProcessed(processed)
+func (p *UniqueHost) Commit() error {
+	return p.plugin.Commit()
 }
 
 // routeKeys returns the internal router key to use for the given Route.

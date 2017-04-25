@@ -1,6 +1,7 @@
 package auth
 
 import (
+	kauthorizer "k8s.io/apiserver/pkg/authorization/authorizer"
 	kapi "k8s.io/kubernetes/pkg/api"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
@@ -12,11 +13,13 @@ import (
 type Review interface {
 	Users() []string
 	Groups() []string
+	EvaluationError() string
 }
 
 type defaultReview struct {
-	users  []string
-	groups []string
+	users           []string
+	groups          []string
+	evaluationError string
 }
 
 func (r *defaultReview) Users() []string {
@@ -26,6 +29,10 @@ func (r *defaultReview) Users() []string {
 // Groups returns the groups that can access a resource
 func (r *defaultReview) Groups() []string {
 	return r.groups
+}
+
+func (r *defaultReview) EvaluationError() string {
+	return r.evaluationError
 }
 
 type review struct {
@@ -40,6 +47,10 @@ func (r *review) Users() []string {
 // Groups returns the groups that can access a resource
 func (r *review) Groups() []string {
 	return r.response.Groups.List()
+}
+
+func (r *review) EvaluationError() string {
+	return r.response.EvaluationError
 }
 
 // Reviewer performs access reviews for a project by name
@@ -62,7 +73,7 @@ func NewReviewer(resourceAccessReviewsNamespacer client.LocalResourceAccessRevie
 // Review performs a resource access review for the given resource by name
 func (r *reviewer) Review(name string) (Review, error) {
 	resourceAccessReview := &authorizationapi.LocalResourceAccessReview{
-		Action: authorizationapi.AuthorizationAttributes{
+		Action: authorizationapi.Action{
 			Verb:         "get",
 			Group:        kapi.GroupName,
 			Resource:     "namespaces",
@@ -82,29 +93,29 @@ func (r *reviewer) Review(name string) (Review, error) {
 }
 
 type authorizerReviewer struct {
-	policyChecker authorizer.Authorizer
+	policyChecker authorizer.SubjectLocator
 }
 
-func NewAuthorizerReviewer(policyChecker authorizer.Authorizer) Reviewer {
+func NewAuthorizerReviewer(policyChecker authorizer.SubjectLocator) Reviewer {
 	return &authorizerReviewer{policyChecker: policyChecker}
 }
 
 func (r *authorizerReviewer) Review(namespaceName string) (Review, error) {
-	attributes := authorizer.DefaultAuthorizationAttributes{
-		Verb:         "get",
-		Resource:     "namespaces",
-		ResourceName: namespaceName,
+	attributes := kauthorizer.AttributesRecord{
+		Verb:            "get",
+		Namespace:       namespaceName,
+		Resource:        "namespaces",
+		Name:            namespaceName,
+		ResourceRequest: true,
 	}
 
-	ctx := kapi.WithNamespace(kapi.NewContext(), namespaceName)
-	users, groups, err := r.policyChecker.GetAllowedSubjects(ctx, attributes)
-	if err != nil {
-		return nil, err
-	}
-
+	users, groups, err := r.policyChecker.GetAllowedSubjects(attributes)
 	review := &defaultReview{
 		users:  users.List(),
 		groups: groups.List(),
+	}
+	if err != nil {
+		review.evaluationError = err.Error()
 	}
 	return review, nil
 }

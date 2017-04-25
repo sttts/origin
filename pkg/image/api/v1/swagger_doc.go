@@ -41,6 +41,7 @@ var map_ImageImportSpec = map[string]string{
 	"from":            "From is the source of an image to import; only kind DockerImage is allowed",
 	"to":              "To is a tag in the current image stream to assign the imported image to, if name is not specified the default tag from from.name will be used",
 	"importPolicy":    "ImportPolicy is the policy controlling how the image is imported",
+	"referencePolicy": "ReferencePolicy defines how other components should consume the image",
 	"includeManifest": "IncludeManifest determines if the manifest for each image is returned in the response",
 }
 
@@ -81,7 +82,8 @@ func (ImageList) SwaggerDoc() map[string]string {
 }
 
 var map_ImageSignature = map[string]string{
-	"":              "ImageSignature holds a signature of an image. It allows to verify image identity and possibly other claims as long as the signature is trusted. Based on this information it is possible to restrict runnable images to those matching cluster-wide policy. There are two mandatory fields provided by client: Type and Content. They should be parsed by clients doing image verification. The others are parsed from signature's content by the server. They serve just an informative purpose.",
+	"":              "ImageSignature holds a signature of an image. It allows to verify image identity and possibly other claims as long as the signature is trusted. Based on this information it is possible to restrict runnable images to those matching cluster-wide policy. Mandatory fields should be parsed by clients doing image verification. The others are parsed from signature's content by the server. They serve just an informative purpose.",
+	"metadata":      "Standard object's metadata.",
 	"type":          "Required: Describes a type of stored blob.",
 	"content":       "Required: An opaque binary string which is an image's signature.",
 	"conditions":    "Conditions represent the latest available observations of a signature's current state.",
@@ -118,7 +120,7 @@ func (ImageStreamImage) SwaggerDoc() map[string]string {
 }
 
 var map_ImageStreamImport = map[string]string{
-	"":         "ImageStreamImport imports an image from remote repositories into OpenShift.",
+	"":         "The image stream import resource provides an easy way for a user to find and import Docker images from other Docker registries into the server. Individual images or an entire image repository may be imported, and users may choose to see the results of the import prior to tagging the resulting images into the specified image stream.\n\nThis API is intended for end-user tools that need to see the metadata of the image prior to import (for instance, to generate an application from it). Clients that know the desired image can continue to create spec.tags directly into their image streams.",
 	"metadata": "Standard object's metadata.",
 	"spec":     "Spec is a description of the images that the user wishes to import",
 	"status":   "Status is the the result of importing the image",
@@ -229,6 +231,7 @@ var map_RepositoryImportSpec = map[string]string{
 	"":                "RepositoryImportSpec describes a request to import images from a Docker image repository.",
 	"from":            "From is the source for the image repository to import; only kind DockerImage and a name of a Docker image repository is allowed",
 	"importPolicy":    "ImportPolicy is the policy controlling how the image is imported",
+	"referencePolicy": "ReferencePolicy defines how other components should consume the image",
 	"includeManifest": "IncludeManifest determines if the manifest for each image is returned in the response",
 }
 
@@ -249,7 +252,7 @@ func (RepositoryImportStatus) SwaggerDoc() map[string]string {
 
 var map_SignatureCondition = map[string]string{
 	"":                   "SignatureCondition describes an image signature condition of particular kind at particular probe time.",
-	"type":               "Type of job condition, Complete or Failed.",
+	"type":               "Type of signature condition, Complete or Failed.",
 	"status":             "Status of the condition, one of True, False, Unknown.",
 	"lastProbeTime":      "Last time the condition was checked.",
 	"lastTransitionTime": "Last time the condition transit from one status to another.",
@@ -315,7 +318,7 @@ func (TagEventCondition) SwaggerDoc() map[string]string {
 }
 
 var map_TagImportPolicy = map[string]string{
-	"":          "TagImportPolicy describes the tag import policy",
+	"":          "TagImportPolicy controls how images related to this tag will be imported.",
 	"insecure":  "Insecure is true if the server may bypass certificate verification or connect directly over HTTP during image import.",
 	"scheduled": "Scheduled indicates to the server that this tag should be periodically checked to ensure it is up to date, and imported",
 }
@@ -325,15 +328,25 @@ func (TagImportPolicy) SwaggerDoc() map[string]string {
 }
 
 var map_TagReference = map[string]string{
-	"":             "TagReference specifies optional annotations for images using this tag and an optional reference to an ImageStreamTag, ImageStreamImage, or DockerImage this tag should track.",
-	"name":         "Name of the tag",
-	"annotations":  "Annotations associated with images using this tag",
-	"from":         "From is a reference to an image stream tag or image stream this tag should track",
-	"reference":    "Reference states if the tag will be imported. Default value is false, which means the tag will be imported.",
-	"generation":   "Generation is the image stream generation that updated this tag - setting it to 0 is an indication that the generation must be updated. Legacy clients will send this as nil, which means the client doesn't know or care.",
-	"importPolicy": "Import is information that controls how images may be imported by the server.",
+	"":                "TagReference specifies optional annotations for images using this tag and an optional reference to an ImageStreamTag, ImageStreamImage, or DockerImage this tag should track.",
+	"name":            "Name of the tag",
+	"annotations":     "Annotations associated with images using this tag",
+	"from":            "From is a reference to an image stream tag or image stream this tag should track",
+	"reference":       "Reference states if the tag will be imported. Default value is false, which means the tag will be imported.",
+	"generation":      "Generation is the image stream generation that updated this tag - setting it to 0 is an indication that the generation must be updated. Legacy clients will send this as nil, which means the client doesn't know or care.",
+	"importPolicy":    "Import is information that controls how images may be imported by the server.",
+	"referencePolicy": "ReferencePolicy defines how other components should consume the image",
 }
 
 func (TagReference) SwaggerDoc() map[string]string {
 	return map_TagReference
+}
+
+var map_TagReferencePolicy = map[string]string{
+	"":     "TagReferencePolicy describes how pull-specs for images in this image stream tag are generated when image change triggers in deployment configs or builds are resolved. This allows the image stream author to control how images are accessed.",
+	"type": "Type determines how the image pull spec should be transformed when the image stream tag is used in deployment config triggers or new builds. The default value is `Source`, indicating the original location of the image should be used (if imported). The user may also specify `Local`, indicating that the pull spec should point to the integrated Docker registry and leverage the registry's ability to proxy the pull to an upstream registry. `Local` allows the credentials used to pull this image to be managed from the image stream's namespace, so others on the platform can access a remote image but have no access to the remote secret. It also allows the image layers to be mirrored into the local registry which the images can still be pulled even if the upstream registry is unavailable.",
+}
+
+func (TagReferencePolicy) SwaggerDoc() map[string]string {
+	return map_TagReferencePolicy
 }

@@ -3,8 +3,8 @@ package authorizer
 import (
 	"testing"
 
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/sets"
+	kauthorizer "k8s.io/apiserver/pkg/authorization/authorizer"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	testpolicyregistry "github.com/openshift/origin/pkg/authorization/registry/test"
@@ -19,8 +19,7 @@ type subjectsTest struct {
 	policyRetrievalError  error
 	bindingRetrievalError error
 
-	context    kapi.Context
-	attributes *DefaultAuthorizationAttributes
+	attributes kauthorizer.AttributesRecord
 
 	expectedUsers  sets.String
 	expectedGroups sets.String
@@ -29,10 +28,11 @@ type subjectsTest struct {
 
 func TestSubjects(t *testing.T) {
 	test := &subjectsTest{
-		context: kapi.WithNamespace(kapi.NewContext(), "adze"),
-		attributes: &DefaultAuthorizationAttributes{
-			Verb:     "get",
-			Resource: "pods",
+		attributes: kauthorizer.AttributesRecord{
+			ResourceRequest: true,
+			Namespace:       "adze",
+			Verb:            "get",
+			Resource:        "pods",
 		},
 		expectedUsers:  sets.NewString("Anna", "ClusterAdmin", "Ellen", "Valerie", "system:serviceaccount:adze:second", "system:serviceaccount:foo:default", "system:serviceaccount:other:first", "system:admin"),
 		expectedGroups: sets.NewString("RootUsers", "system:cluster-admins", "system:cluster-readers", "system:masters", "system:nodes"),
@@ -51,9 +51,9 @@ func (test *subjectsTest) test(t *testing.T) {
 	clusterPolicyRegistry := testpolicyregistry.NewClusterPolicyRegistry(test.clusterPolicies, test.policyRetrievalError)
 	clusterPolicyBindingRegistry := testpolicyregistry.NewClusterPolicyBindingRegistry(test.clusterBindings, test.bindingRetrievalError)
 
-	authorizer := NewAuthorizer(rulevalidation.NewDefaultRuleResolver(policyRegistry, policyBindingRegistry, clusterPolicyRegistry, clusterPolicyBindingRegistry), NewForbiddenMessageResolver(""))
+	_, subjectLocator := NewAuthorizer(rulevalidation.NewDefaultRuleResolver(policyRegistry, policyBindingRegistry, clusterPolicyRegistry, clusterPolicyBindingRegistry), NewForbiddenMessageResolver(""))
 
-	actualUsers, actualGroups, actualError := authorizer.GetAllowedSubjects(test.context, *test.attributes)
+	actualUsers, actualGroups, actualError := subjectLocator.GetAllowedSubjects(test.attributes)
 
 	matchStringSlice(test.expectedUsers.List(), actualUsers.List(), "users", t)
 	matchStringSlice(test.expectedGroups.List(), actualGroups.List(), "groups", t)

@@ -241,7 +241,7 @@ func (sws SwaggerService) composeDeclaration(ws *restful.WebService, pathPrefix 
 				DataTypeFields:   DataTypeFields{Type: &voidString},
 				Parameters:       []Parameter{},
 				Nickname:         route.Operation,
-				ResponseMessages: composeResponseMessages(route, &decl)}
+				ResponseMessages: composeResponseMessages(route, &decl, &sws.config)}
 
 			operation.Consumes = route.Consumes
 			operation.Produces = route.Produces
@@ -271,13 +271,13 @@ func withoutWildcard(path string) string {
 }
 
 // composeResponseMessages takes the ResponseErrors (if any) and creates ResponseMessages from them.
-func composeResponseMessages(route restful.Route, decl *ApiDeclaration) (messages []ResponseMessage) {
+func composeResponseMessages(route restful.Route, decl *ApiDeclaration, config *Config) (messages []ResponseMessage) {
 	if route.ResponseErrors == nil {
 		return messages
 	}
 	// sort by code
 	codes := sort.IntSlice{}
-	for code, _ := range route.ResponseErrors {
+	for code := range route.ResponseErrors {
 		codes = append(codes, code)
 	}
 	codes.Sort()
@@ -294,7 +294,7 @@ func composeResponseMessages(route restful.Route, decl *ApiDeclaration) (message
 			if isCollection {
 				modelName = "array[" + modelName + "]"
 			}
-			modelBuilder{Models: &decl.Models}.addModel(st, "")
+			modelBuilder{Models: &decl.Models, Config: config}.addModel(st, "")
 			// reference the model
 			message.ResponseModel = modelName
 		}

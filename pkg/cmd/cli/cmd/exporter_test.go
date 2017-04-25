@@ -4,8 +4,9 @@ import (
 	"reflect"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/runtime"
 
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	deploytest "github.com/openshift/origin/pkg/deploy/api/test"
@@ -14,7 +15,7 @@ import (
 )
 
 func TestExport(t *testing.T) {
-	exporter := &defaultExporter{}
+	exporter := &DefaultExporter{}
 
 	baseSA := &kapi.ServiceAccount{}
 	baseSA.Name = "my-sa"
@@ -30,18 +31,19 @@ func TestExport(t *testing.T) {
 			name:   "export deploymentConfig",
 			object: deploytest.OkDeploymentConfig(1),
 			expectedObj: &deployapi.DeploymentConfig{
-				ObjectMeta: kapi.ObjectMeta{
-					Name: "config",
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "config",
+					Generation: 1,
 				},
 				Spec:   deploytest.OkDeploymentConfigSpec(),
-				Status: deploytest.OkDeploymentConfigStatus(0),
+				Status: deployapi.DeploymentConfigStatus{},
 			},
 			expectedErr: nil,
 		},
 		{
 			name: "export imageStream",
 			object: &imageapi.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test",
 					Namespace: "other",
 				},
@@ -62,7 +64,7 @@ func TestExport(t *testing.T) {
 				},
 			},
 			expectedObj: &imageapi.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test",
 					Namespace: "",
 				},
@@ -86,7 +88,7 @@ func TestExport(t *testing.T) {
 		{
 			name: "remove unexportable SA secrets",
 			object: &kapi.ServiceAccount{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: baseSA.Name,
 				},
 				ImagePullSecrets: []kapi.LocalObjectReference{
@@ -100,7 +102,7 @@ func TestExport(t *testing.T) {
 				},
 			},
 			expectedObj: &kapi.ServiceAccount{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: baseSA.Name,
 				},
 				ImagePullSecrets: []kapi.LocalObjectReference{
@@ -115,7 +117,7 @@ func TestExport(t *testing.T) {
 		{
 			name: "do not remove unexportable SA secrets with exact",
 			object: &kapi.ServiceAccount{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: baseSA.Name,
 				},
 				ImagePullSecrets: []kapi.LocalObjectReference{
@@ -129,7 +131,7 @@ func TestExport(t *testing.T) {
 				},
 			},
 			expectedObj: &kapi.ServiceAccount{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: baseSA.Name,
 				},
 				ImagePullSecrets: []kapi.LocalObjectReference{
@@ -147,13 +149,15 @@ func TestExport(t *testing.T) {
 		},
 	}
 
-	for _, test := range tests {
+	for i := range tests {
+		test := tests[i]
+
 		if err := exporter.Export(test.object, test.exact); err != test.expectedErr {
-			t.Errorf("error mismatch: expected %v, got %v", test.expectedErr, err)
+			t.Errorf("%s: error mismatch: expected %v, got %v", test.name, test.expectedErr, err)
 		}
 
 		if !reflect.DeepEqual(test.object, test.expectedObj) {
-			t.Errorf("object mismatch: expected \n%v\ngot \n%v\n", test.expectedObj, test.object)
+			t.Errorf("%s: object mismatch: expected \n%#v\ngot \n%#v\n", test.name, test.expectedObj, test.object)
 		}
 	}
 }

@@ -1,5 +1,3 @@
-// +build integration
-
 package integration
 
 import (
@@ -7,7 +5,8 @@ import (
 	"os"
 	"testing"
 
-	"k8s.io/kubernetes/pkg/client/restclient"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	restclient "k8s.io/client-go/rest"
 
 	"github.com/openshift/origin/pkg/client"
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
@@ -24,6 +23,7 @@ func TestOAuthHTPasswd(t *testing.T) {
 	defer os.Remove(htpasswdFile.Name())
 
 	testutil.RequireEtcd(t)
+	defer testutil.DumpEtcdOnFailure(t)
 	masterOptions, err := testserver.DefaultMasterOptions()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -81,7 +81,7 @@ func TestOAuthHTPasswd(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	user, err := userClient.Users().Get("~")
+	user, err := userClient.Users().Get("~", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}

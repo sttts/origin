@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,15 +17,15 @@ limitations under the License.
 package securitycontextconstraints
 
 import (
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/util/validation/field"
 )
 
 // SecurityContextConstraintsProvider provides the implementation to generate a new security
 // context based on constraints or validate an existing security context against constraints.
 type SecurityContextConstraintsProvider interface {
 	// Create a PodSecurityContext based on the given constraints.
-	CreatePodSecurityContext(pod *api.Pod) (*api.PodSecurityContext, error)
+	CreatePodSecurityContext(pod *api.Pod) (*api.PodSecurityContext, map[string]string, error)
 	// Create a container SecurityContext based on the given constraints
 	CreateContainerSecurityContext(pod *api.Pod, container *api.Container) (*api.SecurityContext, error)
 	// Ensure a pod's SecurityContext is in compliance with the given constraints.

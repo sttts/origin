@@ -4,33 +4,31 @@ import (
 	"fmt"
 	"io"
 
-	kapi "k8s.io/kubernetes/pkg/api"
-	kapierrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/util"
-	"k8s.io/kubernetes/pkg/util/sets"
+	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/uuid"
+	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 
-	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	"github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/cmd/templates"
-	cmdutil "github.com/openshift/origin/pkg/cmd/util"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 )
 
 const PolicyRecommendedName = "policy"
 
-const policyLong = `
-Manage policy on the cluster
+var policyLong = templates.LongDesc(`
+	Manage policy on the cluster
 
-These commands allow you to assign and manage the roles and policies that apply to users. The reconcile
-commands allow you to reset and upgrade your system policies to the latest default policies.
+	These commands allow you to assign and manage the roles and policies that apply to users. The reconcile
+	commands allow you to reset and upgrade your system policies to the latest default policies.
 
-To see more information on roles and policies, use the 'get' and 'describe' commands on the following
-resources: 'clusterroles', 'clusterpolicy', 'clusterrolebindings', 'roles', 'policy', 'rolebindings',
-and 'scc'.
-`
+	To see more information on roles and policies, use the 'get' and 'describe' commands on the following
+	resources: 'clusterroles', 'clusterpolicy', 'clusterrolebindings', 'roles', 'policy', 'rolebindings',
+	and 'scc'.`)
 
 // NewCmdPolicy implements the OpenShift cli policy command
 func NewCmdPolicy(name, fullName string, f *clientcmd.Factory, out, errout io.Writer) *cobra.Command {
@@ -47,6 +45,8 @@ func NewCmdPolicy(name, fullName string, f *clientcmd.Factory, out, errout io.Wr
 			Message: "Discover:",
 			Commands: []*cobra.Command{
 				NewCmdWhoCan(WhoCanRecommendedName, fullName+" "+WhoCanRecommendedName, f, out),
+				NewCmdSccSubjectReview(SubjectReviewRecommendedName, fullName+" "+SubjectReviewRecommendedName, f, out),
+				NewCmdSccReview(ReviewRecommendedName, fullName+" "+ReviewRecommendedName, f, out),
 			},
 		},
 		{
@@ -98,14 +98,6 @@ func NewCmdPolicy(name, fullName string, f *clientcmd.Factory, out, errout io.Wr
 	return cmds
 }
 
-func getFlagString(cmd *cobra.Command, flag string) string {
-	f := cmd.Flags().Lookup(flag)
-	if f == nil {
-		glog.Fatalf("Flag accessed but not defined for command %s: %s", cmd.Name(), flag)
-	}
-	return f.Value.String()
-}
-
 func getUniqueName(basename string, existingNames *sets.String) string {
 	if !existingNames.Has(basename) {
 		return basename
@@ -118,7 +110,7 @@ func getUniqueName(basename string, existingNames *sets.String) string {
 		}
 	}
 
-	return string(util.NewUUID())
+	return string(uuid.NewUUID())
 }
 
 // RoleBindingAccessor is used by role modification commands to access and modify roles
@@ -140,7 +132,7 @@ func NewLocalRoleBindingAccessor(bindingNamespace string, client client.Interfac
 }
 
 func (a LocalRoleBindingAccessor) GetExistingRoleBindingsForRole(roleNamespace, role string) ([]*authorizationapi.RoleBinding, error) {
-	existingBindings, err := a.Client.PolicyBindings(a.BindingNamespace).Get(authorizationapi.GetPolicyBindingName(roleNamespace))
+	existingBindings, err := a.Client.PolicyBindings(a.BindingNamespace).Get(authorizationapi.GetPolicyBindingName(roleNamespace), metav1.GetOptions{})
 	if err != nil && !kapierrors.IsNotFound(err) {
 		return nil, err
 	}
@@ -158,7 +150,7 @@ func (a LocalRoleBindingAccessor) GetExistingRoleBindingsForRole(roleNamespace, 
 }
 
 func (a LocalRoleBindingAccessor) GetExistingRoleBindingNames() (*sets.String, error) {
-	policyBindings, err := a.Client.PolicyBindings(a.BindingNamespace).List(kapi.ListOptions{})
+	policyBindings, err := a.Client.PolicyBindings(a.BindingNamespace).List(metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +187,7 @@ func NewClusterRoleBindingAccessor(client client.Interface) ClusterRoleBindingAc
 }
 
 func (a ClusterRoleBindingAccessor) GetExistingRoleBindingsForRole(roleNamespace, role string) ([]*authorizationapi.RoleBinding, error) {
-	uncast, err := a.Client.ClusterPolicyBindings().Get(authorizationapi.GetPolicyBindingName(roleNamespace))
+	uncast, err := a.Client.ClusterPolicyBindings().Get(authorizationapi.GetPolicyBindingName(roleNamespace), metav1.GetOptions{})
 	if err != nil && !kapierrors.IsNotFound(err) {
 		return nil, err
 	}
@@ -214,7 +206,7 @@ func (a ClusterRoleBindingAccessor) GetExistingRoleBindingsForRole(roleNamespace
 }
 
 func (a ClusterRoleBindingAccessor) GetExistingRoleBindingNames() (*sets.String, error) {
-	uncast, err := a.Client.ClusterPolicyBindings().List(kapi.ListOptions{})
+	uncast, err := a.Client.ClusterPolicyBindings().List(metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}

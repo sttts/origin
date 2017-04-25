@@ -7,39 +7,41 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
-	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
-	"k8s.io/kubernetes/pkg/util/sets"
 
 	"github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/cmd/cli/describe"
+	"github.com/openshift/origin/pkg/cmd/templates"
 	osutil "github.com/openshift/origin/pkg/cmd/util"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 	imageapi "github.com/openshift/origin/pkg/image/api"
 	imagegraph "github.com/openshift/origin/pkg/image/graph/nodes"
 )
 
-const (
-	buildChainLong = `
-Output the inputs and dependencies of your builds
-
-Supported formats for the generated graph are dot and a human-readable output.
-Tag and namespace are optional and if they are not specified, 'latest' and the
-default namespace will be used respectively.`
-
-	buildChainExample = `  # Build the dependency tree for the 'latest' tag in <image-stream>
-  %[1]s <image-stream>
-
-  # Build the dependency tree for 'v2' tag in dot format and visualize it via the dot utility
-  %[1]s <image-stream>:v2 -o dot | dot -T svg -o deps.svg
-
-  # Build the dependency tree across all namespaces for the specified image stream tag found in 'test' namespace
-  %[1]s <image-stream> -n test --all`
-)
-
 // BuildChainRecommendedCommandName is the recommended command name
 const BuildChainRecommendedCommandName = "build-chain"
+
+var (
+	buildChainLong = templates.LongDesc(`
+		Output the inputs and dependencies of your builds
+
+		Supported formats for the generated graph are dot and a human-readable output.
+		Tag and namespace are optional and if they are not specified, 'latest' and the
+		default namespace will be used respectively.`)
+
+	buildChainExample = templates.Examples(`
+		# Build the dependency tree for the 'latest' tag in <image-stream>
+	  %[1]s <image-stream>
+
+	  # Build the dependency tree for 'v2' tag in dot format and visualize it via the dot utility
+	  %[1]s <image-stream>:v2 -o dot | dot -T svg -o deps.svg
+
+	  # Build the dependency tree across all namespaces for the specified image stream tag found in 'test' namespace
+	  %[1]s <image-stream> -n test --all`)
+)
 
 // BuildChainOptions contains all the options needed for build-chain
 type BuildChainOptions struct {
@@ -69,14 +71,12 @@ func NewCmdBuildChain(name, fullName string, f *clientcmd.Factory, out io.Writer
 		Example: fmt.Sprintf(buildChainExample, fullName),
 		Run: func(cmd *cobra.Command, args []string) {
 			cmdutil.CheckErr(options.Complete(f, cmd, args, out))
-
 			cmdutil.CheckErr(options.Validate())
-
 			cmdutil.CheckErr(options.RunBuildChain())
 		},
 	}
 
-	cmd.Flags().BoolVar(&options.allNamespaces, "all", false, "Build dependency tree for the specified image stream tag across all namespaces")
+	cmd.Flags().BoolVar(&options.allNamespaces, "all", false, "If true, build dependency tree for the specified image stream tag across all namespaces")
 	cmd.Flags().BoolVar(&options.triggerOnly, "trigger-only", true, "If true, only include dependencies based on build triggers. If false, include all dependencies.")
 	cmd.Flags().BoolVar(&options.reverse, "reverse", false, "If true, show the istags dependencies instead of its dependants.")
 	cmd.Flags().StringVarP(&options.output, "output", "o", "", "Output format of dependency tree")
@@ -96,15 +96,15 @@ func (o *BuildChainOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, a
 	}
 	o.c, o.t = oc, oc
 
-	resource := unversioned.GroupResource{}
-	mapper, _ := f.Object(false)
+	resource := schema.GroupResource{}
+	mapper, _ := f.Object()
 	resource, o.name, err = osutil.ResolveResource(imageapi.Resource("imagestreamtags"), args[0], mapper)
 	if err != nil {
 		return err
 	}
 
-	switch resource {
-	case imageapi.Resource("imagestreamtags"):
+	switch {
+	case imageapi.IsResourceOrLegacy("imagestreamtags", resource):
 		o.name = imageapi.NormalizeImageStreamTag(o.name)
 		glog.V(4).Infof("Using %q as the image stream tag to look dependencies for", o.name)
 	default:
@@ -114,7 +114,7 @@ func (o *BuildChainOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, a
 	// Setup namespace
 	if o.allNamespaces {
 		// TODO: Handle different uses of build-chain; user and admin
-		projectList, err := oc.Projects().List(kapi.ListOptions{})
+		projectList, err := oc.Projects().List(metav1.ListOptions{})
 		if err != nil {
 			return err
 		}

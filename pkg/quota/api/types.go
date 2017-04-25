@@ -2,17 +2,21 @@ package api
 
 import (
 	"container/list"
+	"reflect"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
 )
+
+// +genclient=true
+// +nonNamespaced=true
 
 // ClusterResourceQuota mirrors ResourceQuota at a cluster scope.  This object is easily convertible to
 // synthetic ResourceQuota object to allow quota evaluation re-use.
 type ClusterResourceQuota struct {
-	unversioned.TypeMeta
+	metav1.TypeMeta
 	// Standard object's metadata.
-	kapi.ObjectMeta
+	metav1.ObjectMeta
 
 	// Spec defines the desired quota
 	Spec ClusterResourceQuotaSpec
@@ -38,7 +42,7 @@ type ClusterResourceQuotaSpec struct {
 // the project must match both restrictions.
 type ClusterResourceQuotaSelector struct {
 	// LabelSelector is used to select projects by label.
-	LabelSelector *unversioned.LabelSelector
+	LabelSelector *metav1.LabelSelector
 
 	// AnnotationSelector is used to select projects by annotation.
 	AnnotationSelector map[string]string
@@ -50,16 +54,16 @@ type ClusterResourceQuotaStatus struct {
 	Total kapi.ResourceQuotaStatus
 
 	// Namespaces slices the usage by project.  This division allows for quick resolution of
-	// deletion reconcilation inside of a single project without requiring a recalculation
+	// deletion reconciliation inside of a single project without requiring a recalculation
 	// across all projects.  This map can be used to pull the deltas for a given project.
 	Namespaces ResourceQuotasStatusByNamespace
 }
 
 // ClusterResourceQuotaList is a collection of ClusterResourceQuotas
 type ClusterResourceQuotaList struct {
-	unversioned.TypeMeta
+	metav1.TypeMeta
 	// Standard object's metadata.
-	unversioned.ListMeta
+	metav1.ListMeta
 
 	// Items is a list of ClusterResourceQuotas
 	Items []ClusterResourceQuota
@@ -69,9 +73,9 @@ type ClusterResourceQuotaList struct {
 // into a project.  It allows a project-admin to know which ClusterResourceQuotas are applied to
 // his project and their associated usage.
 type AppliedClusterResourceQuota struct {
-	unversioned.TypeMeta
+	metav1.TypeMeta
 	// Standard object's metadata.
-	kapi.ObjectMeta
+	metav1.ObjectMeta
 
 	// Spec defines the desired quota
 	Spec ClusterResourceQuotaSpec
@@ -82,9 +86,9 @@ type AppliedClusterResourceQuota struct {
 
 // AppliedClusterResourceQuotaList is a collection of AppliedClusterResourceQuotas
 type AppliedClusterResourceQuotaList struct {
-	unversioned.TypeMeta
+	metav1.TypeMeta
 	// Standard object's metadata.
-	unversioned.ListMeta
+	metav1.ListMeta
 
 	// Items is a list of AppliedClusterResourceQuota
 	Items []AppliedClusterResourceQuota
@@ -113,6 +117,42 @@ func (o *ResourceQuotasStatusByNamespace) Remove(key string) {
 
 func (o *ResourceQuotasStatusByNamespace) OrderedKeys() *list.List {
 	return o.orderedMap.OrderedKeys()
+}
+
+// DeepCopy implements a custom copy to correctly handle unexported fields
+// Must match "func (t T) DeepCopy() T" for the deep copy generator to use it
+func (o ResourceQuotasStatusByNamespace) DeepCopy() ResourceQuotasStatusByNamespace {
+	out := ResourceQuotasStatusByNamespace{}
+	for e := o.OrderedKeys().Front(); e != nil; e = e.Next() {
+		namespace := e.Value.(string)
+		instatus, _ := o.Get(namespace)
+		if outstatus, err := kapi.Scheme.DeepCopy(instatus); err != nil {
+			panic(err) // should never happen
+		} else {
+			out.Insert(namespace, outstatus.(kapi.ResourceQuotaStatus))
+		}
+	}
+	return out
+}
+
+func init() {
+	// Tell the reflection package how to compare our unexported type
+	if err := kapi.Semantic.AddFuncs(
+		func(o1, o2 ResourceQuotasStatusByNamespace) bool {
+			return reflect.DeepEqual(o1.orderedMap, o2.orderedMap)
+		},
+		func(o1, o2 *ResourceQuotasStatusByNamespace) bool {
+			if o1 == nil && o2 == nil {
+				return true
+			}
+			if (o1 == nil) != (o2 == nil) {
+				return false
+			}
+			return reflect.DeepEqual(o1.orderedMap, o2.orderedMap)
+		},
+	); err != nil {
+		panic(err)
+	}
 }
 
 // orderedMap is a very simple ordering a map tracking insertion order.  It allows fast and stable serializations
@@ -159,7 +199,7 @@ func (o *orderedMap) Remove(key string) {
 // OrderedKeys returns back the ordered keys.  This can be used to build a stable serialization
 func (o *orderedMap) OrderedKeys() *list.List {
 	if o.orderedKeys == nil {
-		o.orderedKeys = list.New()
+		return list.New()
 	}
 	return o.orderedKeys
 }

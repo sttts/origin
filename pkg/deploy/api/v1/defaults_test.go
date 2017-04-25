@@ -6,13 +6,12 @@ import (
 
 	kapi "k8s.io/kubernetes/pkg/api"
 	// required to register defaulting functions for containers
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/diff"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	_ "k8s.io/kubernetes/pkg/api/install"
 	kapiv1 "k8s.io/kubernetes/pkg/api/v1"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/diff"
-	"k8s.io/kubernetes/pkg/util/intstr"
 
-	v1 "github.com/openshift/origin/pkg/api/v1"
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	_ "github.com/openshift/origin/pkg/deploy/api/install"
 	deployv1 "github.com/openshift/origin/pkg/deploy/api/v1"
@@ -42,6 +41,7 @@ func TestDefaults(t *testing.T) {
 							MaxSurge:            &defaultIntOrString,
 							MaxUnavailable:      &defaultIntOrString,
 						},
+						ActiveDeadlineSeconds: newInt64(deployapi.MaxDeploymentDurationSeconds),
 					},
 					Triggers: []deployv1.DeploymentTriggerPolicy{
 						{
@@ -127,6 +127,7 @@ func TestDefaults(t *testing.T) {
 							MaxSurge:            &differentIntOrString,
 							MaxUnavailable:      &differentIntOrString,
 						},
+						ActiveDeadlineSeconds: newInt64(deployapi.MaxDeploymentDurationSeconds),
 					},
 					Triggers: []deployv1.DeploymentTriggerPolicy{
 						{
@@ -142,13 +143,15 @@ func TestDefaults(t *testing.T) {
 							Containers: []kapiv1.Container{
 								{
 									Name: "test",
-									TerminationMessagePath: "/dev/termination-log",
+									TerminationMessagePath:   "/dev/termination-log",
+									TerminationMessagePolicy: kapiv1.TerminationMessageReadFile,
 									// The pull policy will be "PullAlways" only when the
 									// image tag is 'latest'. In other case it will be
 									// "PullIfNotPresent".
 									ImagePullPolicy: kapiv1.PullIfNotPresent,
 								},
 							},
+							SchedulerName: kapiv1.DefaultSchedulerName,
 						},
 					},
 				},
@@ -163,8 +166,9 @@ func TestDefaults(t *testing.T) {
 							UpdatePeriodSeconds: newInt64(5),
 							IntervalSeconds:     newInt64(6),
 							TimeoutSeconds:      newInt64(7),
-							UpdatePercent:       newInt32(50),
+							MaxSurge:            newIntOrString(intstr.FromString("50%")),
 						},
+						ActiveDeadlineSeconds: newInt64(3600),
 					},
 					Triggers: []deployv1.DeploymentTriggerPolicy{
 						{
@@ -181,10 +185,10 @@ func TestDefaults(t *testing.T) {
 							UpdatePeriodSeconds: newInt64(5),
 							IntervalSeconds:     newInt64(6),
 							TimeoutSeconds:      newInt64(7),
-							UpdatePercent:       newInt32(50),
 							MaxSurge:            newIntOrString(intstr.FromString("50%")),
 							MaxUnavailable:      newIntOrString(intstr.FromInt(0)),
 						},
+						ActiveDeadlineSeconds: newInt64(3600),
 					},
 					Triggers: []deployv1.DeploymentTriggerPolicy{
 						{
@@ -203,32 +207,339 @@ func TestDefaults(t *testing.T) {
 							UpdatePeriodSeconds: newInt64(5),
 							IntervalSeconds:     newInt64(6),
 							TimeoutSeconds:      newInt64(7),
-							UpdatePercent:       newInt32(-25),
-						},
-					},
-					Triggers: []deployv1.DeploymentTriggerPolicy{
-						{
-							Type: deployv1.DeploymentTriggerOnImageChange,
-						},
-					},
-				},
-			},
-			expected: &deployv1.DeploymentConfig{
-				Spec: deployv1.DeploymentConfigSpec{
-					Strategy: deployv1.DeploymentStrategy{
-						Type: deployv1.DeploymentStrategyTypeRolling,
-						RollingParams: &deployv1.RollingDeploymentStrategyParams{
-							UpdatePeriodSeconds: newInt64(5),
-							IntervalSeconds:     newInt64(6),
-							TimeoutSeconds:      newInt64(7),
-							UpdatePercent:       newInt32(-25),
-							MaxSurge:            newIntOrString(intstr.FromInt(0)),
 							MaxUnavailable:      newIntOrString(intstr.FromString("25%")),
 						},
 					},
 					Triggers: []deployv1.DeploymentTriggerPolicy{
 						{
 							Type: deployv1.DeploymentTriggerOnImageChange,
+						},
+					},
+				},
+			},
+			expected: &deployv1.DeploymentConfig{
+				Spec: deployv1.DeploymentConfigSpec{
+					Strategy: deployv1.DeploymentStrategy{
+						Type: deployv1.DeploymentStrategyTypeRolling,
+						RollingParams: &deployv1.RollingDeploymentStrategyParams{
+							UpdatePeriodSeconds: newInt64(5),
+							IntervalSeconds:     newInt64(6),
+							TimeoutSeconds:      newInt64(7),
+							MaxSurge:            newIntOrString(intstr.FromInt(0)),
+							MaxUnavailable:      newIntOrString(intstr.FromString("25%")),
+						},
+						ActiveDeadlineSeconds: newInt64(deployapi.MaxDeploymentDurationSeconds),
+					},
+					Triggers: []deployv1.DeploymentTriggerPolicy{
+						{
+							Type: deployv1.DeploymentTriggerOnImageChange,
+						},
+					},
+				},
+			},
+		},
+		{
+			original: &deployv1.DeploymentConfig{
+				Spec: deployv1.DeploymentConfigSpec{
+					Strategy: deployv1.DeploymentStrategy{
+						Type: deployv1.DeploymentStrategyTypeRolling,
+						RollingParams: &deployv1.RollingDeploymentStrategyParams{
+							UpdatePeriodSeconds: newInt64(5),
+							IntervalSeconds:     newInt64(6),
+							TimeoutSeconds:      newInt64(7),
+							MaxSurge:            newIntOrString(intstr.FromInt(0)),
+						},
+					},
+					Triggers: []deployv1.DeploymentTriggerPolicy{
+						{},
+					},
+				},
+			},
+			expected: &deployv1.DeploymentConfig{
+				Spec: deployv1.DeploymentConfigSpec{
+					Strategy: deployv1.DeploymentStrategy{
+						Type: deployv1.DeploymentStrategyTypeRolling,
+						RollingParams: &deployv1.RollingDeploymentStrategyParams{
+							UpdatePeriodSeconds: newInt64(5),
+							IntervalSeconds:     newInt64(6),
+							TimeoutSeconds:      newInt64(7),
+							MaxUnavailable:      newIntOrString(intstr.FromString("25%")),
+							MaxSurge:            newIntOrString(intstr.FromInt(0)),
+						},
+						ActiveDeadlineSeconds: newInt64(deployapi.MaxDeploymentDurationSeconds),
+					},
+					Triggers: []deployv1.DeploymentTriggerPolicy{
+						{},
+					},
+				},
+			},
+		},
+		{
+			original: &deployv1.DeploymentConfig{
+				Spec: deployv1.DeploymentConfigSpec{
+					Strategy: deployv1.DeploymentStrategy{
+						Type:          deployv1.DeploymentStrategyTypeRolling,
+						RollingParams: &deployv1.RollingDeploymentStrategyParams{},
+					},
+					Triggers: []deployv1.DeploymentTriggerPolicy{
+						{},
+					},
+				},
+			},
+			expected: &deployv1.DeploymentConfig{
+				Spec: deployv1.DeploymentConfigSpec{
+					Strategy: deployv1.DeploymentStrategy{
+						Type: deployv1.DeploymentStrategyTypeRolling,
+						RollingParams: &deployv1.RollingDeploymentStrategyParams{
+							IntervalSeconds:     newInt64(deployapi.DefaultRollingIntervalSeconds),
+							UpdatePeriodSeconds: newInt64(deployapi.DefaultRollingUpdatePeriodSeconds),
+							TimeoutSeconds:      newInt64(deployapi.DefaultRollingTimeoutSeconds),
+							MaxSurge:            newIntOrString(intstr.FromString("25%")),
+							MaxUnavailable:      newIntOrString(intstr.FromString("25%")),
+						},
+						ActiveDeadlineSeconds: newInt64(deployapi.MaxDeploymentDurationSeconds),
+					},
+					Triggers: []deployv1.DeploymentTriggerPolicy{
+						{},
+					},
+				},
+			},
+		},
+		{
+			original: &deployv1.DeploymentConfig{
+				Spec: deployv1.DeploymentConfigSpec{
+					Strategy: deployv1.DeploymentStrategy{
+						Type: deployv1.DeploymentStrategyTypeRecreate,
+						// test non-nil RecreateParams is filled in
+						RecreateParams: &deployv1.RecreateDeploymentStrategyParams{},
+					},
+					Triggers: []deployv1.DeploymentTriggerPolicy{
+						{},
+					},
+				},
+			},
+			expected: &deployv1.DeploymentConfig{
+				Spec: deployv1.DeploymentConfigSpec{
+					Strategy: deployv1.DeploymentStrategy{
+						Type: deployv1.DeploymentStrategyTypeRecreate,
+						RecreateParams: &deployv1.RecreateDeploymentStrategyParams{
+							TimeoutSeconds: newInt64(deployapi.DefaultRollingTimeoutSeconds),
+						},
+						ActiveDeadlineSeconds: newInt64(deployapi.MaxDeploymentDurationSeconds),
+					},
+					Triggers: []deployv1.DeploymentTriggerPolicy{
+						{},
+					},
+				},
+			},
+		},
+		{
+			original: &deployv1.DeploymentConfig{
+				Spec: deployv1.DeploymentConfigSpec{
+					Strategy: deployv1.DeploymentStrategy{
+						Type: deployv1.DeploymentStrategyTypeRecreate,
+						// test nil RecreateParams
+					},
+					Triggers: []deployv1.DeploymentTriggerPolicy{
+						{},
+					},
+				},
+			},
+			expected: &deployv1.DeploymentConfig{
+				Spec: deployv1.DeploymentConfigSpec{
+					Strategy: deployv1.DeploymentStrategy{
+						Type: deployv1.DeploymentStrategyTypeRecreate,
+						RecreateParams: &deployv1.RecreateDeploymentStrategyParams{
+							TimeoutSeconds: newInt64(deployapi.DefaultRollingTimeoutSeconds),
+						},
+						ActiveDeadlineSeconds: newInt64(deployapi.MaxDeploymentDurationSeconds),
+					},
+					Triggers: []deployv1.DeploymentTriggerPolicy{
+						{},
+					},
+				},
+			},
+		},
+		{
+			original: &deployv1.DeploymentConfig{
+				Spec: deployv1.DeploymentConfigSpec{
+					Template: &kapiv1.PodTemplateSpec{
+						Spec: kapiv1.PodSpec{
+							Containers: []kapiv1.Container{
+								{Name: "first"},
+							},
+						},
+					},
+					Strategy: deployv1.DeploymentStrategy{
+						Type: deployv1.DeploymentStrategyTypeRecreate,
+						RecreateParams: &deployv1.RecreateDeploymentStrategyParams{
+							Pre: &deployv1.LifecycleHook{
+								TagImages:  []deployv1.TagImageHook{{}},
+								ExecNewPod: &deployv1.ExecNewPodHook{},
+							},
+							Mid: &deployv1.LifecycleHook{
+								TagImages:  []deployv1.TagImageHook{{}},
+								ExecNewPod: &deployv1.ExecNewPodHook{},
+							},
+							Post: &deployv1.LifecycleHook{
+								TagImages:  []deployv1.TagImageHook{{}},
+								ExecNewPod: &deployv1.ExecNewPodHook{},
+							},
+						},
+					},
+					Triggers: []deployv1.DeploymentTriggerPolicy{
+						{},
+					},
+				},
+			},
+			expected: &deployv1.DeploymentConfig{
+				Spec: deployv1.DeploymentConfigSpec{
+					Template: &kapiv1.PodTemplateSpec{
+						Spec: kapiv1.PodSpec{
+							Containers: []kapiv1.Container{
+								{
+									Name: "first",
+									TerminationMessagePath:   "/dev/termination-log",
+									TerminationMessagePolicy: kapiv1.TerminationMessageReadFile,
+									ImagePullPolicy:          kapiv1.PullIfNotPresent,
+								},
+							},
+							RestartPolicy:                 kapiv1.RestartPolicyAlways,
+							TerminationGracePeriodSeconds: mkintp(30),
+							SecurityContext:               &kapiv1.PodSecurityContext{},
+							DNSPolicy:                     kapiv1.DNSClusterFirst,
+							SchedulerName:                 kapiv1.DefaultSchedulerName,
+						},
+					},
+					Strategy: deployv1.DeploymentStrategy{
+						Type: deployv1.DeploymentStrategyTypeRecreate,
+						RecreateParams: &deployv1.RecreateDeploymentStrategyParams{
+							TimeoutSeconds: newInt64(deployapi.DefaultRollingTimeoutSeconds),
+							Pre: &deployv1.LifecycleHook{
+								TagImages:  []deployv1.TagImageHook{{ContainerName: "first"}},
+								ExecNewPod: &deployv1.ExecNewPodHook{ContainerName: "first"},
+							},
+							Mid: &deployv1.LifecycleHook{
+								TagImages:  []deployv1.TagImageHook{{ContainerName: "first"}},
+								ExecNewPod: &deployv1.ExecNewPodHook{ContainerName: "first"},
+							},
+							Post: &deployv1.LifecycleHook{
+								TagImages:  []deployv1.TagImageHook{{ContainerName: "first"}},
+								ExecNewPod: &deployv1.ExecNewPodHook{ContainerName: "first"},
+							},
+						},
+						ActiveDeadlineSeconds: newInt64(deployapi.MaxDeploymentDurationSeconds),
+					},
+					Triggers: []deployv1.DeploymentTriggerPolicy{
+						{},
+					},
+				},
+			},
+		},
+		{
+			original: &deployv1.DeploymentConfig{
+				Spec: deployv1.DeploymentConfigSpec{
+					Template: &kapiv1.PodTemplateSpec{
+						Spec: kapiv1.PodSpec{
+							Containers: []kapiv1.Container{
+								{Name: "first"},
+							},
+						},
+					},
+					Strategy: deployv1.DeploymentStrategy{
+						Type: deployv1.DeploymentStrategyTypeRolling,
+						RollingParams: &deployv1.RollingDeploymentStrategyParams{
+							Pre: &deployv1.LifecycleHook{
+								TagImages:  []deployv1.TagImageHook{{}},
+								ExecNewPod: &deployv1.ExecNewPodHook{},
+							},
+							Post: &deployv1.LifecycleHook{
+								TagImages:  []deployv1.TagImageHook{{}},
+								ExecNewPod: &deployv1.ExecNewPodHook{},
+							},
+						},
+					},
+					Triggers: []deployv1.DeploymentTriggerPolicy{
+						{},
+					},
+				},
+			},
+			expected: &deployv1.DeploymentConfig{
+				Spec: deployv1.DeploymentConfigSpec{
+					Template: &kapiv1.PodTemplateSpec{
+						Spec: kapiv1.PodSpec{
+							Containers: []kapiv1.Container{
+								{
+									Name: "first",
+									TerminationMessagePath:   "/dev/termination-log",
+									TerminationMessagePolicy: kapiv1.TerminationMessageReadFile,
+									ImagePullPolicy:          kapiv1.PullIfNotPresent,
+								},
+							},
+							RestartPolicy:                 kapiv1.RestartPolicyAlways,
+							TerminationGracePeriodSeconds: mkintp(30),
+							SecurityContext:               &kapiv1.PodSecurityContext{},
+							DNSPolicy:                     kapiv1.DNSClusterFirst,
+							SchedulerName:                 kapiv1.DefaultSchedulerName,
+						},
+					},
+					Strategy: deployv1.DeploymentStrategy{
+						Type: deployv1.DeploymentStrategyTypeRolling,
+						RollingParams: &deployv1.RollingDeploymentStrategyParams{
+							UpdatePeriodSeconds: newInt64(deployapi.DefaultRollingUpdatePeriodSeconds),
+							IntervalSeconds:     newInt64(deployapi.DefaultRollingIntervalSeconds),
+							TimeoutSeconds:      newInt64(deployapi.DefaultRollingTimeoutSeconds),
+							MaxSurge:            &defaultIntOrString,
+							MaxUnavailable:      &defaultIntOrString,
+							Pre: &deployv1.LifecycleHook{
+								TagImages:  []deployv1.TagImageHook{{ContainerName: "first"}},
+								ExecNewPod: &deployv1.ExecNewPodHook{ContainerName: "first"},
+							},
+							Post: &deployv1.LifecycleHook{
+								TagImages:  []deployv1.TagImageHook{{ContainerName: "first"}},
+								ExecNewPod: &deployv1.ExecNewPodHook{ContainerName: "first"},
+							},
+						},
+						ActiveDeadlineSeconds: newInt64(deployapi.MaxDeploymentDurationSeconds),
+					},
+					Triggers: []deployv1.DeploymentTriggerPolicy{
+						{},
+					},
+				},
+			},
+		},
+		{
+			original: &deployv1.DeploymentConfig{
+				Spec: deployv1.DeploymentConfigSpec{
+					Triggers: []deployv1.DeploymentTriggerPolicy{
+						{
+							Type:              deployv1.DeploymentTriggerOnImageChange,
+							ImageChangeParams: &deployv1.DeploymentTriggerImageChangeParams{},
+						},
+					},
+				},
+			},
+			expected: &deployv1.DeploymentConfig{
+				Spec: deployv1.DeploymentConfigSpec{
+					Strategy: deployv1.DeploymentStrategy{
+						Type: deployv1.DeploymentStrategyTypeRolling,
+						RollingParams: &deployv1.RollingDeploymentStrategyParams{
+							UpdatePeriodSeconds: newInt64(deployapi.DefaultRollingUpdatePeriodSeconds),
+							IntervalSeconds:     newInt64(deployapi.DefaultRollingIntervalSeconds),
+							TimeoutSeconds:      newInt64(deployapi.DefaultRollingTimeoutSeconds),
+							MaxSurge:            &defaultIntOrString,
+							MaxUnavailable:      &defaultIntOrString,
+						},
+						ActiveDeadlineSeconds: newInt64(deployapi.MaxDeploymentDurationSeconds),
+					},
+					Triggers: []deployv1.DeploymentTriggerPolicy{
+						{
+							Type: deployv1.DeploymentTriggerOnImageChange,
+							ImageChangeParams: &deployv1.DeploymentTriggerImageChangeParams{
+								From: kapiv1.ObjectReference{
+									Kind: "ImageStreamTag",
+								},
+							},
 						},
 					},
 				},
@@ -246,14 +557,15 @@ func TestDefaults(t *testing.T) {
 			t.Errorf("unexpected object: %v", got)
 			t.FailNow()
 		}
-		if !reflect.DeepEqual(got.Spec, expected.Spec) {
+		// TODO(rebase): check that there are no fields which have different semantics for nil and []
+		if !kapi.Semantic.DeepEqual(got.Spec, expected.Spec) {
 			t.Errorf("got different than expected:\nA:\t%#v\nB:\t%#v\n\nDiff:\n%s\n\n%s", got, expected, diff.ObjectDiff(expected, got), diff.ObjectGoPrintSideBySide(expected, got))
 		}
 	}
 }
 
 func roundTrip(t *testing.T, obj runtime.Object) runtime.Object {
-	data, err := runtime.Encode(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), obj)
+	data, err := runtime.Encode(kapi.Codecs.LegacyCodec(deployv1.LegacySchemeGroupVersion), obj)
 	if err != nil {
 		t.Errorf("%v\n %#v", err, obj)
 		return nil
@@ -282,167 +594,4 @@ func newInt32(val int32) *int32 {
 
 func newIntOrString(ios intstr.IntOrString) *intstr.IntOrString {
 	return &ios
-}
-
-func TestDeepDefaults(t *testing.T) {
-	testCases := []struct {
-		External runtime.Object
-		Internal runtime.Object
-		Ok       func(runtime.Object) bool
-	}{
-		{
-			External: &deployv1.DeploymentConfig{
-				Spec: deployv1.DeploymentConfigSpec{
-					Strategy: deployv1.DeploymentStrategy{
-						Type:          deployv1.DeploymentStrategyTypeRolling,
-						RollingParams: &deployv1.RollingDeploymentStrategyParams{},
-					},
-				},
-			},
-			Internal: &deployapi.DeploymentConfig{},
-			Ok: func(out runtime.Object) bool {
-				obj := out.(*deployapi.DeploymentConfig)
-				if *obj.Spec.Strategy.RollingParams.IntervalSeconds != deployapi.DefaultRollingIntervalSeconds {
-					return false
-				}
-				if *obj.Spec.Strategy.RollingParams.UpdatePeriodSeconds != deployapi.DefaultRollingUpdatePeriodSeconds {
-					return false
-				}
-				if *obj.Spec.Strategy.RollingParams.TimeoutSeconds != deployapi.DefaultRollingTimeoutSeconds {
-					return false
-				}
-				return true
-			},
-		},
-		{
-			External: &deployv1.DeploymentConfig{
-				Spec: deployv1.DeploymentConfigSpec{
-					Strategy: deployv1.DeploymentStrategy{
-						Type:           deployv1.DeploymentStrategyTypeRecreate,
-						RecreateParams: &deployv1.RecreateDeploymentStrategyParams{},
-					},
-				},
-			},
-			Internal: &deployapi.DeploymentConfig{},
-			Ok: func(out runtime.Object) bool {
-				obj := out.(*deployapi.DeploymentConfig)
-				return *obj.Spec.Strategy.RecreateParams.TimeoutSeconds == deployapi.DefaultRollingTimeoutSeconds
-			},
-		},
-		{
-			External: &deployv1.DeploymentConfig{
-				Spec: deployv1.DeploymentConfigSpec{
-					Template: &kapiv1.PodTemplateSpec{
-						Spec: kapiv1.PodSpec{
-							Containers: []kapiv1.Container{
-								{Name: "first"},
-							},
-						},
-					},
-					Strategy: deployv1.DeploymentStrategy{
-						Type: deployv1.DeploymentStrategyTypeRecreate,
-						RecreateParams: &deployv1.RecreateDeploymentStrategyParams{
-							Pre: &deployv1.LifecycleHook{
-								TagImages:  []deployv1.TagImageHook{{}},
-								ExecNewPod: &deployv1.ExecNewPodHook{},
-							},
-							Mid: &deployv1.LifecycleHook{
-								TagImages:  []deployv1.TagImageHook{{}},
-								ExecNewPod: &deployv1.ExecNewPodHook{},
-							},
-							Post: &deployv1.LifecycleHook{
-								TagImages:  []deployv1.TagImageHook{{}},
-								ExecNewPod: &deployv1.ExecNewPodHook{},
-							},
-						},
-					},
-				},
-			},
-			Internal: &deployapi.DeploymentConfig{},
-			Ok: func(out runtime.Object) bool {
-				obj := out.(*deployapi.DeploymentConfig)
-				return obj.Spec.Strategy.RecreateParams.Pre.ExecNewPod.ContainerName == "first" &&
-					obj.Spec.Strategy.RecreateParams.Mid.ExecNewPod.ContainerName == "first" &&
-					obj.Spec.Strategy.RecreateParams.Post.ExecNewPod.ContainerName == "first" &&
-					obj.Spec.Strategy.RecreateParams.Pre.TagImages[0].ContainerName == "first" &&
-					obj.Spec.Strategy.RecreateParams.Mid.TagImages[0].ContainerName == "first" &&
-					obj.Spec.Strategy.RecreateParams.Post.TagImages[0].ContainerName == "first"
-			},
-		},
-		{
-			External: &deployv1.DeploymentConfig{
-				Spec: deployv1.DeploymentConfigSpec{
-					Template: &kapiv1.PodTemplateSpec{
-						Spec: kapiv1.PodSpec{
-							Containers: []kapiv1.Container{
-								{Name: "first"},
-							},
-						},
-					},
-					Strategy: deployv1.DeploymentStrategy{
-						Type: deployv1.DeploymentStrategyTypeRecreate,
-						RollingParams: &deployv1.RollingDeploymentStrategyParams{
-							Pre: &deployv1.LifecycleHook{
-								TagImages:  []deployv1.TagImageHook{{}},
-								ExecNewPod: &deployv1.ExecNewPodHook{},
-							},
-							Post: &deployv1.LifecycleHook{
-								TagImages:  []deployv1.TagImageHook{{}},
-								ExecNewPod: &deployv1.ExecNewPodHook{},
-							},
-						},
-					},
-				},
-			},
-			Internal: &deployapi.DeploymentConfig{},
-			Ok: func(out runtime.Object) bool {
-				obj := out.(*deployapi.DeploymentConfig)
-				return obj.Spec.Strategy.RollingParams.Pre.ExecNewPod.ContainerName == "first" &&
-					obj.Spec.Strategy.RollingParams.Post.ExecNewPod.ContainerName == "first" &&
-					obj.Spec.Strategy.RollingParams.Pre.TagImages[0].ContainerName == "first" &&
-					obj.Spec.Strategy.RollingParams.Post.TagImages[0].ContainerName == "first"
-			},
-		},
-		{
-			External: &deployv1.DeploymentConfig{
-				Spec: deployv1.DeploymentConfigSpec{
-					Strategy: deployv1.DeploymentStrategy{
-						Type: deployv1.DeploymentStrategyTypeRecreate,
-					},
-				},
-			},
-			Internal: &deployapi.DeploymentConfig{},
-			Ok: func(out runtime.Object) bool {
-				obj := out.(*deployapi.DeploymentConfig)
-				return obj.Spec.Strategy.RecreateParams != nil
-			},
-		},
-		{
-			External: &deployv1.DeploymentConfig{
-				Spec: deployv1.DeploymentConfigSpec{
-					Triggers: []deployv1.DeploymentTriggerPolicy{
-						{
-							Type:              deployv1.DeploymentTriggerOnImageChange,
-							ImageChangeParams: &deployv1.DeploymentTriggerImageChangeParams{},
-						},
-					},
-				},
-			},
-			Internal: &deployapi.DeploymentConfig{},
-			Ok: func(out runtime.Object) bool {
-				obj := out.(*deployapi.DeploymentConfig)
-				t.Logf("%#v", obj.Spec.Triggers[0].ImageChangeParams)
-				return obj.Spec.Triggers[0].ImageChangeParams.From.Kind == "ImageStreamTag"
-			},
-		},
-	}
-
-	for i, test := range testCases {
-		if err := kapi.Scheme.Convert(test.External, test.Internal, nil); err != nil {
-			t.Fatal(err)
-		}
-		if !test.Ok(test.Internal) {
-			t.Errorf("%d: did not match: %#v", i, test.Internal)
-		}
-	}
 }

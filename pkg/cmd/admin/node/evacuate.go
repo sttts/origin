@@ -6,11 +6,12 @@ import (
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
-	kerrors "k8s.io/kubernetes/pkg/util/errors"
 )
 
 const (
@@ -43,7 +44,7 @@ func (e *EvacuateOptions) AddFlags(cmd *cobra.Command) {
 
 	flags.BoolVar(&e.DryRun, flagDryRun, e.DryRun, "Show pods that will be migrated. Optional param for --evacuate")
 	flags.BoolVar(&e.Force, flagForce, e.Force, "Delete pods not backed by replication controller. Optional param for --evacuate")
-	flags.Int64Var(&e.GracePeriod, flagGracePeriod, e.GracePeriod, "Grace period (seconds) for pods being deleted. Optional param for --evacuate")
+	flags.Int64Var(&e.GracePeriod, flagGracePeriod, e.GracePeriod, "Grace period (seconds) for pods being deleted. Ignored if negative. Optional param for --evacuate")
 
 }
 
@@ -85,31 +86,78 @@ func (e *EvacuateOptions) RunEvacuate(node *kapi.Node) error {
 	fieldSelector := fields.Set{GetPodHostFieldLabel(node.TypeMeta.APIVersion): node.ObjectMeta.Name}.AsSelector()
 
 	// Filter all pods that satisfies pod label selector and belongs to the given node
-	pods, err := e.Options.Kclient.Pods(kapi.NamespaceAll).List(kapi.ListOptions{LabelSelector: labelSelector, FieldSelector: fieldSelector})
+	pods, err := e.Options.KubeClient.Core().Pods(metav1.NamespaceAll).List(metav1.ListOptions{LabelSelector: labelSelector.String(), FieldSelector: fieldSelector.String()})
 	if err != nil {
 		return err
 	}
-	rcs, err := e.Options.Kclient.ReplicationControllers(kapi.NamespaceAll).List(kapi.ListOptions{})
+	if len(pods.Items) == 0 {
+		fmt.Fprint(e.Options.ErrWriter, "\nNo pods found on node: ", node.ObjectMeta.Name, "\n\n")
+		return nil
+	}
+	rcs, err := e.Options.KubeClient.Core().ReplicationControllers(metav1.NamespaceAll).List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
 
-	printerWithHeaders, printerNoHeaders, err := e.Options.GetPrintersByResource(unversioned.GroupVersionResource{Resource: "pod"})
+	rss, err := e.Options.KubeClient.Extensions().ReplicaSets(metav1.NamespaceAll).List(metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+
+	dss, err := e.Options.KubeClient.Extensions().DaemonSets(metav1.NamespaceAll).List(metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+
+	jobs, err := e.Options.KubeClient.Batch().Jobs(metav1.NamespaceAll).List(metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+
+	printer, err := e.Options.GetPrintersByResource(schema.GroupVersionResource{Resource: "pod"})
 	if err != nil {
 		return err
 	}
 
 	errList := []error{}
 	firstPod := true
-	numPodsWithNoRC := 0
-	deleteOptions := e.makeDeleteOptions()
+	numUnmanagedPods := 0
+
+	var deleteOptions *metav1.DeleteOptions
+	if e.GracePeriod >= 0 {
+		deleteOptions = e.makeDeleteOptions()
+	}
 
 	for _, pod := range pods.Items {
-		foundrc := false
+		isManaged := false
 		for _, rc := range rcs.Items {
 			selector := labels.SelectorFromSet(rc.Spec.Selector)
 			if selector.Matches(labels.Set(pod.Labels)) {
-				foundrc = true
+				isManaged = true
+				break
+			}
+		}
+
+		for _, rs := range rss.Items {
+			selector := labels.SelectorFromSet(rs.Spec.Selector.MatchLabels)
+			if selector.Matches(labels.Set(pod.Labels)) {
+				isManaged = true
+				break
+			}
+		}
+
+		for _, ds := range dss.Items {
+			selector := labels.SelectorFromSet(ds.Spec.Selector.MatchLabels)
+			if selector.Matches(labels.Set(pod.Labels)) {
+				isManaged = true
+				break
+			}
+		}
+
+		for _, job := range jobs.Items {
+			selector := labels.SelectorFromSet(job.Spec.Selector.MatchLabels)
+			if selector.Matches(labels.Set(pod.Labels)) {
+				isManaged = true
 				break
 			}
 		}
@@ -117,23 +165,22 @@ func (e *EvacuateOptions) RunEvacuate(node *kapi.Node) error {
 		if firstPod {
 			fmt.Fprint(e.Options.ErrWriter, "\nMigrating these pods on node: ", node.ObjectMeta.Name, "\n\n")
 			firstPod = false
-			printerWithHeaders.PrintObj(&pod, e.Options.Writer)
-		} else {
-			printerNoHeaders.PrintObj(&pod, e.Options.Writer)
 		}
 
-		if foundrc || e.Force {
-			if err := e.Options.Kclient.Pods(pod.Namespace).Delete(pod.Name, deleteOptions); err != nil {
+		printer.PrintObj(&pod, e.Options.Writer)
+
+		if isManaged || e.Force {
+			if err := e.Options.KubeClient.Core().Pods(pod.Namespace).Delete(pod.Name, deleteOptions); err != nil {
 				glog.Errorf("Unable to delete a pod: %+v, error: %v", pod, err)
 				errList = append(errList, err)
 				continue
 			}
 		} else { // Pods without replication controller and no --force option
-			numPodsWithNoRC++
+			numUnmanagedPods++
 		}
 	}
-	if numPodsWithNoRC > 0 {
-		err := fmt.Errorf(`Unable to evacuate some pods because they are not backed by replication controller.
+	if numUnmanagedPods > 0 {
+		err := fmt.Errorf(`Unable to evacuate some pods because they are not managed by replication controller or replica set or deaemon set.
 Suggested options:
 - You can list bare pods in json/yaml format using '--list-pods -o json|yaml'
 - Force deletion of bare pods with --force option to --evacuate
@@ -149,6 +196,6 @@ Suggested options:
 }
 
 // makeDeleteOptions creates the delete options that will be used for pod evacuation.
-func (e *EvacuateOptions) makeDeleteOptions() *kapi.DeleteOptions {
-	return &kapi.DeleteOptions{GracePeriodSeconds: &e.GracePeriod}
+func (e *EvacuateOptions) makeDeleteOptions() *metav1.DeleteOptions {
+	return &metav1.DeleteOptions{GracePeriodSeconds: &e.GracePeriod}
 }

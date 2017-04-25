@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/openshift/origin/pkg/cmd/server/api"
-	"k8s.io/kubernetes/pkg/util/sets"
-	"k8s.io/kubernetes/pkg/util/validation/field"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 // ValidateEtcdConnectionInfo validates the connection info. If a server EtcdConfig is provided,
@@ -42,7 +42,7 @@ func ValidateEtcdConnectionInfo(config api.EtcdConnectionInfo, server *api.EtcdC
 		// Require a client cert to connect to an etcd that requires client certs
 		if len(server.ServingInfo.ClientCA) > 0 {
 			if len(config.ClientCert.CertFile) == 0 {
-				allErrs = append(allErrs, field.Required(fldPath.Child("certFile"), ""))
+				allErrs = append(allErrs, field.Required(fldPath.Child("certFile"), "A client certificate must be provided for this etcd server"))
 			}
 		}
 

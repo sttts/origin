@@ -3,11 +3,13 @@ package etcd
 import (
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	etcdtesting "k8s.io/apiserver/pkg/storage/etcd/testing"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/registrytest"
-	etcdtesting "k8s.io/kubernetes/pkg/storage/etcd/testing"
 
 	"github.com/openshift/origin/pkg/build/api"
 	_ "github.com/openshift/origin/pkg/build/api/install"
@@ -31,7 +33,7 @@ func TestStorage(t *testing.T) {
 
 func validBuildConfig() *api.BuildConfig {
 	return &api.BuildConfig{
-		ObjectMeta: kapi.ObjectMeta{Name: "configid"},
+		ObjectMeta: metav1.ObjectMeta{Name: "configid"},
 		Spec: api.BuildConfigSpec{
 			RunPolicy: api.BuildRunPolicySerial,
 			CommonSpec: api.CommonSpec{
@@ -57,6 +59,7 @@ func validBuildConfig() *api.BuildConfig {
 func TestCreate(t *testing.T) {
 	storage, server := newStorage(t)
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 	test := registrytest.New(t, storage.Store)
 	valid := validBuildConfig()
 	valid.Name = ""
@@ -68,9 +71,32 @@ func TestCreate(t *testing.T) {
 	)
 }
 
+func TestUpdate(t *testing.T) {
+	storage, server := newStorage(t)
+	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
+	test := registrytest.New(t, storage.Store)
+	test.TestUpdate(
+		validBuildConfig(),
+		// updateFunc
+		func(obj runtime.Object) runtime.Object {
+			object := obj.(*api.BuildConfig)
+			object.Spec.CommonSpec.Source.Git.URI = "http://github.com/my/otherrepo"
+			return object
+		},
+		// invalid updateFunc
+		func(obj runtime.Object) runtime.Object {
+			object := obj.(*api.BuildConfig)
+			object.Spec.CommonSpec.Source.Git.URI = ""
+			return object
+		},
+	)
+}
+
 func TestList(t *testing.T) {
 	storage, server := newStorage(t)
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 	test := registrytest.New(t, storage.Store)
 	test.TestList(
 		validBuildConfig(),
@@ -80,6 +106,7 @@ func TestList(t *testing.T) {
 func TestGet(t *testing.T) {
 	storage, server := newStorage(t)
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 	test := registrytest.New(t, storage.Store)
 	test.TestGet(
 		validBuildConfig(),
@@ -89,6 +116,7 @@ func TestGet(t *testing.T) {
 func TestDelete(t *testing.T) {
 	storage, server := newStorage(t)
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 	test := registrytest.New(t, storage.Store)
 	test.TestDelete(
 		validBuildConfig(),
@@ -98,6 +126,7 @@ func TestDelete(t *testing.T) {
 func TestWatch(t *testing.T) {
 	storage, server := newStorage(t)
 	defer server.Terminate(t)
+	defer storage.Store.DestroyFunc()
 	test := registrytest.New(t, storage.Store)
 
 	valid := validBuildConfig()

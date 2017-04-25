@@ -4,10 +4,10 @@ import (
 	"sort"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/conversion"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/conversion"
-	"k8s.io/kubernetes/pkg/runtime"
 
 	oapi "github.com/openshift/origin/pkg/api"
 	newer "github.com/openshift/origin/pkg/image/api"
@@ -32,7 +32,7 @@ func Convert_api_Image_To_v1_Image(in *newer.Image, out *Image, s conversion.Sco
 		gvString = "/" + gvString
 	}
 
-	version, err := unversioned.ParseGroupVersion(gvString)
+	version, err := schema.ParseGroupVersion(gvString)
 	if err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func Convert_v1_Image_To_api_Image(in *Image, out *newer.Image, s conversion.Sco
 	}
 	if len(in.DockerImageMetadata.Raw) > 0 {
 		// TODO: add a way to default the expected kind and version of an object if not set
-		obj, err := api.Scheme.New(unversioned.GroupVersionKind{Version: version, Kind: "DockerImage"})
+		obj, err := api.Scheme.New(schema.GroupVersionKind{Version: version, Kind: "DockerImage"})
 		if err != nil {
 			return err
 		}
@@ -209,7 +209,7 @@ func Convert_api_TagEventListArray_to_v1_NamedTagEventListArray(in *map[string]n
 	for key := range *in {
 		allKeys = append(allKeys, key)
 	}
-	sort.Strings(allKeys)
+	newer.PrioritizeTags(allKeys)
 
 	for _, key := range allKeys {
 		newTagEventList := (*in)[key]
@@ -255,7 +255,7 @@ func Convert_api_TagReferenceMap_to_v1_TagReferenceArray(in *map[string]newer.Ta
 	return nil
 }
 
-func addConversionFuncs(scheme *runtime.Scheme) {
+func addConversionFuncs(scheme *runtime.Scheme) error {
 	err := scheme.AddConversionFuncs(
 		Convert_v1_NamedTagEventListArray_to_api_TagEventListArray,
 		Convert_api_TagEventListArray_to_v1_NamedTagEventListArray,
@@ -273,18 +273,19 @@ func addConversionFuncs(scheme *runtime.Scheme) {
 	)
 	if err != nil {
 		// If one of the conversion functions is malformed, detect it immediately.
-		panic(err)
+		return err
 	}
 
 	if err := scheme.AddFieldLabelConversionFunc("v1", "Image",
 		oapi.GetFieldLabelConversionFunc(newer.ImageToSelectableFields(&newer.Image{}), nil),
 	); err != nil {
-		panic(err)
+		return err
 	}
 
 	if err := scheme.AddFieldLabelConversionFunc("v1", "ImageStream",
 		oapi.GetFieldLabelConversionFunc(newer.ImageStreamToSelectableFields(&newer.ImageStream{}), map[string]string{"name": "metadata.name"}),
 	); err != nil {
-		panic(err)
+		return err
 	}
+	return nil
 }

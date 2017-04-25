@@ -8,9 +8,9 @@ import (
 
 	"github.com/ghodss/yaml"
 
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/diff"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/diff"
 
 	"github.com/openshift/origin/pkg/api/v1"
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
@@ -103,6 +103,10 @@ func TestCovers(t *testing.T) {
 	var registryAdmin *authorizationapi.ClusterRole
 	var registryEditor *authorizationapi.ClusterRole
 	var registryViewer *authorizationapi.ClusterRole
+	var systemMaster *authorizationapi.ClusterRole
+	var systemDiscovery *authorizationapi.ClusterRole
+	var clusterAdmin *authorizationapi.ClusterRole
+	var storageAdmin *authorizationapi.ClusterRole
 
 	for i := range allRoles {
 		role := allRoles[i]
@@ -119,6 +123,14 @@ func TestCovers(t *testing.T) {
 			registryEditor = &role
 		case bootstrappolicy.RegistryViewerRoleName:
 			registryViewer = &role
+		case bootstrappolicy.MasterRoleName:
+			systemMaster = &role
+		case bootstrappolicy.DiscoveryRoleName:
+			systemDiscovery = &role
+		case bootstrappolicy.ClusterAdminRoleName:
+			clusterAdmin = &role
+		case bootstrappolicy.StorageAdminRoleName:
+			storageAdmin = &role
 		}
 	}
 
@@ -134,10 +146,22 @@ func TestCovers(t *testing.T) {
 	if covers, miss := rulevalidation.Covers(admin.Rules, registryAdmin.Rules); !covers {
 		t.Errorf("failed to cover: %#v", miss)
 	}
+	if covers, miss := rulevalidation.Covers(clusterAdmin.Rules, storageAdmin.Rules); !covers {
+		t.Errorf("failed to cover: %#v", miss)
+	}
 	if covers, miss := rulevalidation.Covers(registryAdmin.Rules, registryEditor.Rules); !covers {
 		t.Errorf("failed to cover: %#v", miss)
 	}
 	if covers, miss := rulevalidation.Covers(registryAdmin.Rules, registryViewer.Rules); !covers {
+		t.Errorf("failed to cover: %#v", miss)
+	}
+
+	// Make sure we can auto-reconcile discovery
+	if covers, miss := rulevalidation.Covers(systemMaster.Rules, systemDiscovery.Rules); !covers {
+		t.Errorf("failed to cover: %#v", miss)
+	}
+	// Make sure the master has full permissions
+	if covers, miss := rulevalidation.Covers(systemMaster.Rules, clusterAdmin.Rules); !covers {
 		t.Errorf("failed to cover: %#v", miss)
 	}
 }

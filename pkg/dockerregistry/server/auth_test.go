@@ -1,24 +1,25 @@
 package server
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"testing"
 
 	"github.com/docker/distribution/registry/auth"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	restclient "k8s.io/client-go/rest"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/apimachinery/registered"
-	"k8s.io/kubernetes/pkg/client/restclient"
-	"k8s.io/kubernetes/pkg/runtime"
 
 	"github.com/docker/distribution/context"
 	"github.com/openshift/origin/pkg/api/latest"
 	"github.com/openshift/origin/pkg/authorization/api"
-	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 	userapi "github.com/openshift/origin/pkg/user/api"
 
 	// install all APIs
@@ -42,7 +43,7 @@ func TestVerifyImageStreamAccess(t *testing.T) {
 			// Test valid openshift bearer token but token *not* scoped for create operation
 			openshiftResponse: response{
 				200,
-				runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(registered.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{
+				runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{
 					Namespace: "foo",
 					Allowed:   false,
 					Reason:    "not authorized!",
@@ -54,7 +55,7 @@ func TestVerifyImageStreamAccess(t *testing.T) {
 			// Test valid openshift bearer token and token scoped for create operation
 			openshiftResponse: response{
 				200,
-				runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(registered.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{
+				runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{
 					Namespace: "foo",
 					Allowed:   true,
 					Reason:    "authorized!",
@@ -84,17 +85,22 @@ func TestVerifyImageStreamAccess(t *testing.T) {
 
 // TestAccessController tests complete integration of the v2 registry auth package.
 func TestAccessController(t *testing.T) {
-	options := map[string]interface{}{
-		"addr":       "https://openshift-example.com/osapi",
-		"apiVersion": latest.Version,
+	defaultOptions := map[string]interface{}{
+		"addr":        "https://openshift-example.com/osapi",
+		"apiVersion":  latest.Version,
+		RealmKey:      "myrealm",
+		TokenRealmKey: "http://tokenrealm.com",
 	}
 
 	tests := map[string]struct {
+		options            map[string]interface{}
 		access             []auth.Access
 		basicToken         string
+		bearerToken        string
 		openshiftResponses []response
 		expectedError      error
 		expectedChallenge  bool
+		expectedHeaders    http.Header
 		expectedRepoErr    string
 		expectedActions    []string
 	}{
@@ -103,6 +109,20 @@ func TestAccessController(t *testing.T) {
 			basicToken:        "",
 			expectedError:     ErrTokenRequired,
 			expectedChallenge: true,
+			expectedHeaders:   http.Header{"Www-Authenticate": []string{`Bearer realm="http://tokenrealm.com/openshift/token"`}},
+		},
+		"no token, autodetected tokenrealm": {
+			options: map[string]interface{}{
+				"addr":        "https://openshift-example.com/osapi",
+				"apiVersion":  latest.Version,
+				RealmKey:      "myrealm",
+				TokenRealmKey: "",
+			},
+			access:            []auth.Access{},
+			basicToken:        "",
+			expectedError:     ErrTokenRequired,
+			expectedChallenge: true,
+			expectedHeaders:   http.Header{"Www-Authenticate": []string{`Bearer realm="https://openshift-example.com/openshift/token"`}},
 		},
 		"invalid registry token": {
 			access: []auth.Access{{
@@ -111,14 +131,16 @@ func TestAccessController(t *testing.T) {
 			basicToken:        "ab-cd-ef-gh",
 			expectedError:     ErrTokenInvalid,
 			expectedChallenge: true,
+			expectedHeaders:   http.Header{"Www-Authenticate": []string{`Basic realm=myrealm,error="failed to decode credentials"`}},
 		},
-		"invalid openshift bearer token": {
+		"invalid openshift basic password": {
 			access: []auth.Access{{
 				Resource: auth.Resource{Type: "repository"},
 			}},
 			basicToken:        "abcdefgh",
-			expectedError:     ErrOpenShiftTokenRequired,
+			expectedError:     ErrTokenInvalid,
 			expectedChallenge: true,
+			expectedHeaders:   http.Header{"Www-Authenticate": []string{`Basic realm=myrealm,error="failed to decode credentials"`}},
 		},
 		"valid openshift token but invalid namespace": {
 			access: []auth.Access{{
@@ -128,15 +150,27 @@ func TestAccessController(t *testing.T) {
 				},
 				Action: "pull",
 			}},
-			basicToken:        "b3BlbnNoaWZ0OmF3ZXNvbWU=",
+			basicToken: "b3BlbnNoaWZ0OmF3ZXNvbWU=",
+			openshiftResponses: []response{
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &userapi.User{ObjectMeta: metav1.ObjectMeta{Name: "usr1"}})},
+			},
 			expectedError:     ErrNamespaceRequired,
 			expectedChallenge: false,
+			expectedActions: []string{
+				"GET /oapi/v1/users/~ (Authorization=Bearer awesome)",
+			},
 		},
 		"registry token but does not involve any repository operation": {
-			access:            []auth.Access{{}},
-			basicToken:        "b3BlbnNoaWZ0OmF3ZXNvbWU=",
+			access:     []auth.Access{{}},
+			basicToken: "b3BlbnNoaWZ0OmF3ZXNvbWU=",
+			openshiftResponses: []response{
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &userapi.User{ObjectMeta: metav1.ObjectMeta{Name: "usr1"}})},
+			},
 			expectedError:     ErrUnsupportedResource,
 			expectedChallenge: false,
+			expectedActions: []string{
+				"GET /oapi/v1/users/~ (Authorization=Bearer awesome)",
+			},
 		},
 		"registry token but does not involve any known action": {
 			access: []auth.Access{{
@@ -146,25 +180,32 @@ func TestAccessController(t *testing.T) {
 				},
 				Action: "blah",
 			}},
-			basicToken:        "b3BlbnNoaWZ0OmF3ZXNvbWU=",
+			basicToken: "b3BlbnNoaWZ0OmF3ZXNvbWU=",
+			openshiftResponses: []response{
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &userapi.User{ObjectMeta: metav1.ObjectMeta{Name: "usr1"}})},
+			},
 			expectedError:     ErrUnsupportedAction,
 			expectedChallenge: false,
+			expectedActions: []string{
+				"GET /oapi/v1/users/~ (Authorization=Bearer awesome)",
+			},
 		},
 		"docker login with invalid openshift creds": {
 			basicToken:         "b3BlbnNoaWZ0OmF3ZXNvbWU=",
 			openshiftResponses: []response{{403, ""}},
 			expectedError:      ErrOpenShiftAccessDenied,
 			expectedChallenge:  true,
-			expectedActions:    []string{"GET /oapi/v1/users/~"},
+			expectedHeaders:    http.Header{"Www-Authenticate": []string{`Basic realm=myrealm,error="access denied"`}},
+			expectedActions:    []string{"GET /oapi/v1/users/~ (Authorization=Bearer awesome)"},
 		},
 		"docker login with valid openshift creds": {
 			basicToken: "dXNyMTphd2Vzb21l",
 			openshiftResponses: []response{
-				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(registered.GroupOrDie(kapi.GroupName).GroupVersions[0]), &userapi.User{ObjectMeta: kapi.ObjectMeta{Name: "usr1"}})},
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &userapi.User{ObjectMeta: metav1.ObjectMeta{Name: "usr1"}})},
 			},
 			expectedError:     nil,
 			expectedChallenge: false,
-			expectedActions:   []string{"GET /oapi/v1/users/~"},
+			expectedActions:   []string{"GET /oapi/v1/users/~ (Authorization=Bearer awesome)"},
 		},
 		"error running subject access review": {
 			access: []auth.Access{{
@@ -176,11 +217,15 @@ func TestAccessController(t *testing.T) {
 			}},
 			basicToken: "b3BlbnNoaWZ0OmF3ZXNvbWU=",
 			openshiftResponses: []response{
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &userapi.User{ObjectMeta: metav1.ObjectMeta{Name: "usr1"}})},
 				{500, "Uh oh"},
 			},
-			expectedError:     errors.New("an error on the server has prevented the request from succeeding (post localSubjectAccessReviews)"),
+			expectedError:     errors.New("an error on the server (\"unknown\") has prevented the request from succeeding (post localSubjectAccessReviews)"),
 			expectedChallenge: false,
-			expectedActions:   []string{"POST /oapi/v1/namespaces/foo/localsubjectaccessreviews"},
+			expectedActions: []string{
+				"GET /oapi/v1/users/~ (Authorization=Bearer awesome)",
+				"POST /oapi/v1/namespaces/foo/localsubjectaccessreviews (Authorization=Bearer awesome)",
+			},
 		},
 		"valid openshift token but token not scoped for the given repo operation": {
 			access: []auth.Access{{
@@ -192,11 +237,16 @@ func TestAccessController(t *testing.T) {
 			}},
 			basicToken: "b3BlbnNoaWZ0OmF3ZXNvbWU=",
 			openshiftResponses: []response{
-				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(registered.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "foo", Allowed: false, Reason: "unauthorized!"})},
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &userapi.User{ObjectMeta: metav1.ObjectMeta{Name: "usr1"}})},
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "foo", Allowed: false, Reason: "unauthorized!"})},
 			},
 			expectedError:     ErrOpenShiftAccessDenied,
 			expectedChallenge: true,
-			expectedActions:   []string{"POST /oapi/v1/namespaces/foo/localsubjectaccessreviews"},
+			expectedHeaders:   http.Header{"Www-Authenticate": []string{`Basic realm=myrealm,error="access denied"`}},
+			expectedActions: []string{
+				"GET /oapi/v1/users/~ (Authorization=Bearer awesome)",
+				"POST /oapi/v1/namespaces/foo/localsubjectaccessreviews (Authorization=Bearer awesome)",
+			},
 		},
 		"partially valid openshift token": {
 			// Check all the different resource-type/verb combinations we allow to make sure they validate and continue to validate remaining Resource requests
@@ -208,18 +258,21 @@ func TestAccessController(t *testing.T) {
 			},
 			basicToken: "b3BlbnNoaWZ0OmF3ZXNvbWU=",
 			openshiftResponses: []response{
-				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(registered.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "foo", Allowed: true, Reason: "authorized!"})},
-				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(registered.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "bar", Allowed: true, Reason: "authorized!"})},
-				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(registered.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "", Allowed: true, Reason: "authorized!"})},
-				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(registered.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "baz", Allowed: false, Reason: "no!"})},
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &userapi.User{ObjectMeta: metav1.ObjectMeta{Name: "usr1"}})},
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "foo", Allowed: true, Reason: "authorized!"})},
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "bar", Allowed: true, Reason: "authorized!"})},
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "", Allowed: true, Reason: "authorized!"})},
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "baz", Allowed: false, Reason: "no!"})},
 			},
 			expectedError:     ErrOpenShiftAccessDenied,
 			expectedChallenge: true,
+			expectedHeaders:   http.Header{"Www-Authenticate": []string{`Basic realm=myrealm,error="access denied"`}},
 			expectedActions: []string{
-				"POST /oapi/v1/namespaces/foo/localsubjectaccessreviews",
-				"POST /oapi/v1/namespaces/bar/localsubjectaccessreviews",
-				"POST /oapi/v1/subjectaccessreviews",
-				"POST /oapi/v1/namespaces/baz/localsubjectaccessreviews",
+				"GET /oapi/v1/users/~ (Authorization=Bearer awesome)",
+				"POST /oapi/v1/namespaces/foo/localsubjectaccessreviews (Authorization=Bearer awesome)",
+				"POST /oapi/v1/namespaces/bar/localsubjectaccessreviews (Authorization=Bearer awesome)",
+				"POST /oapi/v1/subjectaccessreviews (Authorization=Bearer awesome)",
+				"POST /oapi/v1/namespaces/baz/localsubjectaccessreviews (Authorization=Bearer awesome)",
 			},
 		},
 		"deferred cross-mount error": {
@@ -233,17 +286,19 @@ func TestAccessController(t *testing.T) {
 			},
 			basicToken: "b3BlbnNoaWZ0OmF3ZXNvbWU=",
 			openshiftResponses: []response{
-				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(registered.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "pushrepo", Allowed: true, Reason: "authorized!"})},
-				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(registered.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "pushrepo", Allowed: true, Reason: "authorized!"})},
-				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(registered.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "fromrepo", Allowed: false, Reason: "no!"})},
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &userapi.User{ObjectMeta: metav1.ObjectMeta{Name: "usr1"}})},
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "pushrepo", Allowed: true, Reason: "authorized!"})},
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "pushrepo", Allowed: true, Reason: "authorized!"})},
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "fromrepo", Allowed: false, Reason: "no!"})},
 			},
 			expectedError:     nil,
 			expectedChallenge: false,
 			expectedRepoErr:   "fromrepo/bbb",
 			expectedActions: []string{
-				"POST /oapi/v1/namespaces/pushrepo/localsubjectaccessreviews",
-				"POST /oapi/v1/namespaces/pushrepo/localsubjectaccessreviews",
-				"POST /oapi/v1/namespaces/fromrepo/localsubjectaccessreviews",
+				"GET /oapi/v1/users/~ (Authorization=Bearer awesome)",
+				"POST /oapi/v1/namespaces/pushrepo/localsubjectaccessreviews (Authorization=Bearer awesome)",
+				"POST /oapi/v1/namespaces/pushrepo/localsubjectaccessreviews (Authorization=Bearer awesome)",
+				"POST /oapi/v1/namespaces/fromrepo/localsubjectaccessreviews (Authorization=Bearer awesome)",
 			},
 		},
 		"valid openshift token": {
@@ -256,11 +311,31 @@ func TestAccessController(t *testing.T) {
 			}},
 			basicToken: "b3BlbnNoaWZ0OmF3ZXNvbWU=",
 			openshiftResponses: []response{
-				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(registered.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "foo", Allowed: true, Reason: "authorized!"})},
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &userapi.User{ObjectMeta: metav1.ObjectMeta{Name: "usr1"}})},
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "foo", Allowed: true, Reason: "authorized!"})},
 			},
 			expectedError:     nil,
 			expectedChallenge: false,
-			expectedActions:   []string{"POST /oapi/v1/namespaces/foo/localsubjectaccessreviews"},
+			expectedActions: []string{
+				"GET /oapi/v1/users/~ (Authorization=Bearer awesome)",
+				"POST /oapi/v1/namespaces/foo/localsubjectaccessreviews (Authorization=Bearer awesome)",
+			},
+		},
+		"valid anonymous token": {
+			access: []auth.Access{{
+				Resource: auth.Resource{
+					Type: "repository",
+					Name: "foo/bar",
+				},
+				Action: "pull",
+			}},
+			bearerToken: "anonymous",
+			openshiftResponses: []response{
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Namespace: "foo", Allowed: true, Reason: "authorized!"})},
+			},
+			expectedError:     nil,
+			expectedChallenge: false,
+			expectedActions:   []string{"POST /oapi/v1/namespaces/foo/localsubjectaccessreviews (Authorization=)"},
 		},
 		"pruning": {
 			access: []auth.Access{
@@ -280,39 +355,56 @@ func TestAccessController(t *testing.T) {
 			},
 			basicToken: "b3BlbnNoaWZ0OmF3ZXNvbWU=",
 			openshiftResponses: []response{
-				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(registered.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Allowed: true, Reason: "authorized!"})},
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &userapi.User{ObjectMeta: metav1.ObjectMeta{Name: "usr1"}})},
+				{200, runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(kapi.Registry.GroupOrDie(kapi.GroupName).GroupVersions[0]), &api.SubjectAccessReviewResponse{Allowed: true, Reason: "authorized!"})},
 			},
 			expectedError:     nil,
 			expectedChallenge: false,
 			expectedActions: []string{
-				"POST /oapi/v1/subjectaccessreviews",
+				"GET /oapi/v1/users/~ (Authorization=Bearer awesome)",
+				"POST /oapi/v1/subjectaccessreviews (Authorization=Bearer awesome)",
 			},
 		},
 	}
 
 	for k, test := range tests {
+		options := test.options
+		if options == nil {
+			options = defaultOptions
+		}
+		reqURL, err := url.Parse(options["addr"].(string))
+		if err != nil {
+			t.Fatal(err)
+		}
 		req, err := http.NewRequest("GET", options["addr"].(string), nil)
 		if err != nil {
 			t.Errorf("%s: %v", k, err)
 			continue
 		}
+		// Simulate a secure request to the specified server
+		req.Host = reqURL.Host
+		req.TLS = &tls.ConnectionState{ServerName: reqURL.Host}
 		if len(test.basicToken) > 0 {
 			req.Header.Set("Authorization", fmt.Sprintf("Basic %s", test.basicToken))
 		}
-		ctx := context.WithValue(context.Background(), "http.request", req)
+		if len(test.bearerToken) > 0 {
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", test.bearerToken))
+		}
 
 		server, actions := simulateOpenShiftMaster(test.openshiftResponses)
-		DefaultRegistryClient = NewRegistryClient(&clientcmd.Config{
-			CommonConfig: restclient.Config{
-				Host:     server.URL,
-				Insecure: true,
+		options[AccessControllerOptionParams] = AccessControllerParams{
+			Logger: context.GetLogger(context.Background()),
+			SafeClientConfig: restclient.Config{
+				Host:            server.URL,
+				TLSClientConfig: restclient.TLSClientConfig{Insecure: true},
 			},
-			SkipEnv: true,
-		})
+		}
 		accessController, err := newAccessController(options)
 		if err != nil {
 			t.Fatal(err)
 		}
+		ctx := context.Background()
+		ctx = context.WithRequest(ctx, req)
 		authCtx, err := accessController.Authorized(ctx, test.access...)
 		server.Close()
 
@@ -334,11 +426,11 @@ func TestAccessController(t *testing.T) {
 				t.Errorf("%s: expected auth context but got nil", k)
 				continue
 			}
-			if !AuthPerformed(authCtx) {
+			if !authPerformed(authCtx) {
 				t.Errorf("%s: expected AuthPerformed to be true", k)
 				continue
 			}
-			deferredErrors, hasDeferred := DeferredErrorsFrom(authCtx)
+			deferredErrors, hasDeferred := deferredErrorsFrom(authCtx)
 			if len(test.expectedRepoErr) > 0 {
 				if !hasDeferred || deferredErrors[test.expectedRepoErr] == nil {
 					t.Errorf("%s: expected deferred error for repo %s, got none", k, test.expectedRepoErr)
@@ -351,10 +443,18 @@ func TestAccessController(t *testing.T) {
 				}
 			}
 		} else {
-			_, isChallenge := err.(auth.Challenge)
+			challengeErr, isChallenge := err.(auth.Challenge)
 			if test.expectedChallenge != isChallenge {
 				t.Errorf("%s: expected challenge=%v, accessController returned challenge=%v", k, test.expectedChallenge, isChallenge)
 				continue
+			}
+			if isChallenge {
+				recorder := httptest.NewRecorder()
+				challengeErr.SetHeaders(recorder)
+				if !reflect.DeepEqual(recorder.HeaderMap, test.expectedHeaders) {
+					t.Errorf("%s: expected headers\n%#v\ngot\n%#v", k, test.expectedHeaders, recorder.HeaderMap)
+					continue
+				}
 			}
 
 			if err.Error() != test.expectedError.Error() {
@@ -386,7 +486,7 @@ func simulateOpenShiftMaster(responses []response) (*httptest.Server, *[]string)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(response.code)
 		fmt.Fprintln(w, response.body)
-		actions = append(actions, r.Method+" "+r.URL.Path)
+		actions = append(actions, fmt.Sprintf(`%s %s (Authorization=%s)`, r.Method, r.URL.Path, r.Header.Get("Authorization")))
 	}))
 	return server, &actions
 }

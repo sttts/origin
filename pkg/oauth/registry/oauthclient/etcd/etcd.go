@@ -1,53 +1,38 @@
 package etcd
 
 import (
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apiserver/pkg/registry/generic"
+	"k8s.io/apiserver/pkg/registry/generic/registry"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
-	"k8s.io/kubernetes/pkg/registry/generic"
-	"k8s.io/kubernetes/pkg/registry/generic/registry"
-	"k8s.io/kubernetes/pkg/runtime"
 
 	"github.com/openshift/origin/pkg/oauth/api"
 	"github.com/openshift/origin/pkg/oauth/registry/oauthclient"
-	"github.com/openshift/origin/pkg/util"
 	"github.com/openshift/origin/pkg/util/restoptions"
 )
 
 // rest implements a RESTStorage for oauth clients against etcd
 type REST struct {
-	registry.Store
+	*registry.Store
 }
-
-const EtcdPrefix = "/oauth/clients"
 
 // NewREST returns a RESTStorage object that will work against oauth clients
 func NewREST(optsGetter restoptions.Getter) (*REST, error) {
-
 	store := &registry.Store{
-		NewFunc:     func() runtime.Object { return &api.OAuthClient{} },
-		NewListFunc: func() runtime.Object { return &api.OAuthClientList{} },
-		KeyRootFunc: func(ctx kapi.Context) string {
-			return EtcdPrefix
-		},
-		KeyFunc: func(ctx kapi.Context, name string) (string, error) {
-			return util.NoNamespaceKeyFunc(ctx, EtcdPrefix, name)
-		},
-		ObjectNameFunc: func(obj runtime.Object) (string, error) {
-			return obj.(*api.OAuthClient).Name, nil
-		},
-		PredicateFunc: func(label labels.Selector, field fields.Selector) generic.Matcher {
-			return oauthclient.Matcher(label, field)
-		},
+		Copier:            kapi.Scheme,
+		NewFunc:           func() runtime.Object { return &api.OAuthClient{} },
+		NewListFunc:       func() runtime.Object { return &api.OAuthClientList{} },
+		PredicateFunc:     oauthclient.Matcher,
 		QualifiedResource: api.Resource("oauthclients"),
 
 		CreateStrategy: oauthclient.Strategy,
 		UpdateStrategy: oauthclient.Strategy,
 	}
 
-	if err := restoptions.ApplyOptions(optsGetter, store, EtcdPrefix); err != nil {
+	options := &generic.StoreOptions{RESTOptions: optsGetter, AttrFunc: oauthclient.GetAttrs}
+	if err := store.CompleteWithOptions(options); err != nil {
 		return nil, err
 	}
 
-	return &REST{*store}, nil
+	return &REST{store}, nil
 }

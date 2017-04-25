@@ -3,14 +3,15 @@ package imagestreamtag
 import (
 	"fmt"
 
-	kapi "k8s.io/kubernetes/pkg/api"
-	kapierrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/rest"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/runtime"
+	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/registry/rest"
 
 	oapi "github.com/openshift/origin/pkg/api"
-	"github.com/openshift/origin/pkg/image/api"
+	imageapi "github.com/openshift/origin/pkg/image/api"
 	"github.com/openshift/origin/pkg/image/registry/image"
 	"github.com/openshift/origin/pkg/image/registry/imagestream"
 )
@@ -27,35 +28,41 @@ func NewREST(imageRegistry image.Registry, imageStreamRegistry imagestream.Regis
 	return &REST{imageRegistry: imageRegistry, imageStreamRegistry: imageStreamRegistry}
 }
 
+var _ rest.Creater = &REST{}
+var _ rest.Lister = &REST{}
+var _ rest.Getter = &REST{}
+var _ rest.Deleter = &REST{}
+var _ rest.Updater = &REST{}
+
 // New is only implemented to make REST implement RESTStorage
 func (r *REST) New() runtime.Object {
-	return &api.ImageStreamTag{}
+	return &imageapi.ImageStreamTag{}
 }
 
 // NewList returns a new list object
 func (r *REST) NewList() runtime.Object {
-	return &api.ImageStreamTagList{}
+	return &imageapi.ImageStreamTagList{}
 }
 
 // nameAndTag splits a string into its name component and tag component, and returns an error
 // if the string is not in the right form.
 func nameAndTag(id string) (name string, tag string, err error) {
-	name, tag, err = api.ParseImageStreamTagName(id)
+	name, tag, err = imageapi.ParseImageStreamTagName(id)
 	if err != nil {
 		err = kapierrors.NewBadRequest("ImageStreamTags must be retrieved with <name>:<tag>")
 	}
 	return
 }
 
-func (r *REST) List(ctx kapi.Context, options *kapi.ListOptions) (runtime.Object, error) {
+func (r *REST) List(ctx apirequest.Context, options *metainternal.ListOptions) (runtime.Object, error) {
 	imageStreams, err := r.imageStreamRegistry.ListImageStreams(ctx, options)
 	if err != nil {
 		return nil, err
 	}
 
-	matcher := MatchImageStreamTag(oapi.ListOptionsToSelectors(options))
+	matcher := MatchImageStreamTag(oapi.InternalListOptionsToSelectors(options))
 
-	list := &api.ImageStreamTagList{}
+	list := &imageapi.ImageStreamTagList{}
 	for _, currIS := range imageStreams.Items {
 		for currTag := range currIS.Status.Tags {
 			istag, err := newISTag(currTag, &currIS, nil, false)
@@ -80,13 +87,13 @@ func (r *REST) List(ctx kapi.Context, options *kapi.ListOptions) (runtime.Object
 }
 
 // Get retrieves an image that has been tagged by stream and tag. `id` is of the format <stream name>:<tag>.
-func (r *REST) Get(ctx kapi.Context, id string) (runtime.Object, error) {
+func (r *REST) Get(ctx apirequest.Context, id string, options *metav1.GetOptions) (runtime.Object, error) {
 	name, tag, err := nameAndTag(id)
 	if err != nil {
 		return nil, err
 	}
 
-	imageStream, err := r.imageStreamRegistry.GetImageStream(ctx, name)
+	imageStream, err := r.imageStreamRegistry.GetImageStream(ctx, name, options)
 	if err != nil {
 		return nil, err
 	}
@@ -99,29 +106,87 @@ func (r *REST) Get(ctx kapi.Context, id string) (runtime.Object, error) {
 	return newISTag(tag, imageStream, image, false)
 }
 
-func (r *REST) Update(ctx kapi.Context, tagName string, objInfo rest.UpdatedObjectInfo) (runtime.Object, bool, error) {
+func (r *REST) Create(ctx apirequest.Context, obj runtime.Object) (runtime.Object, error) {
+	istag, ok := obj.(*imageapi.ImageStreamTag)
+	if !ok {
+		return nil, kapierrors.NewBadRequest(fmt.Sprintf("obj is not an ImageStreamTag: %#v", obj))
+	}
+	if err := rest.BeforeCreate(Strategy, ctx, obj); err != nil {
+		return nil, err
+	}
+	namespace, ok := apirequest.NamespaceFrom(ctx)
+	if !ok {
+		return nil, kapierrors.NewBadRequest("a namespace must be specified to import images")
+	}
+
+	imageStreamName, imageTag, ok := imageapi.SplitImageStreamTag(istag.Name)
+	if !ok {
+		return nil, fmt.Errorf("%q must be of the form <stream_name>:<tag>", istag.Name)
+	}
+
+	target, err := r.imageStreamRegistry.GetImageStream(ctx, imageStreamName, &metav1.GetOptions{})
+	if err != nil {
+		if !kapierrors.IsNotFound(err) {
+			return nil, err
+		}
+
+		// try to create the target if it doesn't exist
+		target = &imageapi.ImageStream{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      imageStreamName,
+				Namespace: namespace,
+			},
+		}
+	}
+
+	if target.Spec.Tags == nil {
+		target.Spec.Tags = make(map[string]imageapi.TagReference)
+	}
+
+	// The user wants to symlink a tag.
+	_, exists := target.Spec.Tags[imageTag]
+	if exists {
+		return nil, kapierrors.NewAlreadyExists(imageapi.Resource("imagestreamtag"), istag.Name)
+	}
+	target.Spec.Tags[imageTag] = *istag.Tag
+
+	// Check the stream creation timestamp and make sure we will not
+	// create a new image stream while deleting.
+	if target.CreationTimestamp.IsZero() {
+		_, err = r.imageStreamRegistry.CreateImageStream(ctx, target)
+	} else {
+		_, err = r.imageStreamRegistry.UpdateImageStream(ctx, target)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return istag, nil
+}
+
+func (r *REST) Update(ctx apirequest.Context, tagName string, objInfo rest.UpdatedObjectInfo) (runtime.Object, bool, error) {
 	name, tag, err := nameAndTag(tagName)
 	if err != nil {
 		return nil, false, err
 	}
 
 	create := false
-	imageStream, err := r.imageStreamRegistry.GetImageStream(ctx, name)
+	imageStream, err := r.imageStreamRegistry.GetImageStream(ctx, name, &metav1.GetOptions{})
 	if err != nil {
 		if !kapierrors.IsNotFound(err) {
 			return nil, false, err
 		}
-		namespace, ok := kapi.NamespaceFrom(ctx)
+		namespace, ok := apirequest.NamespaceFrom(ctx)
 		if !ok {
 			return nil, false, kapierrors.NewBadRequest("namespace is required on ImageStreamTags")
 		}
-		imageStream = &api.ImageStream{
-			ObjectMeta: kapi.ObjectMeta{
+		imageStream = &imageapi.ImageStream{
+			ObjectMeta: metav1.ObjectMeta{
 				Namespace: namespace,
 				Name:      name,
 			},
 		}
-		kapi.FillObjectMetaSystemFields(ctx, &imageStream.ObjectMeta)
+		rest.FillObjectMetaSystemFields(ctx, &imageStream.ObjectMeta)
 		create = true
 	}
 
@@ -136,7 +201,7 @@ func (r *REST) Update(ctx kapi.Context, tagName string, objInfo rest.UpdatedObje
 		return nil, false, err
 	}
 
-	istag, ok := obj.(*api.ImageStreamTag)
+	istag, ok := obj.(*imageapi.ImageStreamTag)
 	if !ok {
 		return nil, false, kapierrors.NewBadRequest(fmt.Sprintf("obj is not an ImageStreamTag: %#v", obj))
 	}
@@ -148,10 +213,10 @@ func (r *REST) Update(ctx kapi.Context, tagName string, objInfo rest.UpdatedObje
 		istag.ResourceVersion = imageStream.ResourceVersion
 	case len(imageStream.ResourceVersion) == 0:
 		// image stream did not exist, cannot update
-		return nil, false, kapierrors.NewNotFound(api.Resource("imagestreamtags"), tagName)
+		return nil, false, kapierrors.NewNotFound(imageapi.Resource("imagestreamtags"), tagName)
 	case imageStream.ResourceVersion != istag.ResourceVersion:
 		// conflicting input and output
-		return nil, false, kapierrors.NewConflict(api.Resource("imagestreamtags"), istag.Name, fmt.Errorf("another caller has updated the resource version to %s", imageStream.ResourceVersion))
+		return nil, false, kapierrors.NewConflict(imageapi.Resource("imagestreamtags"), istag.Name, fmt.Errorf("another caller has updated the resource version to %s", imageStream.ResourceVersion))
 	}
 
 	if create {
@@ -166,7 +231,7 @@ func (r *REST) Update(ctx kapi.Context, tagName string, objInfo rest.UpdatedObje
 
 	// update the spec tag
 	if imageStream.Spec.Tags == nil {
-		imageStream.Spec.Tags = map[string]api.TagReference{}
+		imageStream.Spec.Tags = map[string]imageapi.TagReference{}
 	}
 	tagRef, exists := imageStream.Spec.Tags[tag]
 	// if the caller set tag, override the spec tag
@@ -178,7 +243,7 @@ func (r *REST) Update(ctx kapi.Context, tagName string, objInfo rest.UpdatedObje
 	imageStream.Spec.Tags[tag] = tagRef
 
 	// mutate the image stream
-	var newImageStream *api.ImageStream
+	var newImageStream *imageapi.ImageStream
 	if create {
 		newImageStream, err = r.imageStreamRegistry.CreateImageStream(ctx, imageStream)
 	} else {
@@ -202,13 +267,13 @@ func (r *REST) Update(ctx kapi.Context, tagName string, objInfo rest.UpdatedObje
 // Delete removes a tag from a stream. `id` is of the format <stream name>:<tag>.
 // The associated image that the tag points to is *not* deleted.
 // The tag history remains intact and is not deleted.
-func (r *REST) Delete(ctx kapi.Context, id string) (runtime.Object, error) {
+func (r *REST) Delete(ctx apirequest.Context, id string) (runtime.Object, error) {
 	name, tag, err := nameAndTag(id)
 	if err != nil {
 		return nil, err
 	}
 
-	stream, err := r.imageStreamRegistry.GetImageStream(ctx, name)
+	stream, err := r.imageStreamRegistry.GetImageStream(ctx, name, &metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -228,43 +293,43 @@ func (r *REST) Delete(ctx kapi.Context, id string) (runtime.Object, error) {
 	}
 
 	if notFound {
-		return nil, kapierrors.NewNotFound(api.Resource("imagestreamtags"), tag)
+		return nil, kapierrors.NewNotFound(imageapi.Resource("imagestreamtags"), tag)
 	}
 
 	if _, err = r.imageStreamRegistry.UpdateImageStream(ctx, stream); err != nil {
 		return nil, fmt.Errorf("cannot remove tag from image stream: %v", err)
 	}
 
-	return &unversioned.Status{Status: unversioned.StatusSuccess}, nil
+	return &metav1.Status{Status: metav1.StatusSuccess}, nil
 }
 
 // imageFor retrieves the most recent image for a tag in a given imageStreem.
-func (r *REST) imageFor(ctx kapi.Context, tag string, imageStream *api.ImageStream) (*api.Image, error) {
-	event := api.LatestTaggedImage(imageStream, tag)
+func (r *REST) imageFor(ctx apirequest.Context, tag string, imageStream *imageapi.ImageStream) (*imageapi.Image, error) {
+	event := imageapi.LatestTaggedImage(imageStream, tag)
 	if event == nil || len(event.Image) == 0 {
-		return nil, kapierrors.NewNotFound(api.Resource("imagestreamtags"), api.JoinImageStreamTag(imageStream.Name, tag))
+		return nil, kapierrors.NewNotFound(imageapi.Resource("imagestreamtags"), imageapi.JoinImageStreamTag(imageStream.Name, tag))
 	}
 
-	return r.imageRegistry.GetImage(ctx, event.Image)
+	return r.imageRegistry.GetImage(ctx, event.Image, &metav1.GetOptions{})
 }
 
 // newISTag initializes an image stream tag from an image stream and image. The allowEmptyEvent will create a tag even
 // in the event that the status tag does does not exist yet (no image has successfully been tagged) or the image is nil.
-func newISTag(tag string, imageStream *api.ImageStream, image *api.Image, allowEmptyEvent bool) (*api.ImageStreamTag, error) {
-	istagName := api.JoinImageStreamTag(imageStream.Name, tag)
+func newISTag(tag string, imageStream *imageapi.ImageStream, image *imageapi.Image, allowEmptyEvent bool) (*imageapi.ImageStreamTag, error) {
+	istagName := imageapi.JoinImageStreamTag(imageStream.Name, tag)
 
-	event := api.LatestTaggedImage(imageStream, tag)
+	event := imageapi.LatestTaggedImage(imageStream, tag)
 	if event == nil || len(event.Image) == 0 {
 		if !allowEmptyEvent {
-			return nil, kapierrors.NewNotFound(api.Resource("imagestreamtags"), istagName)
+			return nil, kapierrors.NewNotFound(imageapi.Resource("imagestreamtags"), istagName)
 		}
-		event = &api.TagEvent{
+		event = &imageapi.TagEvent{
 			Created: imageStream.CreationTimestamp,
 		}
 	}
 
-	ist := &api.ImageStreamTag{
-		ObjectMeta: kapi.ObjectMeta{
+	ist := &imageapi.ImageStreamTag{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace:         imageStream.Namespace,
 			Name:              istagName,
 			CreationTimestamp: event.Created,
@@ -304,13 +369,14 @@ func newISTag(tag string, imageStream *api.ImageStream, image *api.Image, allowE
 	}
 
 	if image != nil {
-		if err := api.ImageWithMetadata(image); err != nil {
+		if err := imageapi.ImageWithMetadata(image); err != nil {
 			return nil, err
 		}
 		image.DockerImageManifest = ""
+		image.DockerImageConfig = ""
 		ist.Image = *image
 	} else {
-		ist.Image = api.Image{}
+		ist.Image = imageapi.Image{}
 		ist.Image.Name = event.Image
 	}
 

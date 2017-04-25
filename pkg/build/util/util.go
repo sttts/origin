@@ -5,8 +5,9 @@ import (
 	"strconv"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/labels"
 
 	"github.com/golang/glog"
 	buildapi "github.com/openshift/origin/pkg/build/api"
@@ -39,23 +40,6 @@ func GetInputReference(strategy buildapi.BuildStrategy) *kapi.ObjectReference {
 	default:
 		return nil
 	}
-}
-
-// NameFromImageStream returns a concatenated name representing an ImageStream[Tag/Image]
-// reference.  If the reference does not contain a Namespace, the namespace parameter
-// is used instead.
-func NameFromImageStream(namespace string, ref *kapi.ObjectReference, tag string) string {
-	var ret string
-	if ref.Namespace == "" {
-		ret = namespace
-	} else {
-		ret = ref.Namespace
-	}
-	ret = ret + "/" + ref.Name
-	if tag != "" && strings.Index(ref.Name, ":") == -1 && strings.Index(ref.Name, "@") == -1 {
-		ret = ret + ":" + tag
-	}
-	return ret
 }
 
 // IsBuildComplete returns whether the provided build is complete or not
@@ -91,7 +75,7 @@ func BuildRunPolicy(build *buildapi.Build) buildapi.BuildRunPolicy {
 			return buildapi.BuildRunPolicySerialLatestOnly
 		}
 	}
-	glog.V(5).Infof("Build %s/%s does not have start policy label set, using default (Serial)")
+	glog.V(5).Infof("Build %s/%s does not have start policy label set, using default (Serial)", build.Namespace, build.Name)
 	return buildapi.BuildRunPolicySerial
 }
 
@@ -119,8 +103,8 @@ type buildFilter func(buildapi.Build) bool
 // Optionally you can specify a filter function to select only builds that
 // matches your criteria.
 func BuildConfigBuilds(c buildclient.BuildLister, namespace, name string, filterFunc buildFilter) (*buildapi.BuildList, error) {
-	result, err := c.List(namespace, kapi.ListOptions{
-		LabelSelector: BuildConfigSelector(name),
+	result, err := c.List(namespace, metav1.ListOptions{
+		LabelSelector: BuildConfigSelector(name).String(),
 	})
 	if err != nil {
 		return nil, err
@@ -166,4 +150,16 @@ func VersionForBuild(build *buildapi.Build) int {
 		return 0
 	}
 	return version
+}
+
+func BuildDeepCopy(build *buildapi.Build) (*buildapi.Build, error) {
+	objCopy, err := kapi.Scheme.DeepCopy(build)
+	if err != nil {
+		return nil, err
+	}
+	copied, ok := objCopy.(*buildapi.Build)
+	if !ok {
+		return nil, fmt.Errorf("expected Build, got %#v", objCopy)
+	}
+	return copied, nil
 }

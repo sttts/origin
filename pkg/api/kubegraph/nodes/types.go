@@ -5,6 +5,7 @@ import (
 	"reflect"
 
 	kapi "k8s.io/kubernetes/pkg/api"
+	kapps "k8s.io/kubernetes/pkg/apis/apps"
 	"k8s.io/kubernetes/pkg/apis/autoscaling"
 
 	osgraph "github.com/openshift/origin/pkg/api/graph"
@@ -19,7 +20,10 @@ var (
 	ReplicationControllerSpecNodeKind = reflect.TypeOf(kapi.ReplicationControllerSpec{}).Name()
 	ServiceAccountNodeKind            = reflect.TypeOf(kapi.ServiceAccount{}).Name()
 	SecretNodeKind                    = reflect.TypeOf(kapi.Secret{}).Name()
+	PersistentVolumeClaimNodeKind     = reflect.TypeOf(kapi.PersistentVolumeClaim{}).Name()
 	HorizontalPodAutoscalerNodeKind   = reflect.TypeOf(autoscaling.HorizontalPodAutoscaler{}).Name()
+	StatefulSetNodeKind               = reflect.TypeOf(kapps.StatefulSet{}).Name()
+	StatefulSetSpecNodeKind           = reflect.TypeOf(kapps.StatefulSetSpec{}).Name()
 )
 
 func ServiceNodeName(o *kapi.Service) osgraph.UniqueName {
@@ -108,7 +112,7 @@ func ReplicationControllerNodeName(o *kapi.ReplicationController) osgraph.Unique
 
 type ReplicationControllerNode struct {
 	osgraph.Node
-	*kapi.ReplicationController
+	ReplicationController *kapi.ReplicationController
 
 	IsFound bool
 }
@@ -139,8 +143,8 @@ func ReplicationControllerSpecNodeName(o *kapi.ReplicationControllerSpec, ownerN
 
 type ReplicationControllerSpecNode struct {
 	osgraph.Node
-	*kapi.ReplicationControllerSpec
-	Namespace string
+	ReplicationControllerSpec *kapi.ReplicationControllerSpec
+	Namespace                 string
 
 	OwnerName osgraph.UniqueName
 }
@@ -243,6 +247,37 @@ func (*SecretNode) Kind() string {
 	return SecretNodeKind
 }
 
+func PersistentVolumeClaimNodeName(o *kapi.PersistentVolumeClaim) osgraph.UniqueName {
+	return osgraph.GetUniqueRuntimeObjectNodeName(PersistentVolumeClaimNodeKind, o)
+}
+
+type PersistentVolumeClaimNode struct {
+	osgraph.Node
+	PersistentVolumeClaim *kapi.PersistentVolumeClaim
+
+	IsFound bool
+}
+
+func (n PersistentVolumeClaimNode) Found() bool {
+	return n.IsFound
+}
+
+func (n PersistentVolumeClaimNode) Object() interface{} {
+	return n.PersistentVolumeClaim
+}
+
+func (n PersistentVolumeClaimNode) String() string {
+	return string(n.UniqueName())
+}
+
+func (*PersistentVolumeClaimNode) Kind() string {
+	return PersistentVolumeClaimNodeKind
+}
+
+func (n PersistentVolumeClaimNode) UniqueName() osgraph.UniqueName {
+	return PersistentVolumeClaimNodeName(n.PersistentVolumeClaim)
+}
+
 func HorizontalPodAutoscalerNodeName(o *autoscaling.HorizontalPodAutoscaler) osgraph.UniqueName {
 	return osgraph.GetUniqueRuntimeObjectNodeName(HorizontalPodAutoscalerNodeKind, o)
 }
@@ -266,4 +301,57 @@ func (*HorizontalPodAutoscalerNode) Kind() string {
 
 func (n HorizontalPodAutoscalerNode) UniqueName() osgraph.UniqueName {
 	return HorizontalPodAutoscalerNodeName(n.HorizontalPodAutoscaler)
+}
+
+func StatefulSetNodeName(o *kapps.StatefulSet) osgraph.UniqueName {
+	return osgraph.GetUniqueRuntimeObjectNodeName(StatefulSetNodeKind, o)
+}
+
+type StatefulSetNode struct {
+	osgraph.Node
+	StatefulSet *kapps.StatefulSet
+}
+
+func (n StatefulSetNode) Object() interface{} {
+	return n.StatefulSet
+}
+
+func (n StatefulSetNode) String() string {
+	return string(n.UniqueName())
+}
+
+func (n StatefulSetNode) UniqueName() osgraph.UniqueName {
+	return StatefulSetNodeName(n.StatefulSet)
+}
+
+func (*StatefulSetNode) Kind() string {
+	return StatefulSetNodeKind
+}
+
+func StatefulSetSpecNodeName(o *kapps.StatefulSetSpec, ownerName osgraph.UniqueName) osgraph.UniqueName {
+	return osgraph.UniqueName(fmt.Sprintf("%s|%v", StatefulSetSpecNodeKind, ownerName))
+}
+
+type StatefulSetSpecNode struct {
+	osgraph.Node
+	StatefulSetSpec *kapps.StatefulSetSpec
+	Namespace       string
+
+	OwnerName osgraph.UniqueName
+}
+
+func (n StatefulSetSpecNode) Object() interface{} {
+	return n.StatefulSetSpec
+}
+
+func (n StatefulSetSpecNode) String() string {
+	return string(n.UniqueName())
+}
+
+func (n StatefulSetSpecNode) UniqueName() osgraph.UniqueName {
+	return StatefulSetSpecNodeName(n.StatefulSetSpec, n.OwnerName)
+}
+
+func (*StatefulSetSpecNode) Kind() string {
+	return StatefulSetSpecNodeKind
 }

@@ -3,14 +3,12 @@ package rsync
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"os/exec"
 	"runtime"
-	"strings"
 
 	"github.com/golang/glog"
-	"github.com/spf13/cobra"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 )
 
 var (
@@ -41,27 +39,6 @@ func hasLocalRsync() bool {
 	return true
 }
 
-// siblingCommand returns a sibling command to the current command
-func siblingCommand(cmd *cobra.Command, name string) string {
-	c := cmd.Parent()
-	command := []string{}
-	for c != nil {
-		glog.V(5).Infof("Found parent command: %s", c.Name())
-		command = append([]string{c.Name()}, command...)
-		c = c.Parent()
-	}
-	// Replace the root command with what was actually used
-	// in the command line
-	glog.V(4).Infof("Setting root command to: %s", os.Args[0])
-	command[0] = os.Args[0]
-
-	// Append the sibling command
-	command = append(command, name)
-	glog.V(4).Infof("The sibling command is: %s", strings.Join(command, " "))
-
-	return strings.Join(command, " ")
-}
-
 func isExitError(err error) bool {
 	if err == nil {
 		return false
@@ -89,10 +66,14 @@ func rsyncFlagsFromOptions(o *RsyncOptions) []string {
 		flags = append(flags, "--delete")
 	}
 	if len(o.RsyncInclude) > 0 {
-		flags = append(flags, fmt.Sprintf("--include=%s", o.RsyncInclude))
+		for _, include := range o.RsyncInclude {
+			flags = append(flags, fmt.Sprintf("--include=%s", include))
+		}
 	}
 	if len(o.RsyncExclude) > 0 {
-		flags = append(flags, fmt.Sprintf("--exclude=%s", o.RsyncExclude))
+		for _, exclude := range o.RsyncExclude {
+			flags = append(flags, fmt.Sprintf("--exclude=%s", exclude))
+		}
 	}
 	if o.RsyncProgress {
 		flags = append(flags, "--progress")
@@ -121,13 +102,13 @@ func rsyncSpecificFlags(o *RsyncOptions) []string {
 }
 
 type podAPIChecker struct {
-	client    *kclient.Client
+	client    kclientset.Interface
 	namespace string
 	podName   string
 }
 
 // CheckPods will check if pods exists in the provided context
 func (p podAPIChecker) CheckPod() error {
-	_, err := p.client.Pods(p.namespace).Get(p.podName)
+	_, err := p.client.Core().Pods(p.namespace).Get(p.podName, metav1.GetOptions{})
 	return err
 }

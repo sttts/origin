@@ -4,17 +4,20 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
+	kv1core "k8s.io/client-go/kubernetes/typed/core/v1"
+	kclientv1 "k8s.io/client-go/pkg/api/v1"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kerrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/client/cache"
-	"k8s.io/kubernetes/pkg/client/record"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
+	kclientsetexternal "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	kcoreinformers "k8s.io/kubernetes/pkg/client/informers/informers_generated/internalversion/core/internalversion"
 	kcontroller "k8s.io/kubernetes/pkg/controller"
-	"k8s.io/kubernetes/pkg/controller/framework"
-	"k8s.io/kubernetes/pkg/runtime"
-	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
-	"k8s.io/kubernetes/pkg/util/wait"
-	"k8s.io/kubernetes/pkg/util/workqueue"
 
 	deployutil "github.com/openshift/origin/pkg/deploy/util"
 )
@@ -23,20 +26,34 @@ const (
 	// We must avoid creating processing deployment configs until the deployment config and image
 	// stream stores have synced. If it hasn't synced, to avoid a hot loop, we'll wait this long
 	// between checks.
-	StoreSyncedPollPeriod = 100 * time.Millisecond
+	storeSyncedPollPeriod = 100 * time.Millisecond
 )
 
 // NewDeploymentController creates a new DeploymentController.
-func NewDeploymentController(rcInformer, podInformer framework.SharedIndexInformer, kc kclient.Interface, sa, image string, env []kapi.EnvVar, codec runtime.Codec) *DeploymentController {
+func NewDeploymentController(
+	rcInformer kcoreinformers.ReplicationControllerInformer,
+	podInformer kcoreinformers.PodInformer,
+	internalKubeClientset kclientset.Interface,
+	externalKubeClientset kclientsetexternal.Interface,
+	sa,
+	image string,
+	env []kapi.EnvVar,
+	codec runtime.Codec,
+) *DeploymentController {
 	eventBroadcaster := record.NewBroadcaster()
-	eventBroadcaster.StartRecordingToSink(kc.Events(""))
-	recorder := eventBroadcaster.NewRecorder(kapi.EventSource{Component: "deployments-controller"})
+	eventBroadcaster.StartRecordingToSink(&kv1core.EventSinkImpl{Interface: kv1core.New(externalKubeClientset.CoreV1().RESTClient()).Events("")})
+	recorder := eventBroadcaster.NewRecorder(kapi.Scheme, kclientv1.EventSource{Component: "deployments-controller"})
 
 	c := &DeploymentController{
-		rn: kc,
-		pn: kc,
+		rn: internalKubeClientset.Core(),
+		pn: internalKubeClientset.Core(),
 
 		queue: workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+
+		rcLister:        rcInformer.Lister(),
+		rcListerSynced:  rcInformer.Informer().HasSynced,
+		podLister:       podInformer.Lister(),
+		podListerSynced: podInformer.Informer().HasSynced,
 
 		serviceAccount: sa,
 		deployerImage:  image,
@@ -45,20 +62,15 @@ func NewDeploymentController(rcInformer, podInformer framework.SharedIndexInform
 		codec:          codec,
 	}
 
-	c.rcStore.Indexer = rcInformer.GetIndexer()
-	rcInformer.AddEventHandler(framework.ResourceEventHandlerFuncs{
+	rcInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    c.addReplicationController,
 		UpdateFunc: c.updateReplicationController,
 	})
 
-	c.podStore.Indexer = podInformer.GetIndexer()
-	podInformer.AddEventHandler(framework.ResourceEventHandlerFuncs{
+	podInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		UpdateFunc: c.updatePod,
 		DeleteFunc: c.deletePod,
 	})
-
-	c.rcStoreSynced = rcInformer.HasSynced
-	c.podStoreSynced = podInformer.HasSynced
 
 	return c
 }
@@ -66,36 +78,24 @@ func NewDeploymentController(rcInformer, podInformer framework.SharedIndexInform
 // Run begins watching and syncing.
 func (c *DeploymentController) Run(workers int, stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
+	defer c.queue.ShutDown()
+
+	glog.Infof("Starting deployment controller")
 
 	// Wait for the dc store to sync before starting any work in this controller.
-	ready := make(chan struct{})
-	go c.waitForSyncedStores(ready, stopCh)
-	select {
-	case <-ready:
-	case <-stopCh:
+	if !cache.WaitForCacheSync(stopCh, c.rcListerSynced, c.podListerSynced) {
 		return
 	}
+
+	glog.Infof("Deployment controller caches are synced. Starting workers.")
 
 	for i := 0; i < workers; i++ {
 		go wait.Until(c.worker, time.Second, stopCh)
 	}
+
 	<-stopCh
+
 	glog.Infof("Shutting down deployment controller")
-	c.queue.ShutDown()
-}
-
-func (c *DeploymentController) waitForSyncedStores(ready chan<- struct{}, stopCh <-chan struct{}) {
-	defer utilruntime.HandleCrash()
-
-	for !c.rcStoreSynced() || !c.podStoreSynced() {
-		glog.V(4).Infof("Waiting for the rc and pod caches to sync before starting the deployment controller workers")
-		select {
-		case <-time.After(StoreSyncedPollPeriod):
-		case <-stopCh:
-			return
-		}
-	}
-	close(ready)
 }
 
 func (c *DeploymentController) addReplicationController(obj interface{}) {
@@ -109,24 +109,30 @@ func (c *DeploymentController) addReplicationController(obj interface{}) {
 }
 
 func (c *DeploymentController) updateReplicationController(old, cur interface{}) {
-	rc := cur.(*kapi.ReplicationController)
-	// Filter out all unrelated replication controllers.
-	if !deployutil.IsOwnedByConfig(rc) {
+	// A periodic relist will send update events for all known controllers.
+	curRC := cur.(*kapi.ReplicationController)
+	oldRC := old.(*kapi.ReplicationController)
+	if curRC.ResourceVersion == oldRC.ResourceVersion {
 		return
 	}
 
-	c.enqueueReplicationController(rc)
+	// Filter out all unrelated replication controllers.
+	if !deployutil.IsOwnedByConfig(curRC) {
+		return
+	}
+
+	c.enqueueReplicationController(curRC)
 }
 
 func (c *DeploymentController) updatePod(old, cur interface{}) {
-	// A periodic relist will send update events for all known controllers.
-	if kapi.Semantic.DeepEqual(old, cur) {
+	// A periodic relist will send update events for all known pods.
+	curPod := cur.(*kapi.Pod)
+	oldPod := old.(*kapi.Pod)
+	if curPod.ResourceVersion == oldPod.ResourceVersion {
 		return
 	}
 
-	pod := cur.(*kapi.Pod)
-
-	if rc, err := c.rcForDeployerPod(pod); err == nil && rc != nil {
+	if rc, err := c.rcForDeployerPod(curPod); err == nil && rc != nil {
 		c.enqueueReplicationController(rc)
 	}
 }
@@ -189,42 +195,31 @@ func (c *DeploymentController) work() bool {
 		return false
 	}
 
-	copied, err := deployutil.DeploymentDeepCopy(rc)
-	if err != nil {
-		glog.Error(err.Error())
-		return false
-	}
-
-	err = c.Handle(copied)
-	c.handleErr(err, key, copied)
+	// Resist missing deployer pods from the cache in case of a pending deployment.
+	// Give some room for a possible rc update failure in case we decided to mark it
+	// failed.
+	willBeDropped := c.queue.NumRequeues(key) >= maxRetryCount-2
+	err = c.handle(rc, willBeDropped)
+	c.handleErr(err, key, rc)
 
 	return false
 }
 
 func (c *DeploymentController) getByKey(key string) (*kapi.ReplicationController, error) {
-	obj, exists, err := c.rcStore.Indexer.GetByKey(key)
+	namespace, name, err := cache.SplitMetaNamespaceKey(key)
+	if err != nil {
+		return nil, err
+	}
+	rc, err := c.rcLister.ReplicationControllers(namespace).Get(name)
+	if errors.IsNotFound(err) {
+		glog.Infof("Replication controller %q has been deleted", key)
+		return nil, nil
+	}
 	if err != nil {
 		glog.Infof("Unable to retrieve replication controller %q from store: %v", key, err)
 		c.queue.Add(key)
 		return nil, err
 	}
-	if !exists {
-		glog.Infof("Replication controller %q has been deleted", key)
-		return nil, nil
-	}
 
-	return obj.(*kapi.ReplicationController), nil
-}
-
-// TODO: Move this in the upstream pod lister
-func (c *DeploymentController) getPod(namespace, name string) (*kapi.Pod, error) {
-	key := namespace + "/" + name
-	obj, exists, err := c.podStore.Indexer.GetByKey(key)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, kerrors.NewNotFound(kapi.Resource("pod"), name)
-	}
-	return obj.(*kapi.Pod), nil
+	return rc, nil
 }

@@ -8,12 +8,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client/unversioned"
+	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 
-	"github.com/openshift/origin/pkg/cmd/util"
+	"github.com/openshift/origin/pkg/cmd/templates"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
+	"github.com/openshift/origin/pkg/cmd/util/term"
 	"github.com/openshift/origin/pkg/serviceaccounts"
 )
 
@@ -22,27 +24,28 @@ const (
 
 	getServiceAccountTokenShort = `Get a token assigned to a service account.`
 
-	getServiceAccountTokenLong = `
-Get a token assigned to a service account.
-
-If the service account has multiple tokens, the first token found will be returned.
-
-Service account API tokens are used by service accounts to authenticate to the API.
-Client actions using a service account token will be executed as if the service account
-itself were making the actions.
-`
-
 	getServiceAccountTokenUsage = `%s SA-NAME`
+)
 
-	getServiceAccountTokenExamples = `  # Get the service account token from service account 'default'
-  %[1]s 'default'
-`
+var (
+	getServiceAccountTokenLong = templates.LongDesc(`
+    Get a token assigned to a service account.
+
+    If the service account has multiple tokens, the first token found will be returned.
+
+    Service account API tokens are used by service accounts to authenticate to the API.
+    Client actions using a service account token will be executed as if the service account
+    itself were making the actions.`)
+
+	getServiceAccountTokenExamples = templates.Examples(`
+    # Get the service account token from service account 'default'
+    %[1]s 'default'`)
 )
 
 type GetServiceAccountTokenOptions struct {
 	SAName        string
-	SAClient      unversioned.ServiceAccountsInterface
-	SecretsClient unversioned.SecretsInterface
+	SAClient      kcoreclient.ServiceAccountInterface
+	SecretsClient kcoreclient.SecretInterface
 
 	Out io.Writer
 	Err io.Writer
@@ -61,9 +64,7 @@ func NewCommandGetServiceAccountToken(name, fullname string, f *clientcmd.Factor
 		Example: fmt.Sprintf(getServiceAccountTokenExamples, fullname),
 		Run: func(cmd *cobra.Command, args []string) {
 			cmdutil.CheckErr(options.Complete(args, f, cmd))
-
 			cmdutil.CheckErr(options.Validate())
-
 			cmdutil.CheckErr(options.Run())
 		},
 	}
@@ -78,7 +79,7 @@ func (o *GetServiceAccountTokenOptions) Complete(args []string, f *clientcmd.Fac
 
 	o.SAName = args[0]
 
-	client, err := f.Client()
+	client, err := f.ClientSet()
 	if err != nil {
 		return err
 	}
@@ -88,8 +89,8 @@ func (o *GetServiceAccountTokenOptions) Complete(args []string, f *clientcmd.Fac
 		return err
 	}
 
-	o.SAClient = client.ServiceAccounts(namespace)
-	o.SecretsClient = client.Secrets(namespace)
+	o.SAClient = client.Core().ServiceAccounts(namespace)
+	o.SecretsClient = client.Core().Secrets(namespace)
 	return nil
 }
 
@@ -110,13 +111,13 @@ func (o *GetServiceAccountTokenOptions) Validate() error {
 }
 
 func (o *GetServiceAccountTokenOptions) Run() error {
-	serviceAccount, err := o.SAClient.Get(o.SAName)
+	serviceAccount, err := o.SAClient.Get(o.SAName, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
 
 	for _, reference := range serviceAccount.Secrets {
-		secret, err := o.SecretsClient.Get(reference.Name)
+		secret, err := o.SecretsClient.Get(reference.Name, metav1.GetOptions{})
 		if err != nil {
 			continue
 		}
@@ -128,7 +129,7 @@ func (o *GetServiceAccountTokenOptions) Run() error {
 			}
 
 			fmt.Fprintf(o.Out, string(token))
-			if util.IsTerminalWriter(o.Out) {
+			if term.IsTerminalWriter(o.Out) {
 				// pretty-print for a TTY
 				fmt.Fprintf(o.Out, "\n")
 			}

@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RangelReale/osin"
 	"github.com/RangelReale/osincli"
-	kapi "k8s.io/kubernetes/pkg/api"
-	apierrs "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/unversioned"
+	apierrs "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/openshift/origin/pkg/auth/api"
 	"github.com/openshift/origin/pkg/auth/oauth/handlers"
@@ -21,10 +21,12 @@ import (
 	"github.com/openshift/origin/pkg/oauth/server/osinserver/registrystorage"
 	userapi "github.com/openshift/origin/pkg/user/api"
 	usertest "github.com/openshift/origin/pkg/user/registry/test"
-	"k8s.io/kubernetes/pkg/auth/user"
+	"k8s.io/apiserver/pkg/authentication/user"
 )
 
 type testHandlers struct {
+	AuthorizeHandler osinserver.AuthorizeHandler
+
 	User         user.Info
 	Authenticate bool
 	Err          error
@@ -32,6 +34,11 @@ type testHandlers struct {
 	AuthErr      error
 	GrantNeed    bool
 	GrantErr     error
+
+	HandleAuthorizeReq     *osin.AuthorizeRequest
+	HandleAuthorizeResp    *osin.Response
+	HandleAuthorizeHandled bool
+	HandleAuthorizeErr     error
 
 	AuthNeedHandled bool
 	AuthNeedErr     error
@@ -41,6 +48,13 @@ type testHandlers struct {
 	GrantNeedErr     error
 
 	HandledErr error
+}
+
+func (h *testHandlers) HandleAuthorize(ar *osin.AuthorizeRequest, resp *osin.Response, w http.ResponseWriter) (handled bool, err error) {
+	h.HandleAuthorizeReq = ar
+	h.HandleAuthorizeResp = resp
+	h.HandleAuthorizeHandled, h.HandleAuthorizeErr = h.AuthorizeHandler.HandleAuthorize(ar, resp, w)
+	return h.HandleAuthorizeHandled, h.HandleAuthorizeErr
 }
 
 func (h *testHandlers) AuthenticationNeeded(client api.Client, w http.ResponseWriter, req *http.Request) (bool, error) {
@@ -78,13 +92,18 @@ func TestRegistryAndServer(t *testing.T) {
 	}))
 
 	validClient := &oapi.OAuthClient{
-		ObjectMeta:   kapi.ObjectMeta{Name: "test"},
+		ObjectMeta:   metav1.ObjectMeta{Name: "test"},
 		Secret:       "secret",
 		RedirectURIs: []string{assertServer.URL + "/assert"},
 	}
-	validClientAuth := &oapi.OAuthClientAuthorization{
-		UserName:   "user",
-		ClientName: "test",
+
+	restrictedClient := &oapi.OAuthClient{
+		ObjectMeta:   metav1.ObjectMeta{Name: "test"},
+		Secret:       "secret",
+		RedirectURIs: []string{assertServer.URL + "/assert"},
+		ScopeRestrictions: []oapi.ScopeRestriction{
+			{ExactValues: []string{"user:info"}},
+		},
 	}
 
 	testCases := map[string]struct {
@@ -98,7 +117,7 @@ func TestRegistryAndServer(t *testing.T) {
 		"needs auth": {
 			Client: validClient,
 			Check: func(h *testHandlers, _ *http.Request) {
-				if !h.AuthNeed || h.GrantNeed || h.AuthErr != nil || h.GrantErr != nil {
+				if !h.AuthNeed || h.GrantNeed || h.AuthErr != nil || h.GrantErr != nil || h.HandleAuthorizeReq.Authorized {
 					t.Errorf("expected request to need authentication: %#v", h)
 				}
 			},
@@ -110,8 +129,34 @@ func TestRegistryAndServer(t *testing.T) {
 				Name: "user",
 			},
 			Check: func(h *testHandlers, _ *http.Request) {
-				if h.AuthNeed || !h.GrantNeed || h.AuthErr != nil || h.GrantErr != nil {
+				if h.AuthNeed || !h.GrantNeed || h.AuthErr != nil || h.GrantErr != nil || h.HandleAuthorizeReq.Authorized {
 					t.Errorf("expected request to need to grant access: %#v", h)
+				}
+			},
+		},
+		"invalid scope": {
+			Client:      validClient,
+			AuthSuccess: true,
+			AuthUser: &user.DefaultInfo{
+				Name: "user",
+			},
+			Scope: "some-scope",
+			Check: func(h *testHandlers, _ *http.Request) {
+				if h.AuthNeed || h.GrantNeed || h.AuthErr != nil || h.GrantErr != nil || h.HandleAuthorizeReq.Authorized || h.HandleAuthorizeResp.ErrorId != "invalid_scope" {
+					t.Errorf("expected invalid_scope error: %#v, %#v, %#v", h, h.HandleAuthorizeReq, h.HandleAuthorizeResp)
+				}
+			},
+		},
+		"disallowed scope": {
+			Client:      restrictedClient,
+			AuthSuccess: true,
+			AuthUser: &user.DefaultInfo{
+				Name: "user",
+			},
+			Scope: "user:full",
+			Check: func(h *testHandlers, _ *http.Request) {
+				if h.AuthNeed || h.GrantNeed || h.AuthErr != nil || h.GrantErr != nil || h.HandleAuthorizeReq.Authorized || h.HandleAuthorizeResp.ErrorId != "access_denied" {
+					t.Errorf("expected access_denied error: %#v, %#v, %#v", h, h.HandleAuthorizeReq, h.HandleAuthorizeResp)
 				}
 			},
 		},
@@ -124,11 +169,11 @@ func TestRegistryAndServer(t *testing.T) {
 			ClientAuth: &oapi.OAuthClientAuthorization{
 				UserName:   "user",
 				ClientName: "test",
-				Scopes:     []string{"test"},
+				Scopes:     []string{"user:info"},
 			},
-			Scope: "test other",
+			Scope: "user:info user:check-access",
 			Check: func(h *testHandlers, req *http.Request) {
-				if h.AuthNeed || !h.GrantNeed || h.AuthErr != nil || h.GrantErr != nil {
+				if h.AuthNeed || !h.GrantNeed || h.AuthErr != nil || h.GrantErr != nil || h.HandleAuthorizeReq.Authorized {
 					t.Errorf("expected request to need to grant access because of uncovered scopes: %#v", h)
 				}
 			},
@@ -142,12 +187,12 @@ func TestRegistryAndServer(t *testing.T) {
 			ClientAuth: &oapi.OAuthClientAuthorization{
 				UserName:   "user",
 				ClientName: "test",
-				Scopes:     []string{"test", "other"},
+				Scopes:     []string{"user:info", "user:check-access"},
 			},
-			Scope: "test other",
+			Scope: "user:info user:check-access",
 			Check: func(h *testHandlers, req *http.Request) {
-				if h.AuthNeed || h.GrantNeed || h.AuthErr != nil || h.GrantErr != nil {
-					t.Errorf("unexpected flow: %#v", h)
+				if h.AuthNeed || h.GrantNeed || h.AuthErr != nil || h.GrantErr != nil || !h.HandleAuthorizeReq.Authorized || h.HandleAuthorizeResp.ErrorId != "" {
+					t.Errorf("unexpected flow: %#v, %#v, %#v", h, h.HandleAuthorizeReq, h.HandleAuthorizeResp)
 				}
 			},
 		},
@@ -157,10 +202,14 @@ func TestRegistryAndServer(t *testing.T) {
 			AuthUser: &user.DefaultInfo{
 				Name: "user",
 			},
-			ClientAuth: validClientAuth,
+			ClientAuth: &oapi.OAuthClientAuthorization{
+				UserName:   "user",
+				ClientName: "test",
+				Scopes:     []string{"user:full"},
+			},
 			Check: func(h *testHandlers, req *http.Request) {
-				if h.AuthNeed || h.GrantNeed || h.AuthErr != nil || h.GrantErr != nil {
-					t.Errorf("unexpected flow: %#v", h)
+				if h.AuthNeed || h.GrantNeed || h.AuthErr != nil || h.GrantErr != nil || !h.HandleAuthorizeReq.Authorized || h.HandleAuthorizeResp.ErrorId != "" {
+					t.Errorf("unexpected flow: %#v, %#v, %#v", h, h.HandleAuthorizeReq, h.HandleAuthorizeResp)
 					return
 				}
 				if req == nil {
@@ -189,25 +238,28 @@ func TestRegistryAndServer(t *testing.T) {
 			ClientAuthorization: testCase.ClientAuth,
 		}
 		if testCase.ClientAuth == nil {
-			grant.Err = apierrs.NewNotFound(oapi.Resource("OAuthClientAuthorization"), "test:test")
+			grant.GetErr = apierrs.NewNotFound(oapi.Resource("OAuthClientAuthorization"), "test:test")
 		}
 		storage := registrystorage.New(access, authorize, client, NewUserConversion())
 		config := osinserver.NewDefaultServerConfig()
+
+		h.AuthorizeHandler = osinserver.AuthorizeHandlers{
+			handlers.NewAuthorizeAuthenticator(
+				h,
+				h,
+				h,
+			),
+			handlers.NewGrantCheck(
+				NewClientAuthorizationGrantChecker(grant),
+				h,
+				h,
+			),
+		}
+
 		server := osinserver.New(
 			config,
 			storage,
-			osinserver.AuthorizeHandlers{
-				handlers.NewAuthorizeAuthenticator(
-					h,
-					h,
-					h,
-				),
-				handlers.NewGrantCheck(
-					NewClientAuthorizationGrantChecker(grant),
-					h,
-					h,
-				),
-			},
+			h,
 			osinserver.AccessHandlers{
 				handlers.NewDenyAccessAuthenticator(),
 			},
@@ -288,7 +340,7 @@ func TestAuthenticateTokenExpired(t *testing.T) {
 	tokenRegistry := &test.AccessTokenRegistry{
 		Err: nil,
 		AccessToken: &oapi.OAuthAccessToken{
-			ObjectMeta: kapi.ObjectMeta{CreationTimestamp: unversioned.Time{Time: time.Now().Add(-1 * time.Hour)}},
+			ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.Time{Time: time.Now().Add(-1 * time.Hour)}},
 			ExpiresIn:  600, // 10 minutes
 		},
 	}
@@ -310,14 +362,14 @@ func TestAuthenticateTokenValidated(t *testing.T) {
 	tokenRegistry := &test.AccessTokenRegistry{
 		Err: nil,
 		AccessToken: &oapi.OAuthAccessToken{
-			ObjectMeta: kapi.ObjectMeta{CreationTimestamp: unversioned.Time{Time: time.Now()}},
+			ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.Time{Time: time.Now()}},
 			ExpiresIn:  600, // 10 minutes
 			UserName:   "foo",
 			UserUID:    string("bar"),
 		},
 	}
 	userRegistry := usertest.NewUserRegistry()
-	userRegistry.Get["foo"] = &userapi.User{ObjectMeta: kapi.ObjectMeta{UID: "bar"}}
+	userRegistry.Get["foo"] = &userapi.User{ObjectMeta: metav1.ObjectMeta{UID: "bar"}}
 
 	tokenAuthenticator := NewTokenAuthenticator(tokenRegistry, userRegistry, identitymapper.NoopGroupMapper{})
 

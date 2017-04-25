@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,14 +20,19 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"text/tabwriter"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/api/unversioned"
+	"k8s.io/kubernetes/pkg/api/v1"
+	"k8s.io/kubernetes/pkg/apis/apps"
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	"k8s.io/kubernetes/pkg/runtime"
-	deploymentutil "k8s.io/kubernetes/pkg/util/deployment"
+	deploymentutil "k8s.io/kubernetes/pkg/controller/deployment/util"
+	printersinternal "k8s.io/kubernetes/pkg/printers/internalversion"
 	sliceutil "k8s.io/kubernetes/pkg/util/slice"
 )
 
@@ -35,14 +40,14 @@ const (
 	ChangeCauseAnnotation = "kubernetes.io/change-cause"
 )
 
-// HistoryViewer provides an interface for resources that have historical information.
+// HistoryViewer provides an interface for resources have historical information.
 type HistoryViewer interface {
 	ViewHistory(namespace, name string, revision int64) (string, error)
 }
 
-func HistoryViewerFor(kind unversioned.GroupKind, c clientset.Interface) (HistoryViewer, error) {
+func HistoryViewerFor(kind schema.GroupKind, c clientset.Interface) (HistoryViewer, error) {
 	switch kind {
-	case extensions.Kind("Deployment"):
+	case extensions.Kind("Deployment"), apps.Kind("Deployment"):
 		return &DeploymentHistoryViewer{c}, nil
 	}
 	return nil, fmt.Errorf("no history viewer has been implemented for %q", kind)
@@ -52,19 +57,25 @@ type DeploymentHistoryViewer struct {
 	c clientset.Interface
 }
 
-// ViewHistory prints the revision history of a deployment
+// ViewHistory returns a revision-to-replicaset map as the revision history of a deployment
+// TODO: this should be a describer
 func (h *DeploymentHistoryViewer) ViewHistory(namespace, name string, revision int64) (string, error) {
-	deployment, err := h.c.Extensions().Deployments(namespace).Get(name)
+	versionedClient := versionedClientsetForDeployment(h.c)
+	deployment, err := versionedClient.Extensions().Deployments(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to retrieve deployment %s: %v", name, err)
 	}
-	_, allOldRSs, newRS, err := deploymentutil.GetAllReplicaSets(deployment, h.c)
+	_, allOldRSs, newRS, err := deploymentutil.GetAllReplicaSetsV15(deployment, versionedClient)
 	if err != nil {
-		return "", fmt.Errorf("failed to retrieve old replica sets from deployment %s: %v", name, err)
+		return "", fmt.Errorf("failed to retrieve replica sets from deployment %s: %v", name, err)
+	}
+	allRSs := allOldRSs
+	if newRS != nil {
+		allRSs = append(allRSs, newRS)
 	}
 
-	historyInfo := make(map[int64]*api.PodTemplateSpec)
-	for _, rs := range append(allOldRSs, newRS) {
+	historyInfo := make(map[int64]*v1.PodTemplateSpec)
+	for _, rs := range allRSs {
 		v, err := deploymentutil.Revision(rs)
 		if err != nil {
 			continue
@@ -90,12 +101,16 @@ func (h *DeploymentHistoryViewer) ViewHistory(namespace, name string, revision i
 			return "", fmt.Errorf("unable to find the specified revision")
 		}
 		buf := bytes.NewBuffer([]byte{})
-		DescribePodTemplate(template, buf)
+		internalTemplate := &api.PodTemplateSpec{}
+		if err := v1.Convert_v1_PodTemplateSpec_To_api_PodTemplateSpec(template, internalTemplate, nil); err != nil {
+			return "", fmt.Errorf("failed to convert podtemplate, %v", err)
+		}
+		printersinternal.DescribePodTemplate(internalTemplate, buf)
 		return buf.String(), nil
 	}
 
 	// Sort the revisionToChangeCause map by revision
-	var revisions []int64
+	revisions := make([]int64, 0, len(historyInfo))
 	for r := range historyInfo {
 		revisions = append(revisions, r)
 	}
@@ -113,6 +128,22 @@ func (h *DeploymentHistoryViewer) ViewHistory(namespace, name string, revision i
 		}
 		return nil
 	})
+}
+
+// TODO: copied here until this becomes a describer
+func tabbedString(f func(io.Writer) error) (string, error) {
+	out := new(tabwriter.Writer)
+	buf := &bytes.Buffer{}
+	out.Init(buf, 0, 8, 1, '\t', 0)
+
+	err := f(out)
+	if err != nil {
+		return "", err
+	}
+
+	out.Flush()
+	str := string(buf.String())
+	return str, nil
 }
 
 // getChangeCause returns the change-cause annotation of the input object

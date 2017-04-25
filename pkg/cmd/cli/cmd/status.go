@@ -8,10 +8,12 @@ import (
 	"github.com/gonum/graph/encoding/dot"
 	"github.com/spf13/cobra"
 
-	kapi "k8s.io/kubernetes/pkg/api"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 
+	loginutil "github.com/openshift/origin/pkg/cmd/cli/cmd/login/util"
 	"github.com/openshift/origin/pkg/cmd/cli/describe"
+	"github.com/openshift/origin/pkg/cmd/templates"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 	dotutil "github.com/openshift/origin/pkg/util/dot"
 )
@@ -19,26 +21,27 @@ import (
 // StatusRecommendedName is the recommended command name.
 const StatusRecommendedName = "status"
 
-const (
-	statusLong = `
-Show a high level overview of the current project
+var (
+	statusLong = templates.LongDesc(`
+		Show a high level overview of the current project
 
-This command will show services, deployment configs, build configurations, and active deployments.
-If you have any misconfigured components information about them will be shown. For more information
-about individual items, use the describe command (e.g. oc describe buildConfig,
-oc describe deploymentConfig, oc describe service).
+		This command will show services, deployment configs, build configurations, and active deployments.
+		If you have any misconfigured components information about them will be shown. For more information
+		about individual items, use the describe command (e.g. %[1]s describe buildConfig,
+		%[1]s describe deploymentConfig, %[1]s describe service).
 
-You can specify an output format of "-o dot" to have this command output the generated status
-graph in DOT format that is suitable for use by the "dot" command.`
+		You can specify an output format of "-o dot" to have this command output the generated status
+		graph in DOT format that is suitable for use by the "dot" command.`)
 
-	statusExample = `  # See an overview of the current project.
-  %[1]s
+	statusExample = templates.Examples(`
+		# See an overview of the current project.
+	  %[1]s
 
-  # Export the overview of the current project in an svg file.
-  %[1]s -o dot | dot -T svg -o project.svg
+	  # Export the overview of the current project in an svg file.
+	  %[1]s -o dot | dot -T svg -o project.svg
 
-  # See an overview of the current project including details for any identified issues.
-  %[1]s -v`
+	  # See an overview of the current project including details for any identified issues.
+	  %[1]s -v`)
 )
 
 // StatusOptions contains all the necessary options for the Openshift cli status command.
@@ -57,16 +60,17 @@ type StatusOptions struct {
 }
 
 // NewCmdStatus implements the OpenShift cli status command.
-func NewCmdStatus(name, fullName string, f *clientcmd.Factory, out io.Writer) *cobra.Command {
+// baseCLIName is the path from root cmd to the parent of this cmd.
+func NewCmdStatus(name, baseCLIName, fullName string, f *clientcmd.Factory, out io.Writer) *cobra.Command {
 	opts := &StatusOptions{}
 
 	cmd := &cobra.Command{
 		Use:     fmt.Sprintf("%s [-o dot | -v ]", StatusRecommendedName),
 		Short:   "Show an overview of the current project",
-		Long:    statusLong,
+		Long:    fmt.Sprintf(statusLong, baseCLIName),
 		Example: fmt.Sprintf(statusExample, fullName),
 		Run: func(cmd *cobra.Command, args []string) {
-			err := opts.Complete(f, cmd, args, out)
+			err := opts.Complete(f, cmd, baseCLIName, args, out)
 			kcmdutil.CheckErr(err)
 
 			if err := opts.Validate(); err != nil {
@@ -80,13 +84,13 @@ func NewCmdStatus(name, fullName string, f *clientcmd.Factory, out io.Writer) *c
 
 	cmd.Flags().StringVarP(&opts.outputFormat, "output", "o", opts.outputFormat, "Output format. One of: dot.")
 	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", opts.verbose, "See details for resolving issues.")
-	cmd.Flags().BoolVar(&opts.allNamespaces, "all-namespaces", false, "Display status for all namespaces (must have cluster admin)")
+	cmd.Flags().BoolVar(&opts.allNamespaces, "all-namespaces", false, "If true, display status for all namespaces (must have cluster admin)")
 
 	return cmd
 }
 
 // Complete completes the options for the Openshift cli status command.
-func (o *StatusOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, args []string, out io.Writer) error {
+func (o *StatusOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, baseCLIName string, args []string, out io.Writer) error {
 	if len(args) > 0 {
 		return kcmdutil.UsageError(cmd, "no arguments should be provided")
 	}
@@ -95,18 +99,23 @@ func (o *StatusOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, args 
 	o.securityPolicyCommandFormat = "oadm policy add-scc-to-user anyuid -n %s -z %s"
 	o.setProbeCommandName = fmt.Sprintf("%s set probe", cmd.Parent().CommandPath())
 
-	client, kclient, err := f.Clients()
+	client, kclientset, err := f.Clients()
 	if err != nil {
 		return err
 	}
 
-	config, err := f.OpenShiftClientConfig.ClientConfig()
+	config, err := f.OpenShiftClientConfig().ClientConfig()
+	if err != nil {
+		return err
+	}
+
+	rawConfig, err := f.OpenShiftClientConfig().RawConfig()
 	if err != nil {
 		return err
 	}
 
 	if o.allNamespaces {
-		o.namespace = kapi.NamespaceAll
+		o.namespace = metav1.NamespaceAll
 	} else {
 		namespace, _, err := f.DefaultNamespace()
 		if err != nil {
@@ -115,11 +124,29 @@ func (o *StatusOptions) Complete(f *clientcmd.Factory, cmd *cobra.Command, args 
 		o.namespace = namespace
 	}
 
+	if baseCLIName == "" {
+		baseCLIName = "oc"
+	}
+
+	currentNamespace := ""
+	if currentContext, exists := rawConfig.Contexts[rawConfig.CurrentContext]; exists {
+		currentNamespace = currentContext.Namespace
+	}
+
+	nsFlag := kcmdutil.GetFlagString(cmd, "namespace")
+	canRequestProjects, _ := loginutil.CanRequestProjects(config, o.namespace)
+
 	o.describer = &describe.ProjectStatusDescriber{
-		K:       kclient,
+		K:       kclientset,
 		C:       client,
 		Server:  config.Host,
 		Suggest: o.verbose,
+
+		CommandBaseName:    baseCLIName,
+		RequestedNamespace: nsFlag,
+		CurrentNamespace:   currentNamespace,
+
+		CanRequestProjects: canRequestProjects,
 
 		// TODO: Remove these and reference them inside the markers using constants.
 		LogsCommandName:             o.logsCommandName,

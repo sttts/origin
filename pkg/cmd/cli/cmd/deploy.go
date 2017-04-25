@@ -10,17 +10,19 @@ import (
 
 	"time"
 
-	"github.com/docker/docker/pkg/units"
+	units "github.com/docker/go-units"
 	"github.com/spf13/cobra"
 
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kerrors "k8s.io/kubernetes/pkg/api/errors"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
 
 	"github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/cmd/cli/describe"
+	"github.com/openshift/origin/pkg/cmd/templates"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	deployutil "github.com/openshift/origin/pkg/deploy/util"
@@ -30,7 +32,7 @@ import (
 type DeployOptions struct {
 	out             io.Writer
 	osClient        client.Interface
-	kubeClient      kclient.Interface
+	kubeClient      kclientset.Interface
 	builder         *resource.Builder
 	namespace       string
 	baseCommandName string
@@ -40,51 +42,56 @@ type DeployOptions struct {
 	retryDeploy          bool
 	cancelDeploy         bool
 	enableTriggers       bool
+	follow               bool
 }
 
-const (
-	deployLong = `
-View, start, cancel, or retry a deployment
+var (
+	deployLong = templates.LongDesc(`
+		View, start, cancel, or retry a deployment
 
-This command allows you to control a deployment config. Each individual deployment is exposed
-as a new replication controller, and the deployment process manages scaling down old deployments
-and scaling up new ones. Use '%[1]s rollback' to rollback to any previous deployment.
+		This command allows you to control a deployment config. Each individual deployment is exposed
+		as a new replication controller, and the deployment process manages scaling down old deployments
+		and scaling up new ones. Use '%[1]s rollback' to rollback to any previous deployment.
 
-There are several deployment strategies defined:
+		There are several deployment strategies defined:
 
-* Rolling (default) - scales up the new deployment in stages, gradually reducing the number
-  of old deployments. If one of the new deployed pods never becomes "ready", the new deployment
-  will be rolled back (scaled down to zero). Use when your application can tolerate two versions
-  of code running at the same time (many web applications, scalable databases)
-* Recreate - scales the old deployment down to zero, then scales the new deployment up to full.
-  Use when your application cannot tolerate two versions of code running at the same time
-* Custom - run your own deployment process inside a Docker container using your own scripts.
+		* Rolling (default) - scales up the new deployment in stages, gradually reducing the number
+		  of old deployments. If one of the new deployed pods never becomes "ready", the new deployment
+		  will be rolled back (scaled down to zero). Use when your application can tolerate two versions
+		  of code running at the same time (many web applications, scalable databases)
+		* Recreate - scales the old deployment down to zero, then scales the new deployment up to full.
+		  Use when your application cannot tolerate two versions of code running at the same time
+		* Custom - run your own deployment process inside a Docker container using your own scripts.
 
-If a deployment fails, you may opt to retry it (if the error was transient). Some deployments may
-never successfully complete - in which case you can use the '--latest' flag to force a redeployment.
-If a deployment config has completed deploying successfully at least once in the past, it would be
-automatically rolled back in the event of a new failed deployment. Note that you would still need
-to update the erroneous deployment config in order to have its template persisted across your
-application.
+		If a deployment fails, you may opt to retry it (if the error was transient). Some deployments may
+		never successfully complete - in which case you can use the '--latest' flag to force a redeployment.
+		If a deployment config has completed deploying successfully at least once in the past, it would be
+		automatically rolled back in the event of a new failed deployment. Note that you would still need
+		to update the erroneous deployment config in order to have its template persisted across your
+		application.
 
-If you want to cancel a running deployment, use '--cancel' but keep in mind that this is a best-effort
-operation and may take some time to complete. It’s possible the deployment will partially or totally
-complete before the cancellation is effective. In such a case an appropriate event will be emitted.
+		If you want to cancel a running deployment, use '--cancel' but keep in mind that this is a best-effort
+		operation and may take some time to complete. It’s possible the deployment will partially or totally
+		complete before the cancellation is effective. In such a case an appropriate event will be emitted.
 
-If no options are given, shows information about the latest deployment.`
+		If no options are given, shows information about the latest deployment.`)
 
-	deployExample = `  # Display the latest deployment for the 'database' deployment config
-  %[1]s deploy database
+	deployExample = templates.Examples(`
+		# Display the latest deployment for the 'database' deployment config
+	  %[1]s deploy database
 
-  # Start a new deployment based on the 'database'
-  %[1]s deploy database --latest
+	  # Start a new deployment based on the 'database'
+	  %[1]s deploy database --latest
 
-  # Retry the latest failed deployment based on 'frontend'
-  # The deployer pod and any hook pods are deleted for the latest failed deployment
-  %[1]s deploy frontend --retry
+	  # Start a new deployment and follow its log
+	  %[1]s deploy database --latest --follow
 
-  # Cancel the in-progress deployment based on 'frontend'
-  %[1]s deploy frontend --cancel`
+	  # Retry the latest failed deployment based on 'frontend'
+	  # The deployer pod and any hook pods are deleted for the latest failed deployment
+	  %[1]s deploy frontend --retry
+
+	  # Cancel the in-progress deployment based on 'frontend'
+	  %[1]s deploy frontend --cancel`)
 )
 
 // NewCmdDeploy creates a new `deploy` command.
@@ -114,10 +121,14 @@ func NewCmdDeploy(fullName string, f *clientcmd.Factory, out io.Writer) *cobra.C
 		},
 	}
 
-	cmd.Flags().BoolVar(&options.deployLatest, "latest", false, "Start a new deployment now.")
-	cmd.Flags().BoolVar(&options.retryDeploy, "retry", false, "Retry the latest failed deployment.")
-	cmd.Flags().BoolVar(&options.cancelDeploy, "cancel", false, "Cancel the in-progress deployment.")
-	cmd.Flags().BoolVar(&options.enableTriggers, "enable-triggers", false, "Enables all image triggers for the deployment config.")
+	cmd.Flags().BoolVar(&options.deployLatest, "latest", false, "If true, start a new deployment now.")
+	cmd.Flags().MarkDeprecated("latest", fmt.Sprintf("use '%s rollout latest' instead", fullName))
+	cmd.Flags().BoolVar(&options.retryDeploy, "retry", false, "If true, retry the latest failed deployment.")
+	cmd.Flags().BoolVar(&options.cancelDeploy, "cancel", false, "If true, cancel the in-progress deployment.")
+	cmd.Flags().MarkDeprecated("cancel", fmt.Sprintf("use '%s rollout cancel' instead", fullName))
+	cmd.Flags().BoolVar(&options.enableTriggers, "enable-triggers", false, "If true, enables all image triggers for the deployment config.")
+	cmd.Flags().MarkDeprecated("enable-triggers", fmt.Sprintf("use '%s set triggers' instead", fullName))
+	cmd.Flags().BoolVar(&options.follow, "follow", false, "If true, follow the logs of a deployment")
 
 	return cmd
 }
@@ -137,7 +148,7 @@ func (o *DeployOptions) Complete(f *clientcmd.Factory, args []string, out io.Wri
 		return err
 	}
 
-	mapper, typer := f.Object(false)
+	mapper, typer := f.Object()
 	o.builder = resource.NewBuilder(mapper, typer, resource.ClientMapperFunc(f.ClientForMapping), kapi.Codecs.UniversalDecoder())
 
 	o.out = out
@@ -151,7 +162,8 @@ func (o *DeployOptions) Complete(f *clientcmd.Factory, args []string, out io.Wri
 
 func (o DeployOptions) Validate() error {
 	if len(o.deploymentConfigName) == 0 {
-		return errors.New("a deployment config name is required.")
+		msg := fmt.Sprintf("a deployment config name is required.\nUse \"%s get dc\" for a list of available deployment configs.", o.baseCommandName)
+		return errors.New(msg)
 	}
 	numOptions := 0
 	if o.deployLatest {
@@ -161,9 +173,15 @@ func (o DeployOptions) Validate() error {
 		numOptions++
 	}
 	if o.cancelDeploy {
+		if o.follow {
+			return errors.New("cannot follow the logs while canceling a deployment")
+		}
 		numOptions++
 	}
 	if o.enableTriggers {
+		if o.follow {
+			return errors.New("cannot follow the logs while enabling triggers for a deployment")
+		}
 		numOptions++
 	}
 	if numOptions > 1 {
@@ -189,14 +207,17 @@ func (o DeployOptions) RunDeploy() error {
 
 	switch {
 	case o.deployLatest:
-		err = o.deploy(config, o.out)
+		err = o.deploy(config)
 	case o.retryDeploy:
-		err = o.retry(config, o.out)
+		err = o.retry(config)
 	case o.cancelDeploy:
-		err = o.cancel(config, o.out)
+		err = o.cancel(config)
 	case o.enableTriggers:
-		err = o.reenableTriggers(config, o.out)
+		err = o.reenableTriggers(config)
 	default:
+		if o.follow {
+			return o.getLogs(config)
+		}
 		describer := describe.NewLatestDeploymentsDescriber(o.osClient, o.kubeClient, -1)
 		desc, err := describer.Describe(config.Namespace, config.Name)
 		if err != nil {
@@ -210,7 +231,7 @@ func (o DeployOptions) RunDeploy() error {
 
 // deploy launches a new deployment unless there's already a deployment
 // process in progress for config.
-func (o DeployOptions) deploy(config *deployapi.DeploymentConfig, out io.Writer) error {
+func (o DeployOptions) deploy(config *deployapi.DeploymentConfig) error {
 	if config.Spec.Paused {
 		return fmt.Errorf("cannot deploy a paused deployment config")
 	}
@@ -220,33 +241,47 @@ func (o DeployOptions) deploy(config *deployapi.DeploymentConfig, out io.Writer)
 	// responsibility of the main controller. We need to start by unplugging this assumption from
 	// our client tools.
 	deploymentName := deployutil.LatestDeploymentNameForConfig(config)
-	deployment, err := o.kubeClient.ReplicationControllers(config.Namespace).Get(deploymentName)
-	if err == nil {
+	deployment, err := o.kubeClient.Core().ReplicationControllers(config.Namespace).Get(deploymentName, metav1.GetOptions{})
+	if err == nil && !deployutil.IsTerminatedDeployment(deployment) {
 		// Reject attempts to start a concurrent deployment.
-		status := deployutil.DeploymentStatusFor(deployment)
-		if status != deployapi.DeploymentStatusComplete && status != deployapi.DeploymentStatusFailed {
-			return fmt.Errorf("#%d is already in progress (%s).\nOptionally, you can cancel this deployment using the --cancel option.", config.Status.LatestVersion, status)
-		}
-	} else {
-		if !kerrors.IsNotFound(err) {
-			return err
-		}
+		return fmt.Errorf("#%d is already in progress (%s).\nOptionally, you can cancel this deployment using 'oc rollout cancel dc/%s'.",
+			config.Status.LatestVersion, deployutil.DeploymentStatusFor(deployment), deployment.Name)
 	}
-
-	config.Status.LatestVersion++
-	dc, err := o.osClient.DeploymentConfigs(config.Namespace).Update(config)
-	if err != nil {
+	if err != nil && !kerrors.IsNotFound(err) {
 		return err
 	}
-	fmt.Fprintf(out, "Started deployment #%d\n", dc.Status.LatestVersion)
-	fmt.Fprintf(out, "Use '%s logs -f dc/%s' to track its progress.\n", o.baseCommandName, dc.Name)
+
+	request := &deployapi.DeploymentRequest{
+		Name:   config.Name,
+		Latest: false,
+		Force:  true,
+	}
+
+	dc, err := o.osClient.DeploymentConfigs(config.Namespace).Instantiate(request)
+	// Pre 1.4 servers don't support the instantiate endpoint. Fallback to incrementing
+	// latestVersion on them.
+	if kerrors.IsNotFound(err) || kerrors.IsForbidden(err) {
+		config.Status.LatestVersion++
+		dc, err = o.osClient.DeploymentConfigs(config.Namespace).Update(config)
+	}
+	if err != nil {
+		if kerrors.IsBadRequest(err) {
+			err = fmt.Errorf("%v - try 'oc rollout latest dc/%s'", err, config.Name)
+		}
+		return err
+	}
+	fmt.Fprintf(o.out, "Started deployment #%d\n", dc.Status.LatestVersion)
+	if o.follow {
+		return o.getLogs(dc)
+	}
+	fmt.Fprintf(o.out, "Use '%s logs -f dc/%s' to track its progress.\n", o.baseCommandName, dc.Name)
 	return nil
 }
 
 // retry resets the status of the latest deployment to New, which will cause
 // the deployment to be retried. An error is returned if the deployment is not
 // currently in a failed state.
-func (o DeployOptions) retry(config *deployapi.DeploymentConfig, out io.Writer) error {
+func (o DeployOptions) retry(config *deployapi.DeploymentConfig) error {
 	if config.Spec.Paused {
 		return fmt.Errorf("cannot retry a paused deployment config")
 	}
@@ -259,32 +294,32 @@ func (o DeployOptions) retry(config *deployapi.DeploymentConfig, out io.Writer) 
 	// responsibility of the main controller. We need to start by unplugging this assumption from
 	// our client tools.
 	deploymentName := deployutil.LatestDeploymentNameForConfig(config)
-	deployment, err := o.kubeClient.ReplicationControllers(config.Namespace).Get(deploymentName)
+	deployment, err := o.kubeClient.Core().ReplicationControllers(config.Namespace).Get(deploymentName, metav1.GetOptions{})
 	if err != nil {
 		if kerrors.IsNotFound(err) {
-			return fmt.Errorf("unable to find the latest deployment (#%d).\nYou can start a new deployment using the --latest option.", config.Status.LatestVersion)
+			return fmt.Errorf("unable to find the latest deployment (#%d).\nYou can start a new deployment with 'oc deploy --latest dc/%s'.", config.Status.LatestVersion, config.Name)
 		}
 		return err
 	}
 
-	if status := deployutil.DeploymentStatusFor(deployment); status != deployapi.DeploymentStatusFailed {
-		message := fmt.Sprintf("#%d is %s; only failed deployments can be retried.\n", config.Status.LatestVersion, status)
-		if status == deployapi.DeploymentStatusComplete {
-			message += "You can start a new deployment using the --latest option."
+	if !deployutil.IsFailedDeployment(deployment) {
+		message := fmt.Sprintf("#%d is %s; only failed deployments can be retried.\n", config.Status.LatestVersion, deployutil.DeploymentStatusFor(deployment))
+		if deployutil.IsCompleteDeployment(deployment) {
+			message += fmt.Sprintf("You can start a new deployment with 'oc deploy --latest dc/%s'.", config.Name)
 		} else {
-			message += "Optionally, you can cancel this deployment using the --cancel option."
+			message += fmt.Sprintf("Optionally, you can cancel this deployment with 'oc rollout cancel dc/%s'.", config.Name)
 		}
 
 		return fmt.Errorf(message)
 	}
 
 	// Delete the deployer pod as well as the deployment hooks pods, if any
-	pods, err := o.kubeClient.Pods(config.Namespace).List(kapi.ListOptions{LabelSelector: deployutil.DeployerPodSelector(deploymentName)})
+	pods, err := o.kubeClient.Core().Pods(config.Namespace).List(metav1.ListOptions{LabelSelector: deployutil.DeployerPodSelector(deploymentName).String()})
 	if err != nil {
 		return fmt.Errorf("failed to list deployer/hook pods for deployment #%d: %v", config.Status.LatestVersion, err)
 	}
 	for _, pod := range pods.Items {
-		err := o.kubeClient.Pods(pod.Namespace).Delete(pod.Name, kapi.NewDeleteOptions(0))
+		err := o.kubeClient.Core().Pods(pod.Namespace).Delete(pod.Name, metav1.NewDeleteOptions(0))
 		if err != nil {
 			return fmt.Errorf("failed to delete deployer/hook pod %s for deployment #%d: %v", pod.Name, config.Status.LatestVersion, err)
 		}
@@ -294,49 +329,59 @@ func (o DeployOptions) retry(config *deployapi.DeploymentConfig, out io.Writer) 
 	// clear out the cancellation flag as well as any previous status-reason annotation
 	delete(deployment.Annotations, deployapi.DeploymentStatusReasonAnnotation)
 	delete(deployment.Annotations, deployapi.DeploymentCancelledAnnotation)
-	_, err = o.kubeClient.ReplicationControllers(deployment.Namespace).Update(deployment)
-	if err == nil {
-		fmt.Fprintf(out, "Retried #%d\n", config.Status.LatestVersion)
-	}
-	return err
-}
-
-// cancel cancels any deployment process in progress for config.
-func (o DeployOptions) cancel(config *deployapi.DeploymentConfig, out io.Writer) error {
-	if config.Spec.Paused {
-		return fmt.Errorf("cannot cancel a paused deployment config")
-	}
-	deployments, err := o.kubeClient.ReplicationControllers(config.Namespace).List(kapi.ListOptions{LabelSelector: deployutil.ConfigSelector(config.Name)})
+	_, err = o.kubeClient.Core().ReplicationControllers(deployment.Namespace).Update(deployment)
 	if err != nil {
 		return err
 	}
-	if len(deployments.Items) == 0 {
-		fmt.Fprintf(out, "There have been no deployments for %s/%s\n", config.Namespace, config.Name)
+	fmt.Fprintf(o.out, "Retried #%d\n", config.Status.LatestVersion)
+	if o.follow {
+		return o.getLogs(config)
+	}
+	fmt.Fprintf(o.out, "Use '%s logs -f dc/%s' to track its progress.\n", o.baseCommandName, config.Name)
+	return nil
+}
+
+// cancel cancels any deployment process in progress for config.
+// TODO: this code will be deprecated
+func (o DeployOptions) cancel(config *deployapi.DeploymentConfig) error {
+	if config.Spec.Paused {
+		return fmt.Errorf("cannot cancel a paused deployment config")
+	}
+	deploymentList, err := o.kubeClient.Core().ReplicationControllers(config.Namespace).List(metav1.ListOptions{LabelSelector: deployutil.ConfigSelector(config.Name).String()})
+	if err != nil {
+		return err
+	}
+	if len(deploymentList.Items) == 0 {
+		fmt.Fprintf(o.out, "There have been no deployments for %s/%s\n", config.Namespace, config.Name)
 		return nil
 	}
-	sort.Sort(deployutil.ByLatestVersionDesc(deployments.Items))
+	deployments := make([]*kapi.ReplicationController, 0, len(deploymentList.Items))
+	for i := range deploymentList.Items {
+		deployments = append(deployments, &deploymentList.Items[i])
+	}
+	sort.Sort(deployutil.ByLatestVersionDesc(deployments))
 	failedCancellations := []string{}
 	anyCancelled := false
-	for _, deployment := range deployments.Items {
-		status := deployutil.DeploymentStatusFor(&deployment)
+	for _, deployment := range deployments {
+		status := deployutil.DeploymentStatusFor(deployment)
 		switch status {
 		case deployapi.DeploymentStatusNew,
 			deployapi.DeploymentStatusPending,
 			deployapi.DeploymentStatusRunning:
 
-			if deployutil.IsDeploymentCancelled(&deployment) {
+			if deployutil.IsDeploymentCancelled(deployment) {
 				continue
 			}
 
 			deployment.Annotations[deployapi.DeploymentCancelledAnnotation] = deployapi.DeploymentCancelledAnnotationValue
 			deployment.Annotations[deployapi.DeploymentStatusReasonAnnotation] = deployapi.DeploymentCancelledByUser
-			_, err := o.kubeClient.ReplicationControllers(deployment.Namespace).Update(&deployment)
+			_, err := o.kubeClient.Core().ReplicationControllers(deployment.Namespace).Update(deployment)
 			if err == nil {
-				fmt.Fprintf(out, "Cancelled deployment #%d\n", config.Status.LatestVersion)
+				fmt.Fprintf(o.out, "Cancelled deployment #%d\n", config.Status.LatestVersion)
 				anyCancelled = true
 			} else {
-				fmt.Fprintf(out, "Couldn't cancel deployment #%d (status: %s): %v\n", deployutil.DeploymentVersionFor(&deployment), status, err)
-				failedCancellations = append(failedCancellations, strconv.FormatInt(deployutil.DeploymentVersionFor(&deployment), 10))
+				fmt.Fprintf(o.out, "Couldn't cancel deployment #%d (status: %s): %v\n", deployutil.DeploymentVersionFor(deployment), status, err)
+				failedCancellations = append(failedCancellations, strconv.FormatInt(deployutil.DeploymentVersionFor(deployment), 10))
 			}
 		}
 	}
@@ -344,13 +389,13 @@ func (o DeployOptions) cancel(config *deployapi.DeploymentConfig, out io.Writer)
 		return fmt.Errorf("couldn't cancel deployment %s", strings.Join(failedCancellations, ", "))
 	}
 	if !anyCancelled {
-		latest := &deployments.Items[0]
+		latest := deployments[0]
 		maybeCancelling := ""
 		if deployutil.IsDeploymentCancelled(latest) && !deployutil.IsTerminatedDeployment(latest) {
 			maybeCancelling = " (cancelling)"
 		}
 		timeAt := strings.ToLower(units.HumanDuration(time.Now().Sub(latest.CreationTimestamp.Time)))
-		fmt.Fprintf(out, "No deployments are in progress (latest deployment #%d %s%s %s ago)\n",
+		fmt.Fprintf(o.out, "No deployments are in progress (latest deployment #%d %s%s %s ago)\n",
 			deployutil.DeploymentVersionFor(latest),
 			strings.ToLower(string(deployutil.DeploymentStatusFor(latest))),
 			maybeCancelling,
@@ -360,7 +405,7 @@ func (o DeployOptions) cancel(config *deployapi.DeploymentConfig, out io.Writer)
 }
 
 // reenableTriggers enables all image triggers and then persists config.
-func (o DeployOptions) reenableTriggers(config *deployapi.DeploymentConfig, out io.Writer) error {
+func (o DeployOptions) reenableTriggers(config *deployapi.DeploymentConfig) error {
 	enabled := []string{}
 	for _, trigger := range config.Spec.Triggers {
 		if trigger.Type == deployapi.DeploymentTriggerOnImageChange {
@@ -369,13 +414,26 @@ func (o DeployOptions) reenableTriggers(config *deployapi.DeploymentConfig, out 
 		}
 	}
 	if len(enabled) == 0 {
-		fmt.Fprintln(out, "No image triggers found to enable")
+		fmt.Fprintln(o.out, "No image triggers found to enable")
 		return nil
 	}
 	_, err := o.osClient.DeploymentConfigs(config.Namespace).Update(config)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Enabled image triggers: %s\n", strings.Join(enabled, ","))
+	fmt.Fprintf(o.out, "Enabled image triggers: %s\n", strings.Join(enabled, ","))
 	return nil
+}
+
+func (o DeployOptions) getLogs(config *deployapi.DeploymentConfig) error {
+	opts := deployapi.DeploymentLogOptions{
+		Follow: true,
+	}
+	readCloser, err := o.osClient.DeploymentLogs(config.Namespace).Get(config.Name, opts).Stream()
+	if err != nil {
+		return err
+	}
+	defer readCloser.Close()
+	_, err = io.Copy(o.out, readCloser)
+	return err
 }

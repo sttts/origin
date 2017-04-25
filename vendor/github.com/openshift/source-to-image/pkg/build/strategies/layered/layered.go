@@ -1,8 +1,8 @@
 package layered
 
 import (
-	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -15,10 +15,11 @@ import (
 	"github.com/openshift/source-to-image/pkg/api"
 	"github.com/openshift/source-to-image/pkg/build"
 	"github.com/openshift/source-to-image/pkg/docker"
-	"github.com/openshift/source-to-image/pkg/errors"
+	s2ierr "github.com/openshift/source-to-image/pkg/errors"
 	"github.com/openshift/source-to-image/pkg/tar"
 	"github.com/openshift/source-to-image/pkg/util"
 	utilglog "github.com/openshift/source-to-image/pkg/util/glog"
+	utilstatus "github.com/openshift/source-to-image/pkg/util/status"
 )
 
 var glog = utilglog.StderrLog
@@ -40,17 +41,24 @@ type Layered struct {
 }
 
 // New creates a Layered builder.
-func New(config *api.Config, scripts build.ScriptsHandler, overrides build.Overrides) (*Layered, error) {
+func New(config *api.Config, fs util.FileSystem, scripts build.ScriptsHandler, overrides build.Overrides) (*Layered, error) {
+	excludePattern, err := regexp.Compile(config.ExcludeRegExp)
+	if err != nil {
+		return nil, err
+	}
+
 	d, err := docker.New(config.DockerConfig, config.PullAuthentication)
 	if err != nil {
 		return nil, err
 	}
-	tarHandler := tar.New()
-	tarHandler.SetExclusionPattern(regexp.MustCompile(config.ExcludeRegExp))
+
+	tarHandler := tar.New(fs)
+	tarHandler.SetExclusionPattern(excludePattern)
+
 	return &Layered{
 		docker:  d,
 		config:  config,
-		fs:      util.NewFileSystem(),
+		fs:      fs,
 		tar:     tarHandler,
 		scripts: scripts,
 	}, nil
@@ -96,21 +104,21 @@ func (builder *Layered) CreateDockerfile(config *api.Config) error {
 	scriptsIncluded := checkValidDirWithContents(uploadScriptsDir)
 	if scriptsIncluded {
 		glog.V(2).Infof("The scripts are included in %q directory", uploadScriptsDir)
-		buffer.WriteString(fmt.Sprintf("COPY scripts %s\n", scriptsDir))
+		buffer.WriteString(fmt.Sprintf("COPY scripts %s\n", filepath.ToSlash(scriptsDir)))
 	} else {
 		// if an err on reading or opening dir, can't copy it
 		glog.V(2).Infof("Could not gather scripts from the directory %q", uploadScriptsDir)
 	}
-	buffer.WriteString(fmt.Sprintf("COPY src %s\n", sourcesDir))
+	buffer.WriteString(fmt.Sprintf("COPY src %s\n", filepath.ToSlash(sourcesDir)))
 
 	//TODO: We need to account for images that may not have chown. There is a proposal
-	//      to specify the owner for COPY here: https://github.com/docker/docker/pull/9934
+	//      to specify the owner for COPY here: https://github.com/docker/docker/pull/28499
 	if len(user) > 0 {
 		buffer.WriteString("USER root\n")
 		if scriptsIncluded {
-			buffer.WriteString(fmt.Sprintf("RUN chown -R %s -- %s %s\n", user, scriptsDir, sourcesDir))
+			buffer.WriteString(fmt.Sprintf("RUN chown -R %s -- %s %s\n", user, filepath.ToSlash(scriptsDir), filepath.ToSlash(sourcesDir)))
 		} else {
-			buffer.WriteString(fmt.Sprintf("RUN chown -R %s -- %s\n", user, sourcesDir))
+			buffer.WriteString(fmt.Sprintf("RUN chown -R %s -- %s\n", user, filepath.ToSlash(sourcesDir)))
 		}
 		buffer.WriteString(fmt.Sprintf("USER %s\n", user))
 	}
@@ -123,85 +131,60 @@ func (builder *Layered) CreateDockerfile(config *api.Config) error {
 	return nil
 }
 
-// SourceTar returns a stream to the source tar file.
-// TODO: this should stop generating a file, and instead stream the tar.
-func (builder *Layered) SourceTar(config *api.Config) (io.ReadCloser, error) {
-	uploadDir := filepath.Join(config.WorkingDir, "upload")
-	tarFileName, err := builder.tar.CreateTarFile(builder.config.WorkingDir, uploadDir)
-	if err != nil {
-		return nil, err
-	}
-	return builder.fs.Open(tarFileName)
-}
-
 // Build handles the `docker build` equivalent execution, returning the
 // success/failure details.
 func (builder *Layered) Build(config *api.Config) (*api.Result, error) {
+	buildResult := &api.Result{}
+
 	if config.HasOnBuild && config.BlockOnBuild {
-		return nil, fmt.Errorf("builder image uses ONBUILD instructions but ONBUILD is not allowed")
+		buildResult.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+			utilstatus.ReasonOnBuildForbidden,
+			utilstatus.ReasonMessageOnBuildForbidden,
+		)
+		return buildResult, errors.New("builder image uses ONBUILD instructions but ONBUILD is not allowed")
+	}
+
+	if config.BuilderImage == "" {
+		buildResult.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+			utilstatus.ReasonGenericS2IBuildFailed,
+			utilstatus.ReasonMessageGenericS2iBuildFailed,
+		)
+		return buildResult, errors.New("builder image name cannot be empty")
 	}
 
 	if err := builder.CreateDockerfile(config); err != nil {
-		return nil, err
+		buildResult.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+			utilstatus.ReasonDockerfileCreateFailed,
+			utilstatus.ReasonMessageDockerfileCreateFailed,
+		)
+		return buildResult, err
 	}
 
 	glog.V(2).Info("Creating application source code image")
-	tarStream, err := builder.SourceTar(config)
-	if err != nil {
-		return nil, err
-	}
+	tarStream := builder.tar.CreateTarStreamReader(filepath.Join(config.WorkingDir, "upload"), false)
 	defer tarStream.Close()
 
-	dockerImageReference, err := docker.ParseImageReference(builder.config.BuilderImage)
-	if err != nil {
-		return nil, err
-	}
-	// if we fall down this path via oc new-app, the builder image will be a docker image ref ending
-	// with a @<hex image id> instead of a tag; simply appending the time stamp to the end of a
-	// hex image id ref is not kosher with the docker API; so we remove the ID piece, and then
-	// construct the new image name
-	var newBuilderImage string
-	if len(dockerImageReference.ID) == 0 {
-		newBuilderImage = fmt.Sprintf("%s-%d", builder.config.BuilderImage, time.Now().UnixNano())
-	} else {
-		if len(dockerImageReference.Registry) > 0 {
-			newBuilderImage = fmt.Sprintf("%s/", dockerImageReference.Registry)
-		}
-		if len(dockerImageReference.Namespace) > 0 {
-			newBuilderImage = fmt.Sprintf("%s%s/", newBuilderImage, dockerImageReference.Namespace)
-		}
-		newBuilderImage = fmt.Sprintf("%s%s:s2i-layered-%d", newBuilderImage, dockerImageReference.Name, time.Now().UnixNano())
-	}
+	newBuilderImage := fmt.Sprintf("s2i-layered-temp-image-%d", time.Now().UnixNano())
 
 	outReader, outWriter := io.Pipe()
-	defer outReader.Close()
-	defer outWriter.Close()
 	opts := docker.BuildImageOptions{
 		Name:         newBuilderImage,
 		Stdin:        tarStream,
 		Stdout:       outWriter,
 		CGroupLimits: config.CGroupLimits,
 	}
-	// goroutine to stream container's output
-	go func(reader io.Reader) {
-		scanner := bufio.NewReader(reader)
-		for {
-			text, err := scanner.ReadString('\n')
-			if err != nil {
-				// we're ignoring ErrClosedPipe, as this is information
-				// the docker container ended streaming logs
-				if glog.Is(2) && err != io.ErrClosedPipe && err != io.EOF {
-					glog.Errorf("Error reading docker stdout, %v", err)
-				}
-				break
-			}
-			glog.V(2).Info(text)
-		}
-	}(outReader)
+	docker.StreamContainerIO(outReader, nil, func(s string) { glog.V(2).Info(s) })
 
 	glog.V(2).Infof("Building new image %s with scripts and sources already inside", newBuilderImage)
-	if err = builder.docker.BuildImage(opts); err != nil {
-		return nil, err
+	startTime := time.Now()
+	err := builder.docker.BuildImage(opts)
+	buildResult.BuildInfo.Stages = api.RecordStageAndStepInfo(buildResult.BuildInfo.Stages, api.StageBuild, api.StepBuildDockerImage, startTime, time.Now())
+	if err != nil {
+		buildResult.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+			utilstatus.ReasonDockerImageBuildFailed,
+			utilstatus.ReasonMessageDockerImageBuildFailed,
+		)
+		return buildResult, err
 	}
 
 	// upon successful build we need to modify current config
@@ -214,23 +197,34 @@ func (builder *Layered) Build(config *api.Config) (*api.Result, error) {
 	if scriptsIncluded {
 		builder.config.ScriptsURL = "image://" + path.Join(getDestination(config), "scripts")
 	} else {
+		var err error
 		builder.config.ScriptsURL, err = builder.docker.GetScriptsURL(newBuilderImage)
 		if err != nil {
-			return nil, err
+			buildResult.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+				utilstatus.ReasonGenericS2IBuildFailed,
+				utilstatus.ReasonMessageGenericS2iBuildFailed,
+			)
+			return buildResult, err
 		}
 	}
 
 	glog.V(2).Infof("Building %s using sti-enabled image", builder.config.Tag)
-	if err := builder.scripts.Execute(api.Assemble, config.AssembleUser, builder.config); err != nil {
+	startTime = time.Now()
+	err = builder.scripts.Execute(api.Assemble, config.AssembleUser, builder.config)
+	buildResult.BuildInfo.Stages = api.RecordStageAndStepInfo(buildResult.BuildInfo.Stages, api.StageAssemble, api.StepAssembleBuildScripts, startTime, time.Now())
+	if err != nil {
+		buildResult.BuildInfo.FailureReason = utilstatus.NewFailureReason(
+			utilstatus.ReasonAssembleFailed,
+			utilstatus.ReasonMessageAssembleFailed,
+		)
 		switch e := err.(type) {
-		case errors.ContainerError:
-			return nil, errors.NewAssembleError(builder.config.Tag, e.Output, e)
+		case s2ierr.ContainerError:
+			return buildResult, s2ierr.NewAssembleError(builder.config.Tag, e.Output, e)
 		default:
-			return nil, err
+			return buildResult, err
 		}
 	}
+	buildResult.Success = true
 
-	return &api.Result{
-		Success: true,
-	}, nil
+	return buildResult, nil
 }

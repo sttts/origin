@@ -8,27 +8,35 @@ import (
 	"os"
 	"time"
 
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/tools/record"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kerrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/client/record"
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
 	"k8s.io/kubernetes/pkg/kubectl"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/wait"
 
 	"github.com/openshift/origin/pkg/client"
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	strat "github.com/openshift/origin/pkg/deploy/strategy"
 	stratsupport "github.com/openshift/origin/pkg/deploy/strategy/support"
+	stratutil "github.com/openshift/origin/pkg/deploy/strategy/util"
 	deployutil "github.com/openshift/origin/pkg/deploy/util"
 )
 
-// TODO: This should perhaps be made public upstream. See:
-// https://github.com/kubernetes/kubernetes/issues/7851
-const sourceIdAnnotation = "kubectl.kubernetes.io/update-source-id"
+const (
+	// TODO: This should perhaps be made public upstream. See:
+	// https://github.com/kubernetes/kubernetes/issues/7851
+	sourceIdAnnotation = "kubectl.kubernetes.io/update-source-id"
 
-const DefaultApiRetryPeriod = 1 * time.Second
-const DefaultApiRetryTimeout = 10 * time.Second
+	defaultApiRetryPeriod  = 1 * time.Second
+	defaultApiRetryTimeout = 10 * time.Second
+	// acceptorInterval is how often the UpdateAcceptor should check for
+	// readiness.
+	acceptorInterval = 1 * time.Second
+)
 
 // RollingDeploymentStrategy is a Strategy which implements rolling
 // deployments using the upstream Kubernetes RollingUpdater.
@@ -51,19 +59,21 @@ type RollingDeploymentStrategy struct {
 	until string
 	// initialStrategy is used when there are no prior deployments.
 	initialStrategy acceptingDeploymentStrategy
-	// client is used to deal with ReplicationControllers.
-	client kclient.Interface
-	// client is used to perform tag actions
+	// rcClient is used to deal with ReplicationControllers.
+	rcClient kcoreclient.ReplicationControllersGetter
+	// eventClient is a client to access events
+	eventClient kcoreclient.EventsGetter
+	// tags is a client used to perform tag actions
 	tags client.ImageStreamTagsNamespacer
 	// rollingUpdate knows how to perform a rolling update.
 	rollingUpdate func(config *kubectl.RollingUpdaterConfig) error
 	// decoder is used to access the encoded config on a deployment.
 	decoder runtime.Decoder
 	// hookExecutor can execute a lifecycle hook.
-	hookExecutor hookExecutor
+	hookExecutor stratsupport.HookExecutor
 	// getUpdateAcceptor returns an UpdateAcceptor to verify the first replica
 	// of the deployment.
-	getUpdateAcceptor func(timeout time.Duration) strat.UpdateAcceptor
+	getUpdateAcceptor func(time.Duration, int32) strat.UpdateAcceptor
 	// apiRetryPeriod is how long to wait before retrying a failed API call.
 	apiRetryPeriod time.Duration
 	// apiRetryTimeout is how long to retry API calls before giving up.
@@ -79,12 +89,8 @@ type acceptingDeploymentStrategy interface {
 	DeployWithAcceptor(from *kapi.ReplicationController, to *kapi.ReplicationController, desiredReplicas int, updateAcceptor strat.UpdateAcceptor) error
 }
 
-// AcceptorInterval is how often the UpdateAcceptor should check for
-// readiness.
-const AcceptorInterval = 1 * time.Second
-
 // NewRollingDeploymentStrategy makes a new RollingDeploymentStrategy.
-func NewRollingDeploymentStrategy(namespace string, client kclient.Interface, tags client.ImageStreamTagsNamespacer, events record.EventSink, decoder runtime.Decoder, initialStrategy acceptingDeploymentStrategy, out, errOut io.Writer, until string) *RollingDeploymentStrategy {
+func NewRollingDeploymentStrategy(namespace string, client kclientset.Interface, tags client.ImageStreamTagsNamespacer, events record.EventSink, decoder runtime.Decoder, initialStrategy acceptingDeploymentStrategy, out, errOut io.Writer, until string) *RollingDeploymentStrategy {
 	if out == nil {
 		out = ioutil.Discard
 	}
@@ -97,17 +103,18 @@ func NewRollingDeploymentStrategy(namespace string, client kclient.Interface, ta
 		until:           until,
 		decoder:         decoder,
 		initialStrategy: initialStrategy,
-		client:          client,
+		rcClient:        client.Core(),
+		eventClient:     client.Core(),
 		tags:            tags,
-		apiRetryPeriod:  DefaultApiRetryPeriod,
-		apiRetryTimeout: DefaultApiRetryTimeout,
+		apiRetryPeriod:  defaultApiRetryPeriod,
+		apiRetryTimeout: defaultApiRetryTimeout,
 		rollingUpdate: func(config *kubectl.RollingUpdaterConfig) error {
-			updater := kubectl.NewRollingUpdater(namespace, client)
+			updater := kubectl.NewRollingUpdater(namespace, client.Core(), client.Core())
 			return updater.Update(config)
 		},
-		hookExecutor: stratsupport.NewHookExecutor(client, tags, events, os.Stdout, decoder),
-		getUpdateAcceptor: func(timeout time.Duration) strat.UpdateAcceptor {
-			return stratsupport.NewAcceptNewlyObservedReadyPods(out, client, timeout, AcceptorInterval)
+		hookExecutor: stratsupport.NewHookExecutor(client.Core(), tags, client.Core(), os.Stdout, decoder),
+		getUpdateAcceptor: func(timeout time.Duration, minReadySeconds int32) strat.UpdateAcceptor {
+			return stratsupport.NewAcceptAvailablePods(out, client.Core(), timeout, acceptorInterval, minReadySeconds)
 		},
 	}
 }
@@ -119,7 +126,7 @@ func (s *RollingDeploymentStrategy) Deploy(from *kapi.ReplicationController, to 
 	}
 
 	params := config.Spec.Strategy.RollingParams
-	updateAcceptor := s.getUpdateAcceptor(time.Duration(*params.TimeoutSeconds) * time.Second)
+	updateAcceptor := s.getUpdateAcceptor(time.Duration(*params.TimeoutSeconds)*time.Second, config.Spec.MinReadySeconds)
 
 	// If there's no prior deployment, delegate to another strategy since the
 	// rolling updater only supports transitioning between two deployments.
@@ -151,6 +158,10 @@ func (s *RollingDeploymentStrategy) Deploy(from *kapi.ReplicationController, to 
 		return nil
 	}
 
+	// Record all warnings
+	defer stratutil.RecordConfigWarnings(s.eventClient, from, s.decoder, s.out)
+	defer stratutil.RecordConfigWarnings(s.eventClient, to, s.decoder, s.out)
+
 	// Prepare for a rolling update.
 	// Execute any pre-hook.
 	if params.Pre != nil {
@@ -173,7 +184,7 @@ func (s *RollingDeploymentStrategy) Deploy(from *kapi.ReplicationController, to 
 	// Related upstream issue:
 	// https://github.com/kubernetes/kubernetes/pull/7183
 	err = wait.Poll(s.apiRetryPeriod, s.apiRetryTimeout, func() (done bool, err error) {
-		existing, err := s.client.ReplicationControllers(to.Namespace).Get(to.Name)
+		existing, err := s.rcClient.ReplicationControllers(to.Namespace).Get(to.Name, metav1.GetOptions{})
 		if err != nil {
 			msg := fmt.Sprintf("couldn't look up deployment %s: %s", to.Name, err)
 			if kerrors.IsNotFound(err) {
@@ -185,7 +196,7 @@ func (s *RollingDeploymentStrategy) Deploy(from *kapi.ReplicationController, to 
 		}
 		if _, hasSourceId := existing.Annotations[sourceIdAnnotation]; !hasSourceId {
 			existing.Annotations[sourceIdAnnotation] = fmt.Sprintf("%s:%s", from.Name, from.ObjectMeta.UID)
-			if _, err := s.client.ReplicationControllers(existing.Namespace).Update(existing); err != nil {
+			if _, err := s.rcClient.ReplicationControllers(existing.Namespace).Update(existing); err != nil {
 				msg := fmt.Sprintf("couldn't assign source annotation to deployment %s: %v", existing.Name, err)
 				if kerrors.IsNotFound(err) {
 					return false, fmt.Errorf("%s", msg)
@@ -200,7 +211,7 @@ func (s *RollingDeploymentStrategy) Deploy(from *kapi.ReplicationController, to 
 	if err != nil {
 		return err
 	}
-	to, err = s.client.ReplicationControllers(to.Namespace).Get(to.Name)
+	to, err = s.rcClient.ReplicationControllers(to.Namespace).Get(to.Name, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -216,15 +227,16 @@ func (s *RollingDeploymentStrategy) Deploy(from *kapi.ReplicationController, to 
 
 	// Perform a rolling update.
 	rollingConfig := &kubectl.RollingUpdaterConfig{
-		Out:            &rollingUpdaterWriter{w: s.out},
-		OldRc:          from,
-		NewRc:          to,
-		UpdatePeriod:   time.Duration(*params.UpdatePeriodSeconds) * time.Second,
-		Interval:       time.Duration(*params.IntervalSeconds) * time.Second,
-		Timeout:        time.Duration(*params.TimeoutSeconds) * time.Second,
-		CleanupPolicy:  kubectl.PreserveRollingUpdateCleanupPolicy,
-		MaxSurge:       params.MaxSurge,
-		MaxUnavailable: params.MaxUnavailable,
+		Out:             &rollingUpdaterWriter{w: s.out},
+		OldRc:           from,
+		NewRc:           to,
+		UpdatePeriod:    time.Duration(*params.UpdatePeriodSeconds) * time.Second,
+		Interval:        time.Duration(*params.IntervalSeconds) * time.Second,
+		Timeout:         time.Duration(*params.TimeoutSeconds) * time.Second,
+		MinReadySeconds: config.Spec.MinReadySeconds,
+		CleanupPolicy:   kubectl.PreserveRollingUpdateCleanupPolicy,
+		MaxSurge:        params.MaxSurge,
+		MaxUnavailable:  params.MaxUnavailable,
 		OnProgress: func(oldRc, newRc *kapi.ReplicationController, percentage int) error {
 			if expect, ok := strat.Percentage(s.until); ok && percentage >= expect {
 				return strat.NewConditionReachedErr(fmt.Sprintf("Reached %s (currently %d%%)", s.until, percentage))
@@ -268,19 +280,4 @@ func (w *rollingUpdaterWriter) Write(p []byte) (n int, err error) {
 		}
 	}
 	return n, nil
-}
-
-// hookExecutor knows how to execute a deployment lifecycle hook.
-type hookExecutor interface {
-	Execute(hook *deployapi.LifecycleHook, deployment *kapi.ReplicationController, suffix, label string) error
-}
-
-// hookExecutorImpl is a pluggable hookExecutor.
-type hookExecutorImpl struct {
-	executeFunc func(hook *deployapi.LifecycleHook, deployment *kapi.ReplicationController, suffix, label string) error
-}
-
-// Execute executes the provided lifecycle hook
-func (i *hookExecutorImpl) Execute(hook *deployapi.LifecycleHook, deployment *kapi.ReplicationController, suffix, label string) error {
-	return i.executeFunc(hook, deployment, suffix, label)
 }

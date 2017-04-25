@@ -1,12 +1,11 @@
-// +build integration
-
 package integration
 
 import (
 	"testing"
 
+	kapierror "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kapierror "k8s.io/kubernetes/pkg/api/errors"
 
 	testutil "github.com/openshift/origin/test/util"
 	testserver "github.com/openshift/origin/test/util/server"
@@ -14,6 +13,7 @@ import (
 
 func TestPodUpdateSCCEnforcement(t *testing.T) {
 	testutil.RequireEtcd(t)
+	defer testutil.DumpEtcdOnFailure(t)
 	_, clusterAdminKubeConfig, err := testserver.StartTestMaster()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -23,7 +23,7 @@ func TestPodUpdateSCCEnforcement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	clusterAdminKubeClient, err := testutil.GetClusterAdminKubeClient(clusterAdminKubeConfig)
+	clusterAdminKubeClientset, err := testutil.GetClusterAdminKubeClient(clusterAdminKubeConfig)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -42,14 +42,14 @@ func TestPodUpdateSCCEnforcement(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if err := testserver.WaitForServiceAccounts(clusterAdminKubeClient, projectName, []string{"default"}); err != nil {
+	if err := testserver.WaitForServiceAccounts(clusterAdminKubeClientset, projectName, []string{"default"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// so cluster-admin can create privileged pods, but harold cannot.  This means that harold should not be able
 	// to update the privileged pods either, even if he lies about its privileged nature
 	privilegedPod := &kapi.Pod{
-		ObjectMeta: kapi.ObjectMeta{Name: "unsafe"},
+		ObjectMeta: metav1.ObjectMeta{Name: "unsafe"},
 		Spec: kapi.PodSpec{
 			Containers: []kapi.Container{
 				{Name: "first", Image: "something-innocuous"},
@@ -60,23 +60,23 @@ func TestPodUpdateSCCEnforcement(t *testing.T) {
 		},
 	}
 
-	if _, err := haroldKubeClient.Pods(projectName).Create(privilegedPod); !kapierror.IsForbidden(err) {
+	if _, err := haroldKubeClient.Core().Pods(projectName).Create(privilegedPod); !kapierror.IsForbidden(err) {
 		t.Fatalf("missing forbidden: %v", err)
 	}
 
-	actualPod, err := clusterAdminKubeClient.Pods(projectName).Create(privilegedPod)
+	actualPod, err := clusterAdminKubeClientset.Core().Pods(projectName).Create(privilegedPod)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	actualPod.Spec.Containers[0].Image = "something-nefarious"
-	if _, err := haroldKubeClient.Pods(projectName).Update(actualPod); !kapierror.IsForbidden(err) {
+	if _, err := haroldKubeClient.Core().Pods(projectName).Update(actualPod); !kapierror.IsForbidden(err) {
 		t.Fatalf("missing forbidden: %v", err)
 	}
 
 	// try to lie about the privileged nature
 	actualPod.Spec.SecurityContext.HostPID = false
-	if _, err := haroldKubeClient.Pods(projectName).Update(actualPod); err == nil {
+	if _, err := haroldKubeClient.Core().Pods(projectName).Update(actualPod); err == nil {
 		t.Fatalf("missing error: %v", err)
 	}
 }

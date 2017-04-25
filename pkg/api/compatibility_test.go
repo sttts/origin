@@ -9,21 +9,16 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/api/validation"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/validation/field"
 )
 
 func TestCompatibility_v1_Pod(t *testing.T) {
-	// Test "spec.host" -> "spec.nodeName"
-	expectedHost := "my-host"
 	// Test "spec.serviceAccount" -> "spec.serviceAccountName"
 	expectedServiceAccount := "my-service-account"
-	// Test "tcp" protocol gets converted to "TCP" and validated
-	originalProtocol := "tcp"
-	expectedProtocol := "TCP"
 
 	input := []byte(fmt.Sprintf(`
 {
@@ -31,16 +26,14 @@ func TestCompatibility_v1_Pod(t *testing.T) {
 	"apiVersion":"v1",
 	"metadata":{"name":"my-pod-name", "namespace":"my-pod-namespace"},
 	"spec": {
-		"host":"%s",
 		"serviceAccount":"%s",
 		"containers":[{
 			"name":"my-container-name",
-			"image":"my-container-image",
-			"ports":[{"containerPort":1,"protocol":"%s"}]
+			"image":"my-container-image"
 		}]
 	}
 }
-`, expectedHost, expectedServiceAccount, originalProtocol))
+`, expectedServiceAccount))
 
 	t.Log("Testing 1.0.0 v1 migration added in PR #3592")
 	testCompatibility(
@@ -49,13 +42,8 @@ func TestCompatibility_v1_Pod(t *testing.T) {
 			return validation.ValidatePod(obj.(*api.Pod))
 		},
 		map[string]string{
-			"spec.host":     expectedHost,
-			"spec.nodeName": expectedHost,
-
 			"spec.serviceAccount":     expectedServiceAccount,
 			"spec.serviceAccountName": expectedServiceAccount,
-
-			"spec.containers[0].ports[0].protocol": expectedProtocol,
 		},
 	)
 }
@@ -127,68 +115,6 @@ func TestCompatibility_v1_VolumeSource(t *testing.T) {
 	)
 }
 
-func TestCompatibility_v1_Service(t *testing.T) {
-	// Test "spec.portalIP" -> "spec.clusterIP"
-	expectedIP := "1.2.3.4"
-	// Test "tcp" protocol gets converted to "TCP" and validated
-	originalProtocol := "tcp"
-	expectedProtocol := "TCP"
-
-	input := []byte(fmt.Sprintf(`
-{
-	"kind":"Service",
-	"apiVersion":"v1",
-	"metadata":{"name":"my-service-name", "namespace":"my-service-namespace"},
-	"spec": {
-		"portalIP":"%s",
-		"ports":[{"port":1,"protocol":"%s"}]
-	}
-}
-`, expectedIP, originalProtocol))
-
-	t.Log("Testing 1.0.0 v1 migration added in PR #3592")
-	testCompatibility(
-		t, "v1", input,
-		func(obj runtime.Object) field.ErrorList {
-			return validation.ValidateService(obj.(*api.Service))
-		},
-		map[string]string{
-			"spec.portalIP":          expectedIP,
-			"spec.clusterIP":         expectedIP,
-			"spec.ports[0].protocol": expectedProtocol,
-		},
-	)
-}
-
-func TestCompatibility_v1_Endpoints(t *testing.T) {
-	// Test "tcp" protocol gets converted to "TCP" and validated
-	originalProtocol := "tcp"
-	expectedProtocol := "TCP"
-
-	input := []byte(fmt.Sprintf(`
-{
-	"kind":"Endpoints",
-	"apiVersion":"v1",
-	"metadata":{"name":"my-endpoints-name", "namespace":"my-endpoints-namespace"},
-	"subsets": [{
-		"addresses":[{"ip":"1.2.3.4"}],
-		"ports": [{"port":1,"targetPort":1,"protocol":"%s"}]
-	}]
-}
-`, originalProtocol))
-
-	t.Log("Testing 1.0.0 v1 migration added in PR #3592")
-	testCompatibility(
-		t, "v1", input,
-		func(obj runtime.Object) field.ErrorList {
-			return validation.ValidateEndpoints(obj.(*api.Endpoints))
-		},
-		map[string]string{
-			"subsets[0].ports[0].protocol": expectedProtocol,
-		},
-	)
-}
-
 func testCompatibility(
 	t *testing.T,
 	version string,
@@ -210,7 +136,7 @@ func testCompatibility(
 	}
 
 	// Encode
-	output := runtime.EncodeOrDie(api.Codecs.LegacyCodec(unversioned.GroupVersion{Group: "", Version: version}), obj)
+	output := runtime.EncodeOrDie(api.Codecs.LegacyCodec(schema.GroupVersion{Group: "", Version: version}), obj)
 
 	// Validate old and new fields are encoded
 	generic := map[string]interface{}{}
@@ -228,14 +154,14 @@ func testCompatibility(
 }
 
 func TestAllowedGrouplessVersion(t *testing.T) {
-	versions := map[string]unversioned.GroupVersion{
+	versions := map[string]schema.GroupVersion{
 		"v1":      {Group: "", Version: "v1"},
 		"v1beta3": {Group: "", Version: "v1beta3"},
 		"1.0":     {Group: "", Version: "1.0"},
 		"pre012":  {Group: "", Version: "pre012"},
 	}
 	for apiVersion, expectedGroupVersion := range versions {
-		groupVersion, err := unversioned.ParseGroupVersion(apiVersion)
+		groupVersion, err := schema.ParseGroupVersion(apiVersion)
 		if err != nil {
 			t.Errorf("%s: unexpected error parsing: %v", apiVersion, err)
 			continue

@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,32 +22,170 @@ import (
 	"strings"
 	"testing"
 
-	kadmission "k8s.io/kubernetes/pkg/admission"
+	"github.com/stretchr/testify/assert"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/diff"
+	"k8s.io/apimachinery/pkg/util/sets"
+	kadmission "k8s.io/apiserver/pkg/admission"
+	"k8s.io/apiserver/pkg/authentication/user"
+	"k8s.io/apiserver/pkg/authorization/authorizer"
 	kapi "k8s.io/kubernetes/pkg/api"
-	extensions "k8s.io/kubernetes/pkg/apis/extensions"
-	"k8s.io/kubernetes/pkg/auth/user"
-	"k8s.io/kubernetes/pkg/client/cache"
-	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	clientsetfake "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
+	"k8s.io/kubernetes/pkg/apis/extensions"
+	informers "k8s.io/kubernetes/pkg/client/informers/informers_generated/internalversion"
+	extensionslisters "k8s.io/kubernetes/pkg/client/listers/extensions/internalversion"
+	"k8s.io/kubernetes/pkg/controller"
+	"k8s.io/kubernetes/pkg/security/apparmor"
 	kpsp "k8s.io/kubernetes/pkg/security/podsecuritypolicy"
+	"k8s.io/kubernetes/pkg/security/podsecuritypolicy/seccomp"
 	psputil "k8s.io/kubernetes/pkg/security/podsecuritypolicy/util"
-	diff "k8s.io/kubernetes/pkg/util/diff"
 )
 
-func NewTestAdmission(store cache.Store, kclient clientset.Interface) kadmission.Interface {
+const defaultContainerName = "test-c"
+
+// NewTestAdmission provides an admission plugin with test implementations of internal structs.  It uses
+// an authorizer that always returns true.
+func NewTestAdmission(lister extensionslisters.PodSecurityPolicyLister) kadmission.Interface {
 	return &podSecurityPolicyPlugin{
 		Handler:         kadmission.NewHandler(kadmission.Create),
-		client:          kclient,
-		store:           store,
 		strategyFactory: kpsp.NewSimpleStrategyFactory(),
 		pspMatcher:      getMatchingPolicies,
+		authz:           &TestAuthorizer{},
+		lister:          lister,
 	}
 }
+
+// TestAlwaysAllowedAuthorizer is a testing struct for testing that fulfills the authorizer interface.
+type TestAuthorizer struct {
+	// disallowed contains names of disallowed policies.  Map is keyed by user.Info.GetName()
+	disallowed map[string][]string
+}
+
+func (t *TestAuthorizer) Authorize(a authorizer.Attributes) (authorized bool, reason string, err error) {
+	disallowedForUser, _ := t.disallowed[a.GetUser().GetName()]
+	for _, name := range disallowedForUser {
+		if a.GetName() == name {
+			return false, "", nil
+		}
+	}
+	return true, "", nil
+}
+
+var _ authorizer.Authorizer = &TestAuthorizer{}
 
 func useInitContainers(pod *kapi.Pod) *kapi.Pod {
 	pod.Spec.InitContainers = pod.Spec.Containers
 	pod.Spec.Containers = []kapi.Container{}
 	return pod
+}
+
+func TestAdmitSeccomp(t *testing.T) {
+	containerName := "container"
+	tests := map[string]struct {
+		pspAnnotations map[string]string
+		podAnnotations map[string]string
+		shouldAdmit    bool
+	}{
+		"no seccomp, no pod annotations": {
+			pspAnnotations: nil,
+			podAnnotations: nil,
+			shouldAdmit:    true,
+		},
+		"no seccomp, pod annotations": {
+			pspAnnotations: nil,
+			podAnnotations: map[string]string{
+				kapi.SeccompPodAnnotationKey: "foo",
+			},
+			shouldAdmit: false,
+		},
+		"no seccomp, container annotations": {
+			pspAnnotations: nil,
+			podAnnotations: map[string]string{
+				kapi.SeccompContainerAnnotationKeyPrefix + containerName: "foo",
+			},
+			shouldAdmit: false,
+		},
+		"seccomp, allow any no pod annotation": {
+			pspAnnotations: map[string]string{
+				seccomp.AllowedProfilesAnnotationKey: seccomp.AllowAny,
+			},
+			podAnnotations: nil,
+			shouldAdmit:    true,
+		},
+		"seccomp, allow any pod annotation": {
+			pspAnnotations: map[string]string{
+				seccomp.AllowedProfilesAnnotationKey: seccomp.AllowAny,
+			},
+			podAnnotations: map[string]string{
+				kapi.SeccompPodAnnotationKey: "foo",
+			},
+			shouldAdmit: true,
+		},
+		"seccomp, allow any container annotation": {
+			pspAnnotations: map[string]string{
+				seccomp.AllowedProfilesAnnotationKey: seccomp.AllowAny,
+			},
+			podAnnotations: map[string]string{
+				kapi.SeccompContainerAnnotationKeyPrefix + containerName: "foo",
+			},
+			shouldAdmit: true,
+		},
+		"seccomp, allow specific pod annotation failure": {
+			pspAnnotations: map[string]string{
+				seccomp.AllowedProfilesAnnotationKey: "foo",
+			},
+			podAnnotations: map[string]string{
+				kapi.SeccompPodAnnotationKey: "bar",
+			},
+			shouldAdmit: false,
+		},
+		"seccomp, allow specific container annotation failure": {
+			pspAnnotations: map[string]string{
+				// provide a default so we don't have to give the pod annotation
+				seccomp.DefaultProfileAnnotationKey:  "foo",
+				seccomp.AllowedProfilesAnnotationKey: "foo",
+			},
+			podAnnotations: map[string]string{
+				kapi.SeccompContainerAnnotationKeyPrefix + containerName: "bar",
+			},
+			shouldAdmit: false,
+		},
+		"seccomp, allow specific pod annotation pass": {
+			pspAnnotations: map[string]string{
+				seccomp.AllowedProfilesAnnotationKey: "foo",
+			},
+			podAnnotations: map[string]string{
+				kapi.SeccompPodAnnotationKey: "foo",
+			},
+			shouldAdmit: true,
+		},
+		"seccomp, allow specific container annotation pass": {
+			pspAnnotations: map[string]string{
+				// provide a default so we don't have to give the pod annotation
+				seccomp.DefaultProfileAnnotationKey:  "foo",
+				seccomp.AllowedProfilesAnnotationKey: "foo,bar",
+			},
+			podAnnotations: map[string]string{
+				kapi.SeccompContainerAnnotationKeyPrefix + containerName: "bar",
+			},
+			shouldAdmit: true,
+		},
+	}
+	for k, v := range tests {
+		psp := restrictivePSP()
+		psp.Annotations = v.pspAnnotations
+		pod := &kapi.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Annotations: v.podAnnotations,
+			},
+			Spec: kapi.PodSpec{
+				Containers: []kapi.Container{
+					{Name: containerName},
+				},
+			},
+		}
+		testPSPAdmit(k, []*extensions.PodSecurityPolicy{psp}, pod, v.shouldAdmit, psp.Name, t)
+	}
 }
 
 func TestAdmitPrivileged(t *testing.T) {
@@ -394,8 +532,11 @@ func TestAdmitHostPorts(t *testing.T) {
 		},
 	}
 
-	for k, v := range tests {
-		testPSPAdmit(k, v.psps, v.pod, v.shouldPass, v.expectedPSP, t)
+	for i := 0; i < 2; i++ {
+		for k, v := range tests {
+			v.pod.Spec.Containers, v.pod.Spec.InitContainers = v.pod.Spec.InitContainers, v.pod.Spec.Containers
+			testPSPAdmit(k, v.psps, v.pod, v.shouldPass, v.expectedPSP, t)
+		}
 	}
 }
 
@@ -603,6 +744,85 @@ func TestAdmitSELinux(t *testing.T) {
 			if !reflect.DeepEqual(*v.expectedSELinux, *v.pod.Spec.Containers[0].SecurityContext.SELinuxOptions) {
 				t.Errorf("%s expected selinux to be: %v but found %v", k, *v.expectedSELinux, *v.pod.Spec.Containers[0].SecurityContext.SELinuxOptions)
 			}
+		}
+	}
+}
+
+func TestAdmitAppArmor(t *testing.T) {
+	createPodWithAppArmor := func(profile string) *kapi.Pod {
+		pod := goodPod()
+		apparmor.SetProfileNameFromPodAnnotations(pod.Annotations, defaultContainerName, profile)
+		return pod
+	}
+
+	unconstrainedPSP := restrictivePSP()
+	defaultedPSP := restrictivePSP()
+	defaultedPSP.Annotations = map[string]string{
+		apparmor.DefaultProfileAnnotationKey: apparmor.ProfileRuntimeDefault,
+	}
+	appArmorPSP := restrictivePSP()
+	appArmorPSP.Annotations = map[string]string{
+		apparmor.AllowedProfilesAnnotationKey: apparmor.ProfileRuntimeDefault,
+	}
+	appArmorDefaultPSP := restrictivePSP()
+	appArmorDefaultPSP.Annotations = map[string]string{
+		apparmor.DefaultProfileAnnotationKey:  apparmor.ProfileRuntimeDefault,
+		apparmor.AllowedProfilesAnnotationKey: apparmor.ProfileRuntimeDefault + "," + apparmor.ProfileNamePrefix + "foo",
+	}
+
+	tests := map[string]struct {
+		pod             *kapi.Pod
+		psp             *extensions.PodSecurityPolicy
+		shouldPass      bool
+		expectedProfile string
+	}{
+		"unconstrained with no profile": {
+			pod:             goodPod(),
+			psp:             unconstrainedPSP,
+			shouldPass:      true,
+			expectedProfile: "",
+		},
+		"unconstrained with profile": {
+			pod:             createPodWithAppArmor(apparmor.ProfileRuntimeDefault),
+			psp:             unconstrainedPSP,
+			shouldPass:      true,
+			expectedProfile: apparmor.ProfileRuntimeDefault,
+		},
+		"unconstrained with default profile": {
+			pod:             goodPod(),
+			psp:             defaultedPSP,
+			shouldPass:      true,
+			expectedProfile: apparmor.ProfileRuntimeDefault,
+		},
+		"AppArmor enforced with no profile": {
+			pod:        goodPod(),
+			psp:        appArmorPSP,
+			shouldPass: false,
+		},
+		"AppArmor enforced with default profile": {
+			pod:             goodPod(),
+			psp:             appArmorDefaultPSP,
+			shouldPass:      true,
+			expectedProfile: apparmor.ProfileRuntimeDefault,
+		},
+		"AppArmor enforced with good profile": {
+			pod:             createPodWithAppArmor(apparmor.ProfileNamePrefix + "foo"),
+			psp:             appArmorDefaultPSP,
+			shouldPass:      true,
+			expectedProfile: apparmor.ProfileNamePrefix + "foo",
+		},
+		"AppArmor enforced with local profile": {
+			pod:        createPodWithAppArmor(apparmor.ProfileNamePrefix + "bar"),
+			psp:        appArmorPSP,
+			shouldPass: false,
+		},
+	}
+
+	for k, v := range tests {
+		testPSPAdmit(k, []*extensions.PodSecurityPolicy{v.psp}, v.pod, v.shouldPass, v.psp.Name, t)
+
+		if v.shouldPass {
+			assert.Equal(t, v.expectedProfile, apparmor.GetProfileNameFromPodAnnotations(v.pod.Annotations, defaultContainerName), k)
 		}
 	}
 }
@@ -941,33 +1161,208 @@ func TestAdmitReadOnlyRootFilesystem(t *testing.T) {
 	}
 }
 
+func TestAdmitSysctls(t *testing.T) {
+	podWithSysctls := func(safeSysctls []string, unsafeSysctls []string) *kapi.Pod {
+		pod := goodPod()
+		dummySysctls := func(names []string) []kapi.Sysctl {
+			sysctls := make([]kapi.Sysctl, len(names))
+			for i, n := range names {
+				sysctls[i].Name = n
+				sysctls[i].Value = "dummy"
+			}
+			return sysctls
+		}
+		pod.Annotations[kapi.SysctlsPodAnnotationKey] = kapi.PodAnnotationsFromSysctls(dummySysctls(safeSysctls))
+		pod.Annotations[kapi.UnsafeSysctlsPodAnnotationKey] = kapi.PodAnnotationsFromSysctls(dummySysctls(unsafeSysctls))
+		return pod
+	}
+
+	noSysctls := restrictivePSP()
+	noSysctls.Name = "no sysctls"
+
+	emptySysctls := restrictivePSP()
+	emptySysctls.Name = "empty sysctls"
+	emptySysctls.Annotations[extensions.SysctlsPodSecurityPolicyAnnotationKey] = ""
+
+	mixedSysctls := restrictivePSP()
+	mixedSysctls.Name = "wildcard sysctls"
+	mixedSysctls.Annotations[extensions.SysctlsPodSecurityPolicyAnnotationKey] = "a.*,b.*,c,d.e.f"
+
+	aSysctl := restrictivePSP()
+	aSysctl.Name = "a sysctl"
+	aSysctl.Annotations[extensions.SysctlsPodSecurityPolicyAnnotationKey] = "a"
+
+	bSysctl := restrictivePSP()
+	bSysctl.Name = "b sysctl"
+	bSysctl.Annotations[extensions.SysctlsPodSecurityPolicyAnnotationKey] = "b"
+
+	cSysctl := restrictivePSP()
+	cSysctl.Name = "c sysctl"
+	cSysctl.Annotations[extensions.SysctlsPodSecurityPolicyAnnotationKey] = "c"
+
+	catchallSysctls := restrictivePSP()
+	catchallSysctls.Name = "catchall sysctl"
+	catchallSysctls.Annotations[extensions.SysctlsPodSecurityPolicyAnnotationKey] = "*"
+
+	tests := map[string]struct {
+		pod         *kapi.Pod
+		psps        []*extensions.PodSecurityPolicy
+		shouldPass  bool
+		expectedPSP string
+	}{
+		"pod without unsafe sysctls request allowed under noSysctls PSP": {
+			pod:         goodPod(),
+			psps:        []*extensions.PodSecurityPolicy{noSysctls},
+			shouldPass:  true,
+			expectedPSP: noSysctls.Name,
+		},
+		"pod without any sysctls request allowed under emptySysctls PSP": {
+			pod:         goodPod(),
+			psps:        []*extensions.PodSecurityPolicy{emptySysctls},
+			shouldPass:  true,
+			expectedPSP: emptySysctls.Name,
+		},
+		"pod with safe sysctls request allowed under noSysctls PSP": {
+			pod:         podWithSysctls([]string{"a", "b"}, []string{}),
+			psps:        []*extensions.PodSecurityPolicy{noSysctls},
+			shouldPass:  true,
+			expectedPSP: noSysctls.Name,
+		},
+		"pod with unsafe sysctls request allowed under noSysctls PSP": {
+			pod:         podWithSysctls([]string{}, []string{"a", "b"}),
+			psps:        []*extensions.PodSecurityPolicy{noSysctls},
+			shouldPass:  true,
+			expectedPSP: noSysctls.Name,
+		},
+		"pod with safe sysctls request disallowed under emptySysctls PSP": {
+			pod:        podWithSysctls([]string{"a", "b"}, []string{}),
+			psps:       []*extensions.PodSecurityPolicy{emptySysctls},
+			shouldPass: false,
+		},
+		"pod with unsafe sysctls a, b request disallowed under aSysctls SCC": {
+			pod:        podWithSysctls([]string{}, []string{"a", "b"}),
+			psps:       []*extensions.PodSecurityPolicy{aSysctl},
+			shouldPass: false,
+		},
+		"pod with unsafe sysctls b request disallowed under aSysctls SCC": {
+			pod:        podWithSysctls([]string{}, []string{"b"}),
+			psps:       []*extensions.PodSecurityPolicy{aSysctl},
+			shouldPass: false,
+		},
+		"pod with unsafe sysctls a request allowed under aSysctls SCC": {
+			pod:         podWithSysctls([]string{}, []string{"a"}),
+			psps:        []*extensions.PodSecurityPolicy{aSysctl},
+			shouldPass:  true,
+			expectedPSP: aSysctl.Name,
+		},
+		"pod with safe sysctls a, b request disallowed under aSysctls SCC": {
+			pod:        podWithSysctls([]string{"a", "b"}, []string{}),
+			psps:       []*extensions.PodSecurityPolicy{aSysctl},
+			shouldPass: false,
+		},
+		"pod with safe sysctls b request disallowed under aSysctls SCC": {
+			pod:        podWithSysctls([]string{"b"}, []string{}),
+			psps:       []*extensions.PodSecurityPolicy{aSysctl},
+			shouldPass: false,
+		},
+		"pod with safe sysctls a request allowed under aSysctls SCC": {
+			pod:         podWithSysctls([]string{"a"}, []string{}),
+			psps:        []*extensions.PodSecurityPolicy{aSysctl},
+			shouldPass:  true,
+			expectedPSP: aSysctl.Name,
+		},
+		"pod with unsafe sysctls request disallowed under emptySysctls PSP": {
+			pod:        podWithSysctls([]string{}, []string{"a", "b"}),
+			psps:       []*extensions.PodSecurityPolicy{emptySysctls},
+			shouldPass: false,
+		},
+		"pod with matching sysctls request allowed under mixedSysctls PSP": {
+			pod:         podWithSysctls([]string{"a.b", "b.c"}, []string{"c", "d.e.f"}),
+			psps:        []*extensions.PodSecurityPolicy{mixedSysctls},
+			shouldPass:  true,
+			expectedPSP: mixedSysctls.Name,
+		},
+		"pod with not-matching unsafe sysctls request disallowed under mixedSysctls PSP": {
+			pod:        podWithSysctls([]string{"a.b", "b.c", "c", "d.e.f"}, []string{"e"}),
+			psps:       []*extensions.PodSecurityPolicy{mixedSysctls},
+			shouldPass: false,
+		},
+		"pod with not-matching safe sysctls request disallowed under mixedSysctls PSP": {
+			pod:        podWithSysctls([]string{"a.b", "b.c", "c", "d.e.f", "e"}, []string{}),
+			psps:       []*extensions.PodSecurityPolicy{mixedSysctls},
+			shouldPass: false,
+		},
+		"pod with sysctls request allowed under catchallSysctls PSP": {
+			pod:         podWithSysctls([]string{"e"}, []string{"f"}),
+			psps:        []*extensions.PodSecurityPolicy{catchallSysctls},
+			shouldPass:  true,
+			expectedPSP: catchallSysctls.Name,
+		},
+		"pod with sysctls request allowed under catchallSysctls PSP, not under mixedSysctls or emptySysctls PSP": {
+			pod:         podWithSysctls([]string{"e"}, []string{"f"}),
+			psps:        []*extensions.PodSecurityPolicy{mixedSysctls, catchallSysctls, emptySysctls},
+			shouldPass:  true,
+			expectedPSP: catchallSysctls.Name,
+		},
+		"pod with safe c sysctl request allowed under cSysctl PSP, not under aSysctl or bSysctl PSP": {
+			pod:         podWithSysctls([]string{}, []string{"c"}),
+			psps:        []*extensions.PodSecurityPolicy{aSysctl, bSysctl, cSysctl},
+			shouldPass:  true,
+			expectedPSP: cSysctl.Name,
+		},
+		"pod with unsafe c sysctl request allowed under cSysctl PSP, not under aSysctl or bSysctl PSP": {
+			pod:         podWithSysctls([]string{"c"}, []string{}),
+			psps:        []*extensions.PodSecurityPolicy{aSysctl, bSysctl, cSysctl},
+			shouldPass:  true,
+			expectedPSP: cSysctl.Name,
+		},
+	}
+
+	for k, v := range tests {
+		origSafeSysctls, origUnsafeSysctls, err := kapi.SysctlsFromPodAnnotations(v.pod.Annotations)
+		if err != nil {
+			t.Fatalf("invalid sysctl annotation: %v", err)
+		}
+
+		testPSPAdmit(k, v.psps, v.pod, v.shouldPass, v.expectedPSP, t)
+
+		if v.shouldPass {
+			safeSysctls, unsafeSysctls, _ := kapi.SysctlsFromPodAnnotations(v.pod.Annotations)
+			if !reflect.DeepEqual(safeSysctls, origSafeSysctls) {
+				t.Errorf("%s: wrong safe sysctls: expected=%v, got=%v", k, origSafeSysctls, safeSysctls)
+			}
+			if !reflect.DeepEqual(unsafeSysctls, origUnsafeSysctls) {
+				t.Errorf("%s: wrong unsafe sysctls: expected=%v, got=%v", k, origSafeSysctls, safeSysctls)
+			}
+		}
+	}
+}
+
 func testPSPAdmit(testCaseName string, psps []*extensions.PodSecurityPolicy, pod *kapi.Pod, shouldPass bool, expectedPSP string, t *testing.T) {
-	namespace := createNamespaceForTest()
-	serviceAccount := createSAForTest()
-	tc := clientsetfake.NewSimpleClientset(namespace, serviceAccount)
-	store := cache.NewStore(cache.MetaNamespaceKeyFunc)
+	informerFactory := informers.NewSharedInformerFactory(nil, controller.NoResyncPeriodFunc())
+	store := informerFactory.Extensions().InternalVersion().PodSecurityPolicies().Informer().GetStore()
 
 	for _, psp := range psps {
 		store.Add(psp)
 	}
 
-	plugin := NewTestAdmission(store, tc)
+	plugin := NewTestAdmission(informerFactory.Extensions().InternalVersion().PodSecurityPolicies().Lister())
 
 	attrs := kadmission.NewAttributesRecord(pod, nil, kapi.Kind("Pod").WithVersion("version"), "namespace", "", kapi.Resource("pods").WithVersion("version"), "", kadmission.Create, &user.DefaultInfo{})
 	err := plugin.Admit(attrs)
 
 	if shouldPass && err != nil {
-		t.Errorf("%s expected no errors but received %v", testCaseName, err)
+		t.Errorf("%s: expected no errors but received %v", testCaseName, err)
 	}
 
 	if shouldPass && err == nil {
 		if pod.Annotations[psputil.ValidatedPSPAnnotation] != expectedPSP {
-			t.Errorf("%s expected to validate under %s but found %s", testCaseName, expectedPSP, pod.Annotations[psputil.ValidatedPSPAnnotation])
+			t.Errorf("%s: expected to validate under %s but found %s", testCaseName, expectedPSP, pod.Annotations[psputil.ValidatedPSPAnnotation])
 		}
 	}
 
 	if !shouldPass && err == nil {
-		t.Errorf("%s expected errors but received none", testCaseName)
+		t.Errorf("%s: expected errors but received none", testCaseName)
 	}
 }
 
@@ -1066,7 +1461,7 @@ func TestCreateProvidersFromConstraints(t *testing.T) {
 		"valid psp": {
 			psp: func() *extensions.PodSecurityPolicy {
 				return &extensions.PodSecurityPolicy{
-					ObjectMeta: kapi.ObjectMeta{
+					ObjectMeta: metav1.ObjectMeta{
 						Name: "valid psp",
 					},
 					Spec: extensions.PodSecurityPolicySpec{
@@ -1089,7 +1484,7 @@ func TestCreateProvidersFromConstraints(t *testing.T) {
 		"bad psp strategy options": {
 			psp: func() *extensions.PodSecurityPolicy {
 				return &extensions.PodSecurityPolicy{
-					ObjectMeta: kapi.ObjectMeta{
+					ObjectMeta: metav1.ObjectMeta{
 						Name: "bad psp user options",
 					},
 					Spec: extensions.PodSecurityPolicySpec{
@@ -1113,13 +1508,8 @@ func TestCreateProvidersFromConstraints(t *testing.T) {
 	}
 
 	for k, v := range testCases {
-		store := cache.NewStore(cache.MetaNamespaceKeyFunc)
-
-		tc := clientsetfake.NewSimpleClientset()
 		admit := &podSecurityPolicyPlugin{
 			Handler:         kadmission.NewHandler(kadmission.Create, kadmission.Update),
-			client:          tc,
-			store:           store,
 			strategyFactory: kpsp.NewSimpleStrategyFactory(),
 		}
 
@@ -1148,10 +1538,123 @@ func TestCreateProvidersFromConstraints(t *testing.T) {
 	}
 }
 
+func TestGetMatchingPolicies(t *testing.T) {
+	policyWithName := func(name string) *extensions.PodSecurityPolicy {
+		p := restrictivePSP()
+		p.Name = name
+		return p
+	}
+
+	tests := map[string]struct {
+		user               user.Info
+		sa                 user.Info
+		expectedPolicies   sets.String
+		inPolicies         []*extensions.PodSecurityPolicy
+		disallowedPolicies map[string][]string
+	}{
+		"policy allowed by user": {
+			user: &user.DefaultInfo{Name: "user"},
+			sa:   &user.DefaultInfo{Name: "sa"},
+			disallowedPolicies: map[string][]string{
+				"sa": {"policy"},
+			},
+			inPolicies:       []*extensions.PodSecurityPolicy{policyWithName("policy")},
+			expectedPolicies: sets.NewString("policy"),
+		},
+		"policy allowed by sa": {
+			user: &user.DefaultInfo{Name: "user"},
+			sa:   &user.DefaultInfo{Name: "sa"},
+			disallowedPolicies: map[string][]string{
+				"user": {"policy"},
+			},
+			inPolicies:       []*extensions.PodSecurityPolicy{policyWithName("policy")},
+			expectedPolicies: sets.NewString("policy"),
+		},
+		"no policies allowed": {
+			user: &user.DefaultInfo{Name: "user"},
+			sa:   &user.DefaultInfo{Name: "sa"},
+			disallowedPolicies: map[string][]string{
+				"user": {"policy"},
+				"sa":   {"policy"},
+			},
+			inPolicies:       []*extensions.PodSecurityPolicy{policyWithName("policy")},
+			expectedPolicies: sets.NewString(),
+		},
+		"multiple policies allowed": {
+			user: &user.DefaultInfo{Name: "user"},
+			sa:   &user.DefaultInfo{Name: "sa"},
+			disallowedPolicies: map[string][]string{
+				"user": {"policy1", "policy3"},
+				"sa":   {"policy2", "policy3"},
+			},
+			inPolicies: []*extensions.PodSecurityPolicy{
+				policyWithName("policy1"), // allowed by sa
+				policyWithName("policy2"), // allowed by user
+				policyWithName("policy3"), // not allowed
+			},
+			expectedPolicies: sets.NewString("policy1", "policy2"),
+		},
+		"policies are allowed for nil user info": {
+			user: nil,
+			sa:   &user.DefaultInfo{Name: "sa"},
+			disallowedPolicies: map[string][]string{
+				"user": {"policy1", "policy3"},
+				"sa":   {"policy2", "policy3"},
+			},
+			inPolicies: []*extensions.PodSecurityPolicy{
+				policyWithName("policy1"),
+				policyWithName("policy2"),
+				policyWithName("policy3"),
+			},
+			// all policies are allowed regardless of the permissions when user info is nil
+			// (ie. a request hitting the unsecure port)
+			expectedPolicies: sets.NewString("policy1", "policy2", "policy3"),
+		},
+		"policies are not allowed for nil sa info": {
+			user: &user.DefaultInfo{Name: "user"},
+			sa:   nil,
+			disallowedPolicies: map[string][]string{
+				"user": {"policy1", "policy3"},
+				"sa":   {"policy2", "policy3"},
+			},
+			inPolicies: []*extensions.PodSecurityPolicy{
+				policyWithName("policy1"),
+				policyWithName("policy2"),
+				policyWithName("policy3"),
+			},
+			// only the policies for the user are allowed when sa info is nil
+			expectedPolicies: sets.NewString("policy2"),
+		},
+	}
+	for k, v := range tests {
+		informerFactory := informers.NewSharedInformerFactory(nil, controller.NoResyncPeriodFunc())
+		pspInformer := informerFactory.Extensions().InternalVersion().PodSecurityPolicies()
+		store := pspInformer.Informer().GetStore()
+		for _, psp := range v.inPolicies {
+			store.Add(psp)
+		}
+
+		authz := &TestAuthorizer{disallowed: v.disallowedPolicies}
+		allowedPolicies, err := getMatchingPolicies(pspInformer.Lister(), v.user, v.sa, authz)
+		if err != nil {
+			t.Errorf("%s got unexpected error %#v", k, err)
+			continue
+		}
+		allowedPolicyNames := sets.NewString()
+		for _, p := range allowedPolicies {
+			allowedPolicyNames.Insert(p.Name)
+		}
+		if !v.expectedPolicies.Equal(allowedPolicyNames) {
+			t.Errorf("%s received unexpected policies.  Expected %#v but got %#v", k, v.expectedPolicies.List(), allowedPolicyNames.List())
+		}
+	}
+}
+
 func restrictivePSP() *extensions.PodSecurityPolicy {
 	return &extensions.PodSecurityPolicy{
-		ObjectMeta: kapi.ObjectMeta{
-			Name: "restrictive",
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "restrictive",
+			Annotations: map[string]string{},
 		},
 		Spec: extensions.PodSecurityPolicySpec{
 			RunAsUser: extensions.RunAsUserStrategyOptions{
@@ -1184,7 +1687,7 @@ func restrictivePSP() *extensions.PodSecurityPolicy {
 
 func createNamespaceForTest() *kapi.Namespace {
 	return &kapi.Namespace{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: "default",
 		},
 	}
@@ -1192,8 +1695,9 @@ func createNamespaceForTest() *kapi.Namespace {
 
 func createSAForTest() *kapi.ServiceAccount {
 	return &kapi.ServiceAccount{
-		ObjectMeta: kapi.ObjectMeta{
-			Name: "default",
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "default",
 		},
 	}
 }
@@ -1203,11 +1707,15 @@ func createSAForTest() *kapi.ServiceAccount {
 // psp when defaults are filled in.
 func goodPod() *kapi.Pod {
 	return &kapi.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{},
+		},
 		Spec: kapi.PodSpec{
 			ServiceAccountName: "default",
 			SecurityContext:    &kapi.PodSecurityContext{},
 			Containers: []kapi.Container{
 				{
+					Name:            defaultContainerName,
 					SecurityContext: &kapi.SecurityContext{},
 				},
 			},

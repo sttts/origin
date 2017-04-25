@@ -3,16 +3,17 @@ package imagestreamimage
 import (
 	"testing"
 
+	etcd "github.com/coreos/etcd/clientv3"
 	"golang.org/x/net/context"
 
-	etcd "github.com/coreos/etcd/client"
-
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/storage/etcd/etcdtest"
+	etcdtesting "k8s.io/apiserver/pkg/storage/etcd/testing"
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/registry/registrytest"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/storage/etcd/etcdtest"
-	etcdtesting "k8s.io/kubernetes/pkg/storage/etcd/testing"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
 	"github.com/openshift/origin/pkg/authorization/registry/subjectaccessreview"
@@ -34,14 +35,13 @@ type fakeSubjectAccessReviewRegistry struct {
 
 var _ subjectaccessreview.Registry = &fakeSubjectAccessReviewRegistry{}
 
-func (f *fakeSubjectAccessReviewRegistry) CreateSubjectAccessReview(ctx kapi.Context, subjectAccessReview *authorizationapi.SubjectAccessReview) (*authorizationapi.SubjectAccessReviewResponse, error) {
+func (f *fakeSubjectAccessReviewRegistry) CreateSubjectAccessReview(ctx apirequest.Context, subjectAccessReview *authorizationapi.SubjectAccessReview) (*authorizationapi.SubjectAccessReviewResponse, error) {
 	return nil, nil
 }
 
-func setup(t *testing.T) (etcd.KeysAPI, *etcdtesting.EtcdTestServer, *REST) {
-
+func setup(t *testing.T) (etcd.KV, *etcdtesting.EtcdTestServer, *REST) {
 	etcdStorage, server := registrytest.NewEtcdStorage(t, "")
-	etcdClient := etcd.NewKeysAPI(server.Client)
+	etcdClient := etcd.NewKV(server.V3Client)
 
 	imageStorage, err := imageetcd.NewREST(restoptions.NewSimpleGetter(etcdStorage))
 	if err != nil {
@@ -115,7 +115,7 @@ func TestGet(t *testing.T) {
 		"happy path": {
 			input: "repo@id",
 			repo: &api.ImageStream{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "ns",
 					Name:      "repo",
 				},
@@ -132,7 +132,7 @@ func TestGet(t *testing.T) {
 				},
 			},
 			image: &api.Image{
-				ObjectMeta: kapi.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "id",
 				},
 				DockerImageManifest: `{
@@ -196,57 +196,60 @@ func TestGet(t *testing.T) {
 	}
 
 	for name, test := range tests {
-		client, server, storage := setup(t)
-		defer server.Terminate(t)
+		// Wrap in a func so we clean up the test etcd after every loop
+		func() {
+			client, server, storage := setup(t)
+			defer server.Terminate(t)
 
-		ctx := kapi.NewDefaultContext()
-		if test.repo != nil {
-			ctx = kapi.WithNamespace(kapi.NewContext(), test.repo.Namespace)
-			_, err := client.Create(
-				context.TODO(),
-				etcdtest.AddPrefix("/imagestreams/"+test.repo.Namespace+"/"+test.repo.Name),
-				runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), test.repo),
-			)
-			if err != nil {
-				t.Errorf("Unexpected error: %v", err)
-				continue
+			ctx := apirequest.NewDefaultContext()
+			if test.repo != nil {
+				ctx = apirequest.WithNamespace(apirequest.NewContext(), test.repo.Namespace)
+				_, err := client.Put(
+					context.TODO(),
+					etcdtest.AddPrefix("/imagestreams/"+test.repo.Namespace+"/"+test.repo.Name),
+					runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), test.repo),
+				)
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+					return
+				}
 			}
-		}
-		if test.image != nil {
-			_, err := client.Create(
-				context.TODO(),
-				etcdtest.AddPrefix("/images/"+test.image.Name),
-				runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), test.image),
-			)
-			if err != nil {
-				t.Errorf("Unexpected error: %v", err)
-				continue
+			if test.image != nil {
+				_, err := client.Put(
+					context.TODO(),
+					etcdtest.AddPrefix("/images/"+test.image.Name),
+					runtime.EncodeOrDie(kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion), test.image),
+				)
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+					return
+				}
 			}
-		}
 
-		obj, err := storage.Get(ctx, test.input)
-		gotError := err != nil
-		if e, a := test.expectError, gotError; e != a {
-			t.Errorf("%s: expected error=%t, got=%t: %s", name, e, a, err)
-			continue
-		}
-		if test.expectError {
-			continue
-		}
+			obj, err := storage.Get(ctx, test.input, &metav1.GetOptions{})
+			gotError := err != nil
+			if e, a := test.expectError, gotError; e != a {
+				t.Errorf("%s: expected error=%t, got=%t: %s", name, e, a, err)
+				return
+			}
+			if test.expectError {
+				return
+			}
 
-		imageStreamImage := obj.(*api.ImageStreamImage)
-		// validate a couple of the fields
-		if e, a := test.repo.Namespace, "ns"; e != a {
-			t.Errorf("%s: namespace: expected %q, got %q", name, e, a)
-		}
-		if e, a := test.input, imageStreamImage.Name; e != a {
-			t.Errorf("%s: name: expected %q, got %q", name, e, a)
-		}
-		if e, a := "2d24f826cb16146e2016ff349a8a33ed5830f3b938d45c0f82943f4ab8c097e7", imageStreamImage.Image.DockerImageMetadata.ID; e != a {
-			t.Errorf("%s: id: expected %q, got %q", name, e, a)
-		}
-		if e, a := "43bd710ec89a", imageStreamImage.Image.DockerImageMetadata.ContainerConfig.Hostname; e != a {
-			t.Errorf("%s: container config hostname: expected %q, got %q", name, e, a)
-		}
+			imageStreamImage := obj.(*api.ImageStreamImage)
+			// validate a couple of the fields
+			if e, a := test.repo.Namespace, "ns"; e != a {
+				t.Errorf("%s: namespace: expected %q, got %q", name, e, a)
+			}
+			if e, a := test.input, imageStreamImage.Name; e != a {
+				t.Errorf("%s: name: expected %q, got %q", name, e, a)
+			}
+			if e, a := "2d24f826cb16146e2016ff349a8a33ed5830f3b938d45c0f82943f4ab8c097e7", imageStreamImage.Image.DockerImageMetadata.ID; e != a {
+				t.Errorf("%s: id: expected %q, got %q", name, e, a)
+			}
+			if e, a := "43bd710ec89a", imageStreamImage.Image.DockerImageMetadata.ContainerConfig.Hostname; e != a {
+				t.Errorf("%s: container config hostname: expected %q, got %q", name, e, a)
+			}
+		}()
 	}
 }

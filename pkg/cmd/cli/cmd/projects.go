@@ -5,15 +5,19 @@ import (
 	"io"
 	"sort"
 
-	"k8s.io/kubernetes/pkg/client/restclient"
-	kclientcmd "k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
-	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
+	restclient "k8s.io/client-go/rest"
+	kclientcmd "k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 
+	oapi "github.com/openshift/origin/pkg/api"
 	"github.com/openshift/origin/pkg/client"
 	cliconfig "github.com/openshift/origin/pkg/cmd/cli/config"
+	"github.com/openshift/origin/pkg/cmd/templates"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 	"github.com/openshift/origin/pkg/project/api"
+	projectapihelpers "github.com/openshift/origin/pkg/project/api/helpers"
 
 	"github.com/spf13/cobra"
 )
@@ -22,8 +26,12 @@ type ProjectsOptions struct {
 	Config       clientcmdapi.Config
 	ClientConfig *restclient.Config
 	Client       *client.Client
+	KubeClient   kclientset.Interface
 	Out          io.Writer
 	PathOptions  *kclientcmd.PathOptions
+
+	// internal strings
+	CommandName string
 
 	DisplayShort bool
 }
@@ -41,15 +49,12 @@ func (p SortByProjectName) Less(i, j int) bool {
 	return p[i].Name < p[j].Name
 }
 
-const (
-	projectsLong = `
-Display information about the current active project and existing projects on the server.
+var (
+	projectsLong = templates.LongDesc(`
+		Display information about the current active project and existing projects on the server.
 
-For advanced configuration, or to manage the contents of your config file, use the 'config'
-command.`
-
-	projectsExample = `  # Display the projects that currently exist
-  %[1]s`
+		For advanced configuration, or to manage the contents of your config file, use the 'config'
+		command.`)
 )
 
 // NewCmdProjects implements the OpenShift cli rollback command
@@ -57,14 +62,13 @@ func NewCmdProjects(fullName string, f *clientcmd.Factory, out io.Writer) *cobra
 	options := &ProjectsOptions{}
 
 	cmd := &cobra.Command{
-		Use:     "projects",
-		Short:   "Display existing projects",
-		Long:    projectsLong,
-		Example: fmt.Sprintf(projectsExample, fullName),
+		Use:   "projects",
+		Short: "Display existing projects",
+		Long:  projectsLong,
 		Run: func(cmd *cobra.Command, args []string) {
 			options.PathOptions = cliconfig.NewPathOptions(cmd)
 
-			if err := options.Complete(f, args, out); err != nil {
+			if err := options.Complete(f, args, fullName, out); err != nil {
 				kcmdutil.CheckErr(kcmdutil.UsageError(cmd, err.Error()))
 			}
 
@@ -78,23 +82,25 @@ func NewCmdProjects(fullName string, f *clientcmd.Factory, out io.Writer) *cobra
 	return cmd
 }
 
-func (o *ProjectsOptions) Complete(f *clientcmd.Factory, args []string, out io.Writer) error {
+func (o *ProjectsOptions) Complete(f *clientcmd.Factory, args []string, commandName string, out io.Writer) error {
 	if len(args) > 0 {
 		return fmt.Errorf("no arguments should be passed")
 	}
 
+	o.CommandName = commandName
+
 	var err error
-	o.Config, err = f.OpenShiftClientConfig.RawConfig()
+	o.Config, err = f.OpenShiftClientConfig().RawConfig()
 	if err != nil {
 		return err
 	}
 
-	o.ClientConfig, err = f.OpenShiftClientConfig.ClientConfig()
+	o.ClientConfig, err = f.OpenShiftClientConfig().ClientConfig()
 	if err != nil {
 		return err
 	}
 
-	o.Client, _, err = f.Clients()
+	o.Client, o.KubeClient, err = f.Clients()
 	if err != nil {
 		return err
 	}
@@ -110,8 +116,11 @@ func (o ProjectsOptions) RunProjects() error {
 	clientCfg := o.ClientConfig
 	out := o.Out
 
+	var currentProject string
 	currentContext := config.Contexts[config.CurrentContext]
-	currentProject := currentContext.Namespace
+	if currentContext != nil {
+		currentProject = currentContext.Namespace
+	}
 
 	var currentProjectExists bool
 	var currentProjectErr error
@@ -119,36 +128,41 @@ func (o ProjectsOptions) RunProjects() error {
 	client := o.Client
 
 	if len(currentProject) > 0 {
-		if _, currentProjectErr := client.Projects().Get(currentProject); currentProjectErr == nil {
+		if currentProjectErr := confirmProjectAccess(currentProject, o.Client, o.KubeClient); currentProjectErr == nil {
 			currentProjectExists = true
 		}
 	}
 
-	defaultContextName := cliconfig.GetContextNickname(currentContext.Namespace, currentContext.Cluster, currentContext.AuthInfo)
+	var defaultContextName string
+	if currentContext != nil {
+		defaultContextName = cliconfig.GetContextNickname(currentContext.Namespace, currentContext.Cluster, currentContext.AuthInfo)
+	}
 
 	var msg string
-	projects, err := getProjects(client)
+	projects, err := getProjects(client, o.KubeClient)
 	if err == nil {
 		switch len(projects) {
 		case 0:
-			msg += "You are not a member of any projects. You can request a project to be created with the 'new-project' command."
+			if !o.DisplayShort {
+				msg += "You are not a member of any projects. You can request a project to be created with the 'new-project' command."
+			}
 		case 1:
 			if o.DisplayShort {
-				msg += fmt.Sprintf("%s", api.DisplayNameAndNameForProject(&projects[0]))
+				msg += fmt.Sprintf("%s", projects[0].Name)
 			} else {
-				msg += fmt.Sprintf("You have one project on this server: %q.", api.DisplayNameAndNameForProject(&projects[0]))
+				msg += fmt.Sprintf("You have one project on this server: %q.", projectapihelpers.DisplayNameAndNameForProject(&projects[0]))
 			}
 		default:
 			asterisk := ""
 			count := 0
 			if !o.DisplayShort {
-				msg += "You have access to the following projects and can switch between them with 'oc project <projectname>':\n"
+				msg += fmt.Sprintf("You have access to the following projects and can switch between them with '%s project <projectname>':\n", o.CommandName)
 			}
 
 			sort.Sort(SortByProjectName(projects))
 			for _, project := range projects {
 				count = count + 1
-				displayName := project.Annotations["openshift.io/display-name"]
+				displayName := project.Annotations[oapi.OpenShiftDisplayName]
 				linebreak := "\n"
 				if len(displayName) == 0 {
 					displayName = project.Annotations["displayName"]
@@ -175,7 +189,7 @@ func (o ProjectsOptions) RunProjects() error {
 		if len(projects) > 0 && !o.DisplayShort {
 			if !currentProjectExists {
 				if clientcmd.IsForbidden(currentProjectErr) {
-					fmt.Printf("you do not have rights to view project %q. Please switch to an existing one.", currentProject)
+					fmt.Printf("You do not have rights to view project %q. Please switch to an existing one.\n", currentProject)
 				}
 				return currentProjectErr
 			}
