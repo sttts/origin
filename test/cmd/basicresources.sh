@@ -308,14 +308,13 @@ os::cmd::try_until_success "oc project test-project-admin"
 os::cmd::expect_success 'oc run --image=openshift/hello-openshift test'
 os::cmd::expect_success 'oc run --image=openshift/hello-openshift --generator=run-controller/v1 test2'
 os::cmd::expect_success 'oc run --image=openshift/hello-openshift --restart=Never test3'
-os::cmd::expect_success 'oc run --image=openshift/hello-openshift --generator=job/v1beta1 --restart=Never test4'
+os::cmd::expect_success 'oc run --image=openshift/hello-openshift --generator=job/v1 --restart=Never test4'
 os::cmd::expect_success 'oc delete dc/test rc/test2 pod/test3 job/test4'
 
 os::cmd::expect_success_and_text 'oc run --dry-run foo --image=bar -o "go-template={{.kind}} {{.apiVersion}}"'                                'DeploymentConfig v1'
 os::cmd::expect_success_and_text 'oc run --dry-run foo --image=bar -o "go-template={{.kind}} {{.apiVersion}}" --restart=Always'               'DeploymentConfig v1'
 os::cmd::expect_success_and_text 'oc run --dry-run foo --image=bar -o "go-template={{.kind}} {{.apiVersion}}" --restart=Never'                'Pod v1'
 # TODO: version ordering is unstable between Go 1.4 and Go 1.6 because of import order
-os::cmd::expect_success_and_text 'oc run --dry-run foo --image=bar -o "go-template={{.kind}} {{.apiVersion}}" --output-version=extensions/v1beta1 --generator=job/v1beta1'        'Job extensions/v1beta1'
 os::cmd::expect_success_and_text 'oc run --dry-run foo --image=bar -o "go-template={{.kind}} {{.apiVersion}}" --generator=job/v1'              'Job batch/v1'
 os::cmd::expect_success_and_text 'oc run --dry-run foo --image=bar -o "go-template={{.kind}} {{.apiVersion}}" --generator=deploymentconfig/v1' 'DeploymentConfig v1'
 os::cmd::expect_success_and_text 'oc run --dry-run foo --image=bar -o "go-template={{.kind}} {{.apiVersion}}" --generator=run-controller/v1'   'ReplicationController v1'
@@ -346,7 +345,6 @@ os::test::junit::declare_suite_start "cmd/basicresources/patch"
 os::cmd::expect_success 'oc login -u system:admin'
 group_json='{"kind":"Group","apiVersion":"v1","metadata":{"name":"patch-group"}}'
 os::cmd::expect_success          "echo '${group_json}' | oc create -f -"
-os::cmd::expect_success_and_text 'oc get group patch-group -o yaml' 'users: null'
 os::cmd::expect_success          "oc patch group patch-group -p 'users: [\"myuser\"]' --loglevel=8"
 os::cmd::expect_success_and_text 'oc get group patch-group -o yaml' 'myuser'
 os::cmd::expect_success          "oc patch group patch-group -p 'users: []' --loglevel=8"
