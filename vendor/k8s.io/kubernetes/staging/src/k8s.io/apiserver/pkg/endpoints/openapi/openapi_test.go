@@ -71,6 +71,7 @@ func TestGetDefinitionName(t *testing.T) {
 	s := runtime.NewScheme()
 	s.AddKnownTypeWithName(testType.GroupVersionKind(), &testType)
 	namer := NewDefinitionNamer(s)
+	t.Logf("Namer: %#v", namer)
 	n, e := namer.GetDefinitionName("", typePkgName)
 	assertEqual(t, typeFriendlyName, n)
 	assertEqual(t, e["x-kubernetes-group-version-kind"], []v1.GroupVersionKind{
