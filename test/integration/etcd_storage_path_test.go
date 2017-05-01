@@ -437,7 +437,7 @@ var etcdStorageData = map[schema.GroupVersionResource]struct {
 	// --
 
 	// k8s.io/kubernetes/pkg/apis/autoscaling/v2alpha1
-	gvr("autoscaling", "v2alpha1", "horizontalpodautoscalers"): {
+	gvr("autoscaling", "v2alpha1", "horizontalpodautoscalers"): { // TODO should we be able to use this endpoint at all?
 		stub:             `{"metadata": {"name": "hpa3"}, "spec": {"maxReplicas": 3, "scaleTargetRef": {"kind": "something", "name": "cross"}}}`,
 		expectedEtcdPath: "kubernetes.io/horizontalpodautoscalers/etcdstoragepathtestnamespace/hpa3",
 		expectedGVK:      gvkP("autoscaling", "v1", "HorizontalPodAutoscaler"),
@@ -494,6 +494,11 @@ var etcdStorageData = map[schema.GroupVersionResource]struct {
 	gvr("extensions", "v1beta1", "deployments"): {
 		stub:             `{"metadata": {"name": "deployment1"}, "spec": {"selector": {"matchLabels": {"f": "z"}}, "template": {"metadata": {"labels": {"f": "z"}}, "spec": {"containers": [{"image": "fedora:latest", "name": "container6"}]}}}}`,
 		expectedEtcdPath: "kubernetes.io/deployments/etcdstoragepathtestnamespace/deployment1",
+	},
+	gvr("extensions", "v1beta1", "horizontalpodautoscalers"): {
+		stub:             `{"metadata": {"name": "hpa1"}, "spec": {"maxReplicas": 3, "scaleRef": {"kind": "something", "name": "cross"}}}`,
+		expectedEtcdPath: "kubernetes.io/horizontalpodautoscalers/etcdstoragepathtestnamespace/hpa1",
+		expectedGVK:      gvkP("autoscaling", "v1", "HorizontalPodAutoscaler"),
 	},
 	gvr("extensions", "v1beta1", "replicasets"): {
 		stub:             `{"metadata": {"name": "rs1"}, "spec": {"selector": {"matchLabels": {"g": "h"}}, "template": {"metadata": {"labels": {"g": "h"}}, "spec": {"containers": [{"image": "fedora:latest", "name": "container4"}]}}}}`,
@@ -792,12 +797,6 @@ var kindWhiteList = sets.NewString(
 	// github.com/openshift/origin/pkg/image/api
 	"DockerImage",
 	// --
-
-	// github.com/openshift/origin/pkg/kubecompat/apis/extensions/v1beta1
-	// HPAs are still stored encoded as extensions/v1beta1. We will convert them to autoscaling as
-	// part of the 3.7 upgrade.
-	"extensions/v1beta1, Kind=HorizontalPodAutoscaler",
-	// --
 )
 
 // namespace used for all tests, do not change this
@@ -821,20 +820,15 @@ func TestEtcd2StoragePath(t *testing.T) {
 // It will start failing when a new type is added to ensure that all future types are added to this test.
 // It will also fail when a type gets moved to a different location. Be very careful in this situation because
 // it essentially means that you will be break old clusters unless you create some migration path for the old data.
-//
-// TODO: disabled for now because the etcd3 test cluster defaults to unix:// and some parts of
-// OpenShift don't seem to work with that right now.
-/*
 func TestEtcd3StoragePath(t *testing.T) {
-	etcdServer, _ := testutil.RequireEtcd3(t)
-	defer testutil.DumpEtcdOnFailure(t)
+	etcdServer := testutil.RequireEtcd3(t)
+	defer testutil.DumpEtcd3OnFailure(t)
 
 	getter := &etcd3Getter{
 		kv: etcdServer.V3Client,
 	}
 	testEtcdStoragePath(t, etcdServer, getter)
 }
-*/
 
 func testEtcdStoragePath(t *testing.T, etcdServer *etcdtest.EtcdTestServer, getter etcdGetter) {
 	masterConfig, err := testserver.DefaultMasterOptions()
@@ -843,8 +837,14 @@ func testEtcdStoragePath(t *testing.T, etcdServer *etcdtest.EtcdTestServer, gett
 	}
 	masterConfig.AdmissionConfig.PluginOrderOverride = []string{"PodNodeSelector"} // remove most admission checks to make testing easier
 	masterConfig.EnableTemplateServiceBroker = true
+	if masterConfig.KubernetesMasterConfig.APIServerArguments == nil {
+		masterConfig.KubernetesMasterConfig.APIServerArguments = serverapi.ExtendedArguments{}
+	}
+	masterConfig.KubernetesMasterConfig.APIServerArguments["storage-media-type"] = []string{runtime.ContentTypeJSON} // always use JSON for now
 	if etcdServer.V3Client == nil {
-		masterConfig.KubernetesMasterConfig.APIServerArguments = serverapi.ExtendedArguments{"storage-backend": []string{"etcd2"}}
+		masterConfig.KubernetesMasterConfig.APIServerArguments["storage-backend"] = []string{"etcd2"}
+	} else {
+		masterConfig.KubernetesMasterConfig.APIServerArguments["storage-backend"] = []string{"etcd3"}
 	}
 	masterConfig.EtcdClientInfo.URLs[0] = testutil.GetEtcdURL()
 
@@ -889,12 +889,8 @@ func testEtcdStoragePath(t *testing.T, etcdServer *etcdtest.EtcdTestServer, gett
 
 		mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 		if err != nil {
-			if kindWhiteList.Has(gvk.String()) {
-				kindSeen.Insert(gvk.String())
-			} else {
-				kindSeen.Insert(kind)
-			}
-			if kindWhiteList.Has(kind) || kindWhiteList.Has(gvk.String()) {
+			kindSeen.Insert(kind)
+			if kindWhiteList.Has(kind) {
 				// t.Logf("skipping test for %s from %s because its GVK %s is whitelisted and has no mapping", kind, pkgPath, gvk)
 			} else {
 				t.Errorf("no mapping found for %s from %s but its GVK %s is not whitelisted", kind, pkgPath, gvk)
@@ -1257,17 +1253,14 @@ type etcd3Getter struct {
 }
 
 func (e *etcd3Getter) getFromEtcd(path string) (*metaObject, error) {
-	response, err := e.kv.Get(context.Background(), path, etcdv3.WithSerializable())
+	response, err := e.kv.Get(context.Background(), "/"+path) // TODO(enj/post-1.6.1-rebase): change all paths to have a leading slash
 	if err != nil {
 		return nil, err
 	}
-
-	into := &metaObject{}
-	if _, _, err := kapi.Codecs.UniversalDeserializer().Decode(response.Kvs[0].Value, nil, into); err != nil {
-		return nil, err
+	if response.More || response.Count != 1 || len(response.Kvs) != 1 {
+		return nil, fmt.Errorf("Invalid etcd response (not found == %v): %#v", response.Count == 0, response)
 	}
-
-	return into, nil
+	return jsonToMetaObject(string(response.Kvs[0].Value))
 }
 
 func diffMaps(a, b interface{}) ([]string, []string) {
