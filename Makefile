@@ -106,20 +106,22 @@ verify-commits:
 #
 # Example:
 #   make update
-update:
+update: pre-build-updates post-build-updates
+pre-build-updates:
 	hack/update-generated-bindata.sh
 	hack/update-generated-deep-copies.sh
 	hack/update-generated-conversions.sh
 	hack/update-generated-clientsets.sh
 	hack/update-generated-defaulters.sh
 	hack/update-generated-listers.sh
-	hack/update-generated-openapi.sh
 	hack/update-generated-protobuf.sh
+post-build-updates: build
+	hack/update-generated-openapi.sh
 	hack/update-generated-completions.sh
 	hack/update-generated-docs.sh
 	hack/update-generated-swagger-descriptions.sh
 	hack/update-generated-swagger-spec.sh
-.PHONY: update
+.PHONY: update pre-build-updates post-build-updates
 
 # Update all generated artifacts for the API
 #
