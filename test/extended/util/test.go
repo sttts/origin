@@ -300,6 +300,9 @@ var (
 
 		// fails without a cloud provider
 		"should be able to create a functioning NodePort service",
+
+		// TODO undisable:
+		"Pod should be schedule to node that don't match the PodAntiAffinity terms",
 	}
 	excludedTestsFilter = regexp.MustCompile(strings.Join(excludedTests, `|`))
 
