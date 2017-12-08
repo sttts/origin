@@ -304,39 +304,46 @@ func TestSchedulerServerDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	provider := "DefaultProvider"
+
 	// This is a snapshot of the default config
 	// If the default changes (new fields are added, or default values change), we want to know
 	// Once we've reacted to the changes appropriately in BuildKubernetesMasterConfig(), update this expected default to match the new upstream defaults
 	expectedDefaults := &componentconfig.KubeSchedulerConfiguration{
-		Port:                           10251, // disabled
-		Address:                        "0.0.0.0",
-		AlgorithmProvider:              "DefaultProvider",
-		ContentType:                    "application/vnd.kubernetes.protobuf",
-		KubeAPIQPS:                     50,
-		KubeAPIBurst:                   100,
-		SchedulerName:                  "default-scheduler",
-		HardPodAffinitySymmetricWeight: 1,
-		FailureDomains:                 "kubernetes.io/hostname,failure-domain.beta.kubernetes.io/zone,failure-domain.beta.kubernetes.io/region",
-		LeaderElection: componentconfig.LeaderElectionConfiguration{
-			ResourceLock: "endpoints",
-			LeaderElect:  true,
-			LeaseDuration: metav1.Duration{
-				Duration: 15 * time.Second,
-			},
-			RenewDeadline: metav1.Duration{
-				Duration: 10 * time.Second,
-			},
-			RetryPeriod: metav1.Duration{
-				Duration: 2 * time.Second,
-			},
+		SchedulerName: "default-scheduler",
+		AlgorithmSource: componentconfig.SchedulerAlgorithmSource{
+			Provider: &provider,
 		},
-		LockObjectNamespace:      "kube-system",
-		LockObjectName:           "kube-scheduler",
-		PolicyConfigMapNamespace: "kube-system",
+		HardPodAffinitySymmetricWeight: 1,
+		LeaderElection: componentconfig.KubeSchedulerLeaderElectionConfiguration{
+			LeaderElectionConfiguration: componentconfig.LeaderElectionConfiguration{
+				ResourceLock: "endpoints",
+				LeaderElect:  false, // we turn this on
+				LeaseDuration: metav1.Duration{
+					Duration: 15 * time.Second,
+				},
+				RenewDeadline: metav1.Duration{
+					Duration: 10 * time.Second,
+				},
+				RetryPeriod: metav1.Duration{
+					Duration: 2 * time.Second,
+				},
+			},
+			LockObjectNamespace: "kube-system",
+			LockObjectName:      "kube-scheduler",
+		},
+		ClientConnection: componentconfig.ClientConnectionConfiguration{
+			ContentType: "application/vnd.kubernetes.protobuf",
+			QPS:         50,
+			Burst:       100,
+		},
+		HealthzBindAddress: "0.0.0.0:0", // we disable this
+		MetricsBindAddress: "0.0.0.0:0",
+		FailureDomains:     "kubernetes.io/hostname,failure-domain.beta.kubernetes.io/zone,failure-domain.beta.kubernetes.io/region",
 	}
 
 	if !reflect.DeepEqual(defaults.GetConfig(), expectedDefaults) {
-		t.Logf("expected defaults, actual defaults: \n%s", diff.ObjectReflectDiff(expectedDefaults, defaults))
+		t.Logf("expected defaults, actual defaults: \n%s", diff.ObjectReflectDiff(expectedDefaults, defaults.GetConfig()))
 		t.Errorf("Got different defaults than expected, adjust in BuildKubernetesMasterConfig and update expectedDefaults")
 	}
 }
