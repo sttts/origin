@@ -168,18 +168,9 @@ func (f *ring0Factory) UpdatePodSpecForObject(obj runtime.Object, fn func(*corev
 			t.Spec.Template = template
 			template = &kapi.PodTemplateSpec{}
 		}
-		externalPodSpec := &corev1.PodSpec{}
-		if err := legacyscheme.Scheme.Convert(template.Spec, externalPodSpec, nil); err != nil {
+		if err := ConvertExteralPodSpecToInternal(fn)(&template.Spec); err != nil {
 			return true, err
 		}
-		if err := fn(externalPodSpec); err != nil {
-			return true, err
-		}
-		internalPodSpec := &kapi.PodSpec{}
-		if err := legacyscheme.Scheme.Convert(externalPodSpec, internalPodSpec, nil); err != nil {
-			return true, err
-		}
-		t.Spec.Template.Spec = *internalPodSpec
 		return true, nil
 
 	default:
