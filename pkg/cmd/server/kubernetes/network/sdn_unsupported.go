@@ -6,9 +6,9 @@ import (
 	"fmt"
 
 	kclientset "k8s.io/client-go/kubernetes"
-	"k8s.io/kubernetes/pkg/apis/kubeproxyconfig"
 	kinternalclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	kinternalinformers "k8s.io/kubernetes/pkg/client/informers/informers_generated/internalversion"
+	"k8s.io/kubernetes/pkg/proxy/apis/kubeproxyconfig"
 
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
 	"github.com/openshift/origin/pkg/network"
