@@ -108,7 +108,7 @@ func NewCmdProcess(fullName string, f *clientcmd.Factory, in io.Reader, out, err
 	// here because oc process returns list of heterogeneous objects that is
 	// not suitable for formatting as a table.
 	cmd.Flags().BoolP("show-all", "a", false, "When printing, show all resources (default hide terminated pods.)")
-	cmd.Flags().BoolP("show-labels", "a", false, "When printing, show all resources (default hide terminated pods.)")
+	cmd.Flags().Bool("show-labels", false, "When printing, show all labels as the last column (default hide labels column)")
 	cmd.Flags().Bool("no-headers", false, "When using the default output, don't print headers.")
 	cmd.Flags().MarkHidden("no-headers")
 	cmd.Flags().String("sort-by", "", "If non-empty, sort list types using this field specification.  The field specification is expressed as a JSONPath expression (e.g. 'ObjectMeta.Name'). The field in the API resource specified by this JSONPath expression must be an integer or a string.")

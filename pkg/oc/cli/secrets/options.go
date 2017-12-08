@@ -163,6 +163,7 @@ func (o SecretOptions) GetSecrets(allowNonExisting bool) ([]*kapi.Secret, bool, 
 
 	for _, secretName := range o.SecretNames {
 		r := o.BuilderFunc().
+			Internal().
 			NamespaceParam(o.Namespace).
 			ResourceNames("secrets", secretName).
 			SingleResourceType().
