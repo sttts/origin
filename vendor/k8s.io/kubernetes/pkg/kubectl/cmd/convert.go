@@ -184,6 +184,10 @@ func (o *ConvertOptions) RunConvert() error {
 		return fmt.Errorf("no objects passed to convert")
 	}
 
+	if !infos[0].Mapping.GroupVersionKind.GroupVersion().Empty() {
+		o.outputVersion = infos[0].Mapping.GroupVersionKind.GroupVersion()
+	}
+
 	objects, err := asVersionedObject(infos, !singleItemImplied, o.outputVersion, o.encoder)
 	if err != nil {
 		return err
@@ -278,7 +282,12 @@ func asVersionedObjects(infos []*resource.Info, version schema.GroupVersion, enc
 				objects = append(objects, &runtime.Unknown{Raw: data})
 				continue
 			}
-			targetVersions = append(targetVersions, version)
+			gv := version
+			if !info.Mapping.GroupVersionKind.GroupVersion().Empty() {
+				gv = info.Mapping.GroupVersionKind.GroupVersion()
+			}
+
+			targetVersions = append(targetVersions, gv)
 		}
 
 		converted, err := tryConvert(info.Mapping.ObjectConvertor, info.Object, targetVersions...)
