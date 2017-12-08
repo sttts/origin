@@ -8,11 +8,13 @@ import (
 	v1 "github.com/openshift/api/authorization/v1"
 	authorization "github.com/openshift/origin/pkg/authorization/apis/authorization"
 	api_core_v1 "k8s.io/api/core/v1"
+	rbac_v1 "k8s.io/api/rbac/v1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	conversion "k8s.io/apimachinery/pkg/conversion"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	core "k8s.io/kubernetes/pkg/apis/core"
 	core_v1 "k8s.io/kubernetes/pkg/apis/core/v1"
+	rbac "k8s.io/kubernetes/pkg/apis/rbac"
 	unsafe "unsafe"
 )
 
@@ -290,6 +292,7 @@ func autoConvert_v1_ClusterRole_To_authorization_ClusterRole(in *v1.ClusterRole,
 	} else {
 		out.Rules = nil
 	}
+	out.AggregationRule = (*rbac.AggregationRule)(unsafe.Pointer(in.AggregationRule))
 	return nil
 }
 
@@ -311,6 +314,7 @@ func autoConvert_authorization_ClusterRole_To_v1_ClusterRole(in *authorization.C
 	} else {
 		out.Rules = nil
 	}
+	out.AggregationRule = (*rbac_v1.AggregationRule)(unsafe.Pointer(in.AggregationRule))
 	return nil
 }
 

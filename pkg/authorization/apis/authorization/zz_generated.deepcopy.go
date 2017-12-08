@@ -9,6 +9,7 @@ import (
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	sets "k8s.io/apimachinery/pkg/util/sets"
 	core "k8s.io/kubernetes/pkg/apis/core"
+	rbac "k8s.io/kubernetes/pkg/apis/rbac"
 	unsafe "unsafe"
 )
 
@@ -192,6 +193,15 @@ func (in *ClusterRole) DeepCopyInto(out *ClusterRole) {
 		*out = make([]PolicyRule, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+	if in.AggregationRule != nil {
+		in, out := &in.AggregationRule, &out.AggregationRule
+		if *in == nil {
+			*out = nil
+		} else {
+			*out = new(rbac.AggregationRule)
+			(*in).DeepCopyInto(*out)
 		}
 	}
 	return

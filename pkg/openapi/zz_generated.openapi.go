@@ -1402,12 +1402,18 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 								},
 							},
 						},
+						"aggregationRule": {
+							SchemaProps: spec.SchemaProps{
+								Description: "AggregationRule is an optional field that describes how to build the Rules for this ClusterRole. If AggregationRule is set, then the Rules are controller managed and direct changes to Rules will be stomped by the controller.",
+								Ref:         ref("k8s.io/api/rbac/v1.AggregationRule"),
+							},
+						},
 					},
 					Required: []string{"rules"},
 				},
 			},
 			Dependencies: []string{
-				"github.com/openshift/api/authorization/v1.PolicyRule", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
+				"github.com/openshift/api/authorization/v1.PolicyRule", "k8s.io/api/rbac/v1.AggregationRule", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
 		},
 		"github.com/openshift/api/authorization/v1.ClusterRoleBinding": {
 			Schema: spec.Schema{
