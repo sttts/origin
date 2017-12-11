@@ -120,6 +120,16 @@ items:
     - list
     - watch
   - apiGroups:
+    - admissionregistration.k8s.io
+    attributeRestrictions: null
+    resources:
+    - mutatingwebhookconfigurations
+    - validatingwebhookconfigurations
+    verbs:
+    - get
+    - list
+    - watch
+  - apiGroups:
     - apps
     attributeRestrictions: null
     resources:
@@ -205,6 +215,15 @@ items:
     - replicationcontrollers/scale
     - storageclasses
     - thirdpartyresources
+    verbs:
+    - get
+    - list
+    - watch
+  - apiGroups:
+    - events.k8s.io
+    attributeRestrictions: null
+    resources:
+    - events
     verbs:
     - get
     - list

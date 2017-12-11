@@ -112,6 +112,15 @@ items:
     - list
     - watch
   - apiGroups:
+    - admissionregistration.k8s.io
+    resources:
+    - mutatingwebhookconfigurations
+    - validatingwebhookconfigurations
+    verbs:
+    - get
+    - list
+    - watch
+  - apiGroups:
     - apps
     resources:
     - controllerrevisions
@@ -191,6 +200,14 @@ items:
     - replicationcontrollers/scale
     - storageclasses
     - thirdpartyresources
+    verbs:
+    - get
+    - list
+    - watch
+  - apiGroups:
+    - events.k8s.io
+    resources:
+    - events
     verbs:
     - get
     - list
