@@ -6403,7 +6403,7 @@
     "description": "OpenShift REST API, version v1",
     "operations": [
      {
-      "type": "v1.Scale",
+      "type": "v1beta1.Scale",
       "method": "GET",
       "summary": "read scale of the specified DeploymentConfig",
       "nickname": "readNamespacedDeploymentConfigScale",
@@ -6437,7 +6437,7 @@
        {
         "code": 200,
         "message": "OK",
-        "responseModel": "v1.Scale"
+        "responseModel": "v1beta1.Scale"
        }
       ],
       "produces": [
@@ -6450,7 +6450,7 @@
       ]
      },
      {
-      "type": "v1.Scale",
+      "type": "v1beta1.Scale",
       "method": "PUT",
       "summary": "replace scale of the specified DeploymentConfig",
       "nickname": "replaceNamespacedDeploymentConfigScale",
@@ -6464,7 +6464,7 @@
         "allowMultiple": false
        },
        {
-        "type": "v1.Scale",
+        "type": "v1beta1.Scale",
         "paramType": "body",
         "name": "body",
         "description": "",
@@ -6492,12 +6492,12 @@
        {
         "code": 200,
         "message": "OK",
-        "responseModel": "v1.Scale"
+        "responseModel": "v1beta1.Scale"
        },
        {
         "code": 201,
         "message": "Created",
-        "responseModel": "v1.Scale"
+        "responseModel": "v1beta1.Scale"
        }
       ],
       "produces": [
@@ -6510,7 +6510,7 @@
       ]
      },
      {
-      "type": "v1.Scale",
+      "type": "v1beta1.Scale",
       "method": "PATCH",
       "summary": "partially update scale of the specified DeploymentConfig",
       "nickname": "patchNamespacedDeploymentConfigScale",
@@ -6552,7 +6552,7 @@
        {
         "code": 200,
         "message": "OK",
-        "responseModel": "v1.Scale"
+        "responseModel": "v1beta1.Scale"
        }
       ],
       "produces": [
@@ -28162,9 +28162,9 @@
      }
     }
    },
-   "v1.Scale": {
-    "id": "v1.Scale",
-    "description": "Scale represents a scaling request for a resource.",
+   "v1beta1.Scale": {
+    "id": "v1beta1.Scale",
+    "description": "represents a scaling request for a resource.",
     "properties": {
      "kind": {
       "type": "string",
@@ -28179,18 +28179,18 @@
       "description": "Standard object metadata; More info: https://git.k8s.io/community/contributors/devel/api-conventions.md#metadata."
      },
      "spec": {
-      "$ref": "v1.ScaleSpec",
+      "$ref": "v1beta1.ScaleSpec",
       "description": "defines the behavior of the scale. More info: https://git.k8s.io/community/contributors/devel/api-conventions.md#spec-and-status."
      },
      "status": {
-      "$ref": "v1.ScaleStatus",
+      "$ref": "v1beta1.ScaleStatus",
       "description": "current status of the scale. More info: https://git.k8s.io/community/contributors/devel/api-conventions.md#spec-and-status. Read-only."
      }
     }
    },
-   "v1.ScaleSpec": {
-    "id": "v1.ScaleSpec",
-    "description": "ScaleSpec describes the attributes of a scale subresource.",
+   "v1beta1.ScaleSpec": {
+    "id": "v1beta1.ScaleSpec",
+    "description": "describes the attributes of a scale subresource",
     "properties": {
      "replicas": {
       "type": "integer",
@@ -28199,9 +28199,9 @@
      }
     }
    },
-   "v1.ScaleStatus": {
-    "id": "v1.ScaleStatus",
-    "description": "ScaleStatus represents the current status of a scale subresource.",
+   "v1beta1.ScaleStatus": {
+    "id": "v1beta1.ScaleStatus",
+    "description": "represents the current status of a scale subresource.",
     "required": [
      "replicas"
     ],
@@ -28212,8 +28212,12 @@
       "description": "actual number of observed instances of the scaled object."
      },
      "selector": {
+      "type": "object",
+      "description": "label query over pods that should match the replicas count. More info: http://kubernetes.io/docs/user-guide/labels#label-selectors"
+     },
+     "targetSelector": {
       "type": "string",
-      "description": "label query over pods that should match the replicas count. This is same as the label selector but in the string format to avoid introspection by clients. The string will be in the same format as the query-param syntax. More info about label selectors: http://kubernetes.io/docs/user-guide/labels#label-selectors"
+      "description": "label selector for pods that should match the replicas count. This is a serializated version of both map-based and more expressive set-based selectors. This is done to avoid introspection in the clients. The string will be in the same format as the query-param syntax. If the target type only supports map-based selectors, both this field and map-based selector field are populated. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors"
      }
     }
    },
