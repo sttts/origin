@@ -48,6 +48,19 @@
     File: v1.APIGroup
   - Name: v1.APIGroupList
     File: v1.APIGroupList
+- Name: /apis/apps/v1
+  Dir: apis-apps
+  Topics:
+  - Name: v1.ControllerRevision
+    File: v1.ControllerRevision
+  - Name: v1.DaemonSet
+    File: v1.DaemonSet
+  - Name: v1.Deployment
+    File: v1.Deployment
+  - Name: v1.ReplicaSet
+    File: v1.ReplicaSet
+  - Name: v1.StatefulSet
+    File: v1.StatefulSet
 - Name: /apis/apps/v1beta1
   Dir: apis-apps
   Topics:
