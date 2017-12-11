@@ -84,7 +84,7 @@ var (
 		APIGroupKube:                  {"v1"},
 		APIGroupExtensions:            {"v1beta1"},
 		APIGroupEvents:                {"v1beta1"},
-		APIGroupApps:                  {"v1beta1", "v1beta2"},
+		APIGroupApps:                  {"v1", "v1beta1", "v1beta2"},
 		APIGroupAdmissionRegistration: {"v1beta1"},
 		APIGroupAPIExtensions:         {"v1beta1"},
 		APIGroupAPIRegistration:       {"v1beta1"},
@@ -130,6 +130,7 @@ var (
 		APIGroupAuthorizationRbac:     {"v1alpha1"},
 		APIGroupSettings:              {"v1alpha1"},
 		APIGroupScheduling:            {"v1alpha1"},
+		APIGroupStorage:               {"v1alpha1"},
 	}
 	KnownKubeAPIGroups   = sets.StringKeySet(KubeAPIGroupsToAllowedVersions)
 	KnownOriginAPIGroups = sets.StringKeySet(OriginAPIGroupsToAllowedVersions)
