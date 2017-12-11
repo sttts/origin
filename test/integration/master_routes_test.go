@@ -35,6 +35,7 @@ var expectedIndex = []string{
 	"/apis",
 	"/apis/",
 	"/apis/admissionregistration.k8s.io",
+	"/apis/admissionregistration.k8s.io/v1beta1",
 	"/apis/apiextensions.k8s.io",
 	"/apis/apiextensions.k8s.io/v1beta1",
 	"/apis/apiregistration.k8s.io",
@@ -260,8 +261,9 @@ func TestWellKnownOAuthOff(t *testing.T) {
 }
 
 var preferredVersions = map[string]string{
-	"":                          "v1",
-	"apps":                      "v1beta1",
+	"": "v1",
+	"admissionregistration.k8s.io": "v1beta1",
+	"apps":                      "v1",
 	"apiextensions.k8s.io":      "v1beta1",
 	"apiregistration.k8s.io":    "v1beta1",
 	"authentication.k8s.io":     "v1",
@@ -269,6 +271,7 @@ var preferredVersions = map[string]string{
 	"autoscaling":               "v1",
 	"batch":                     "v1",
 	"certificates.k8s.io":       "v1beta1",
+	"events.k8s.io":             "v1beta1",
 	"extensions":                "v1beta1",
 	"networking.k8s.io":         "v1",
 	"policy":                    "v1beta1",
