@@ -36,6 +36,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubectl/resource"
 	kprinters "k8s.io/kubernetes/pkg/printers"
 
+	appsapiv1 "github.com/openshift/api/apps/v1"
 	deployapi "github.com/openshift/origin/pkg/apps/apis/apps"
 	deploycmd "github.com/openshift/origin/pkg/apps/cmd"
 	imageclient "github.com/openshift/origin/pkg/image/generated/internalclientset"
@@ -172,6 +173,14 @@ func (f *ring0Factory) UpdatePodSpecForObject(obj runtime.Object, fn func(*corev
 			return true, err
 		}
 		return true, nil
+
+	case *appsapiv1.DeploymentConfig:
+		template := t.Spec.Template
+		if template == nil {
+			template = &corev1.PodTemplateSpec{}
+			t.Spec.Template = template
+		}
+		return true, fn(&template.Spec)
 
 	default:
 		return f.kubeClientAccessFactory.UpdatePodSpecForObject(obj, fn)
