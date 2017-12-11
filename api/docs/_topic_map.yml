@@ -128,6 +128,13 @@
   Topics:
   - Name: v1beta1.PodDisruptionBudget
     File: v1beta1.PodDisruptionBudget
+- Name: /apis/admissionregistration.k8s.io/v1beta1
+  Dir: apis-admissionregistration.k8s.io
+  Topics:
+  - Name: v1beta1.MutatingWebhookConfiguration
+    File: v1beta1.MutatingWebhookConfiguration
+  - Name: v1beta1.ValidatingWebhookConfiguration
+    File: v1beta1.ValidatingWebhookConfiguration
 - Name: /apis/authentication.k8s.io/v1
   Dir: apis-authentication.k8s.io
   Topics:
