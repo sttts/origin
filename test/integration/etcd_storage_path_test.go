@@ -473,8 +473,8 @@ var etcdStorageData = map[schema.GroupVersionResource]struct {
 		expectedGVK:      gvkP("extensions", "v1beta1", "Deployment"), // still a beta extension
 	},
 	gvr("apps", "v1", "statefulsets"): {
-		stub:             `{"metadata": {"name": "ss1"}, "spec": {"selector": {"matchLabels": {"a": "b"}}, "template": {"metadata": {"labels": {"a": "b"}}}}}`,
-		expectedEtcdPath: "kubernetes.io/statefulsets/etcdstoragepathtestnamespace/ss1",
+		stub:             `{"metadata": {"name": "ss4"}, "spec": {"selector": {"matchLabels": {"a": "b"}}, "template": {"metadata": {"labels": {"a": "b"}}}}}`,
+		expectedEtcdPath: "kubernetes.io/statefulsets/etcdstoragepathtestnamespace/ss4",
 		expectedGVK:      gvkP("apps", "v1beta1", "StatefulSet"),
 	},
 	gvr("apps", "v1", "controllerrevisions"): {
