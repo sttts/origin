@@ -1,5 +1,5 @@
-hash: b115582621eec7cec401d50cb8f63802230d2ab61087ee6896ecc5dca35d2a84
-updated: 2018-02-06T16:09:48.177872187-05:00
+hash: 106b549608f892de46c25e8fab069984fc6972b49fe0c0d37796ef48a22f0a61
+updated: 2018-02-09T11:01:54.382136607+01:00
 imports:
 - name: bitbucket.org/ww/goautoneg
   version: 75cd24fc2f2c2a2088577d12123ddee5f54e0675
@@ -1269,17 +1269,20 @@ imports:
   subpackages:
   - googleapis/rpc/status
 - name: google.golang.org/grpc
-  version: d2e1b51f33ff8c5e4a15560ff049d200e83726c5
+  version: 5b3c4e850e90a4cf6a20ebd46c8b32a0a3afcb9e
   subpackages:
+  - balancer
   - codes
+  - connectivity
   - credentials
-  - grpclb/grpc_lb_v1
+  - grpclb/grpc_lb_v1/messages
   - grpclog
   - internal
   - keepalive
   - metadata
   - naming
   - peer
+  - resolver
   - stats
   - status
   - tap
@@ -1724,18 +1727,9 @@ imports:
 - name: k8s.io/code-generator
   version: 05f4b08d8f591d87cc6bfd8a0d03a9ece328d464
   repo: git@github.com:openshift/kubernetes-code-generator
-  subpackages:
-  - cmd/conversion-gen/generators
 - name: k8s.io/gengo
   version: c2e273a26d3fc59b60cf6de2fb80eace7402de6e
   repo: git@github.com:openshift/kubernetes-gengo
-  subpackages:
-  - args
-  - examples/defaulter-gen/generators
-  - generator
-  - namer
-  - parser
-  - types
 - name: k8s.io/heapster
   version: c2ac40f1adf8c42a79badddb2a2acd673cae3bcb
   subpackages:
@@ -1772,7 +1766,6 @@ imports:
   - pkg/aggregator
   - pkg/builder
   - pkg/common
-  - pkg/generators
   - pkg/handler
   - pkg/util
   - pkg/util/proto

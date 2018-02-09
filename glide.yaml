@@ -94,6 +94,9 @@ import:
 # master
 - package: github.com/coreos/etcd
   version: v3.2.8
+# master
+- package: google.golang.org/grpc
+  version: v1.7.5
 # cli
 - package: github.com/gonum/blas
   version: 37e82626499e1df7c54aeaba0959fd6e7e8dc1e4
