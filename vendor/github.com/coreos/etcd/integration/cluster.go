@@ -24,6 +24,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -340,11 +341,14 @@ func (c *cluster) removeMember(t *testing.T, id uint64) error {
 }
 
 func (c *cluster) Terminate(t *testing.T) {
+	debug.PrintStack()
 	var wg sync.WaitGroup
 	wg.Add(len(c.Members))
 	for _, m := range c.Members {
 		go func(mm *member) {
 			defer wg.Done()
+			plog.Printf("Trying to terminate member %v", mm.Name)
+			defer plog.Printf("Terminated member %v", mm.Name)
 			mm.Terminate(t)
 		}(m)
 	}
@@ -772,23 +776,32 @@ func (m *member) Resume() {
 
 // Close stops the member's etcdserver and closes its connections
 func (m *member) Close() {
+	plog.Printf("Close %s (%s) - 0", m.Name, m.grpcAddr)
 	if m.grpcBridge != nil {
 		m.grpcBridge.Close()
 		m.grpcBridge = nil
 	}
+	plog.Printf("Close %s (%s) - 1", m.Name, m.grpcAddr)
 	if m.serverClient != nil {
 		m.serverClient.Close()
 		m.serverClient = nil
 	}
+	plog.Printf("Close %s (%s) - 2", m.Name, m.grpcAddr)
 	if m.grpcServer != nil {
 		m.grpcServer.GracefulStop()
 		m.grpcServer = nil
 	}
+	plog.Printf("Close %s (%s) - 3", m.Name, m.grpcAddr)
 	m.s.HardStop()
+	plog.Printf("Close %s (%s) - 4", m.Name, m.grpcAddr)
 	for _, hs := range m.hss {
+		plog.Printf("Close %s (%s) - 5 - hss %v 0", m.Name, m.grpcAddr, hs.URL)
 		hs.CloseClientConnections()
+		plog.Printf("Close %s (%s) - 5 - hss %v 1", m.Name, m.grpcAddr, hs.URL)
 		hs.Close()
+		plog.Printf("Close %s (%s) - 5 - hss %v 2", m.Name, m.grpcAddr, hs.URL)
 	}
+	plog.Printf("Close %s (%s) - 6", m.Name, m.grpcAddr)
 }
 
 // Stop stops the member, but the data dir of the member is preserved.
@@ -842,10 +855,12 @@ func (m *member) Restart(t *testing.T) error {
 func (m *member) Terminate(t *testing.T) {
 	plog.Printf("terminating %s (%s)", m.Name, m.grpcAddr)
 	m.Close()
+	plog.Printf("terminating %s (%s) - 1", m.Name, m.grpcAddr)
 	if !m.keepDataDirTerminate {
 		if err := os.RemoveAll(m.ServerConfig.DataDir); err != nil {
 			t.Fatal(err)
 		}
+		plog.Printf("terminating %s (%s) - 2", m.Name, m.grpcAddr)
 	}
 	plog.Printf("terminated %s (%s)", m.Name, m.grpcAddr)
 }
