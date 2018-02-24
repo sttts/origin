@@ -778,7 +778,7 @@ func (m *member) Resume() {
 func (m *member) Close() {
 	plog.Printf("Close %s (%s) - 0", m.Name, m.grpcAddr)
 	if m.grpcBridge != nil {
-		m.grpcBridge.Close()
+		go m.grpcBridge.Close()
 		m.grpcBridge = nil
 	}
 	plog.Printf("Close %s (%s) - 1", m.Name, m.grpcAddr)
