@@ -42,6 +42,5 @@ func NewCmdCluster(name, fullName string, f kcmdutil.Factory, streams genericcli
 
 	cmds.AddCommand(clusterup.NewCmdUp(clusterup.CmdUpRecommendedName, fullName+" "+clusterup.CmdUpRecommendedName, f, streams))
 	cmds.AddCommand(clusterup.NewCmdDown(clusterup.CmdDownRecommendedName, fullName+" "+clusterup.CmdDownRecommendedName))
-	cmds.AddCommand(clusterup.NewCmdStatus(clusterup.CmdStatusRecommendedName, fullName+" "+clusterup.CmdStatusRecommendedName, f, streams))
 	return cmds
 }
