@@ -42,7 +42,6 @@
 // install/automationservicebroker/install.yaml
 // install/cluster-kube-apiserver-operator/install.yaml
 // install/etcd/etcd.yaml
-// install/etcd/install.yaml
 // install/kube-apiserver/apiserver.yaml
 // install/kube-controller-manager/kube-controller-manager.yaml
 // install/kube-dns/install.yaml
@@ -16847,7 +16846,7 @@ func installClusterKubeApiserverOperatorInstallYaml() (*asset, error) {
 var _installEtcdEtcdYaml = []byte(`kind: Pod
 apiVersion: v1
 metadata:
-  name: master-etcd
+  name: etcd
   namespace: kube-system
   labels:
     openshift.io/control-plane: "true"
@@ -16857,29 +16856,31 @@ spec:
   hostNetwork: true
   containers:
   - name: etcd
-    image: IMAGE
-    imagePullPolicy: OPENSHIFT_PULL_POLICY
-    workingDir: /var/lib/etcd
-    command: ["/bin/bash", "-c"]
+    image: {{ .Image }}
+    imagePullPolicy: {{ .ImagePullPolicy }}
+    workingDir: /var/run/etcd/data
+    command: ["/usr/local/bin/etcd"]
     args:
-    - |
-      #!/bin/sh
-      set -o allexport
-      exec openshift start etcd --config=/etc/origin/master/master-config.yaml
-    securityContext:
-      privileged: true
+    - --trusted-ca-file=/var/run/etcd/tls/master.etcd-client-ca.crt
+    - --cert-file=/var/run/etcd/tls/master.etcd-client.crt
+    - --key-file=/var/run/etcd/tls/master.etcd-client.key
+    - --client-cert-auth
+    - --listen-client-urls=https://0.0.0.0:2379
+    - --advertise-client-urls=https://0.0.0.0:2379
+    - --data-dir=/var/run/etcd/data
     volumeMounts:
-     - mountPath: /etc/origin/master/
-       name: master-config
-       readOnly: true
-     - mountPath: /var/lib/etcd/
-       name: master-data
+    - mountPath: /var/run/etcd/tls
+      name: tls
+      readOnly: true
+    - mountPath: /var/run/etcd/data
+      name: data
   volumes:
-  - name: master-config
+  - name: tls
     hostPath:
-      path: /path/to/master/config-dir
-  - name: master-data
-    ETCD_VOLUME
+      path: {{ .TlsDir }}
+  - name: data
+    hostPath:
+      path: {{ .EtcdDataDir }}
 `)
 
 func installEtcdEtcdYamlBytes() ([]byte, error) {
@@ -16893,44 +16894,6 @@ func installEtcdEtcdYaml() (*asset, error) {
 	}
 
 	info := bindataFileInfo{name: "install/etcd/etcd.yaml", size: 0, mode: os.FileMode(0), modTime: time.Unix(0, 0)}
-	a := &asset{bytes: bytes, info: info}
-	return a, nil
-}
-
-var _installEtcdInstallYaml = []byte(`apiVersion: template.openshift.io/v1
-kind: Template
-metadata:
-  name: etcd
-parameters:
-- name: NAMESPACE
-  value: kube-system
-objects:
-
-- apiVersion: v1
-  kind: Service
-  metadata:
-    name: etcd
-    namespace: ${NAMESPACE}
-  spec:
-    selector:
-      openshift.io/component: etcd
-    ports:
-    - name: listen
-      port: 4001
-      protocol: TCP
-`)
-
-func installEtcdInstallYamlBytes() ([]byte, error) {
-	return _installEtcdInstallYaml, nil
-}
-
-func installEtcdInstallYaml() (*asset, error) {
-	bytes, err := installEtcdInstallYamlBytes()
-	if err != nil {
-		return nil, err
-	}
-
-	info := bindataFileInfo{name: "install/etcd/install.yaml", size: 0, mode: os.FileMode(0), modTime: time.Unix(0, 0)}
 	a := &asset{bytes: bytes, info: info}
 	return a, nil
 }
@@ -18909,7 +18872,6 @@ var _bindata = map[string]func() (*asset, error){
 	"install/automationservicebroker/install.yaml": installAutomationservicebrokerInstallYaml,
 	"install/cluster-kube-apiserver-operator/install.yaml": installClusterKubeApiserverOperatorInstallYaml,
 	"install/etcd/etcd.yaml": installEtcdEtcdYaml,
-	"install/etcd/install.yaml": installEtcdInstallYaml,
 	"install/kube-apiserver/apiserver.yaml": installKubeApiserverApiserverYaml,
 	"install/kube-controller-manager/kube-controller-manager.yaml": installKubeControllerManagerKubeControllerManagerYaml,
 	"install/kube-dns/install.yaml": installKubeDnsInstallYaml,
@@ -19039,7 +19001,6 @@ var _bintree = &bintree{nil, map[string]*bintree{
 		}},
 		"etcd": &bintree{nil, map[string]*bintree{
 			"etcd.yaml": &bintree{installEtcdEtcdYaml, map[string]*bintree{}},
-			"install.yaml": &bintree{installEtcdInstallYaml, map[string]*bintree{}},
 		}},
 		"kube-apiserver": &bintree{nil, map[string]*bintree{
 			"apiserver.yaml": &bintree{installKubeApiserverApiserverYaml, map[string]*bintree{}},
