@@ -51,7 +51,7 @@ func (c *ClusterUpConfig) StartSelfHosted(out io.Writer) error {
 	kubeletConfig.NodeImage = c.hyperkubeImage()
 	kubeletConfig.PodImage = c.podImage()
 
-	if _, err := kubeletConfig.StartKubelet(c.GetDockerClient(), configDirs.podManifestDir, configDirs.assetsDir, c.BaseDir); err != nil {
+	if _, err := kubeletConfig.StartKubelet(c.GetDockerClient(), configDirs.podManifestDir, configDirs.bootkubeDir, c.BaseDir); err != nil {
 		return err
 	}
 
@@ -59,7 +59,7 @@ func (c *ClusterUpConfig) StartSelfHosted(out io.Writer) error {
 		Image:           c.etcdImage(),
 		ImagePullPolicy: c.pullPolicy,
 		StaticPodDir:    configDirs.podManifestDir,
-		TlsDir:          filepath.Join(configDirs.assetsDir, "master"),
+		TlsDir:          filepath.Join(configDirs.bootkubeDir, "master"),
 		EtcdDataDir:     c.HostDataDir,
 	}
 	if err := etcdCmd.Start(); err != nil {
@@ -69,7 +69,7 @@ func (c *ClusterUpConfig) StartSelfHosted(out io.Writer) error {
 	bk := &bootkube.BootkubeRunConfig{
 		BootkubeImage:        c.bootkubeImage(),
 		StaticPodManifestDir: configDirs.podManifestDir,
-		AssetsDir:            configDirs.assetsDir,
+		AssetsDir:            configDirs.bootkubeDir,
 		ContainerBinds: []string{
 			fmt.Sprintf("%s:/etc/kubernetes:z", filepath.Join(c.BaseDir, "kubernetes")),
 		},
@@ -139,22 +139,22 @@ func (c *ClusterUpConfig) StartSelfHosted(out io.Writer) error {
 
 type configDirs struct {
 	podManifestDir string
-	assetsDir      string
+	bootkubeDir    string
 	kubernetesDir  string
 }
 
 func (c *ClusterUpConfig) BuildConfig() (*configDirs, error) {
 	configs := &configDirs{
 		// Directory where assets ared rendered to
-		assetsDir: filepath.Join(c.BaseDir, "bootkube"),
+		bootkubeDir: filepath.Join(c.BaseDir, "bootkube"),
 		// Directory where bootkube copy the bootstrap secrets
 		kubernetesDir: filepath.Join(c.BaseDir, "kubernetes"),
 		// Directory that kubelet scans for static manifests
 		podManifestDir: filepath.Join(c.BaseDir, "kubernetes/manifests"),
 	}
 
-	if _, err := os.Stat(configs.assetsDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(configs.assetsDir, 0755); err != nil {
+	if _, err := os.Stat(configs.bootkubeDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(configs.bootkubeDir, 0755); err != nil {
 			return nil, err
 		}
 	}
@@ -174,7 +174,7 @@ func (c *ClusterUpConfig) BuildConfig() (*configDirs, error) {
 	bk := bootkube.BootkubeRunConfig{
 		BootkubeImage:        c.bootkubeImage(),
 		StaticPodManifestDir: configs.podManifestDir,
-		AssetsDir:            configs.assetsDir,
+		AssetsDir:            configs.bootkubeDir,
 		ContainerBinds:       []string{},
 	}
 
@@ -192,7 +192,7 @@ func (c *ClusterUpConfig) BuildConfig() (*configDirs, error) {
 		return nil, err
 	}
 
-	if err := bk.RemoveApiserver(configs.kubernetesDir); err != nil {
+	if err := bk.RemoveApiserver(configs.bootkubeDir); err != nil {
 		return nil, err
 	}
 
@@ -201,26 +201,25 @@ func (c *ClusterUpConfig) BuildConfig() (*configDirs, error) {
 
 	// copy bootkube-render files to operatpr render input dir, simulating what c.makeMasterConfig would generate
 	// TODO: generate tls files without bootkube-render
-	masterDir := filepath.Join(configs.assetsDir, "master")
+	masterDir := filepath.Join(configs.bootkubeDir, "master")
 	legacyBootkubeMapping := map[string]string{
-		"ca.crt":                     path.Join(configs.assetsDir, "tls", "ca.crt"),
-		"admin.crt":                  path.Join(configs.assetsDir, "tls", "admin.crt"),
-		"admin.key":                  path.Join(configs.assetsDir, "tls", "admin.key"),
-		"openshift-master.crt":       path.Join(configs.assetsDir, "tls", "admin.crt"),
-		"openshift-master.key":       path.Join(configs.assetsDir, "tls", "admin.key"),
-		"master.server.crt":          path.Join(configs.assetsDir, "tls", "apiserver.crt"),
-		"master.server.key":          path.Join(configs.assetsDir, "tls", "apiserver.key"),
-		"master.etcd-client-ca.crt":  path.Join(configs.assetsDir, "tls", "etcd-client-ca.crt"), // this does not exist in legacy cluster-up, but might be necessary for etcd access
-		"master.etcd-client.crt":     path.Join(configs.assetsDir, "tls", "etcd-client.crt"),
-		"master.etcd-client.key":     path.Join(configs.assetsDir, "tls", "etcd-client.key"),
-		"serviceaccounts.public.key": path.Join(configs.assetsDir, "tls", "service-account.pub"),
-		"frontproxy-ca.crt":          path.Join(configs.assetsDir, "tls", "apiserver.crt"), // this does not exist in bootkube, but might be necessary for aggregated apiserver authn
-		"openshift-aggregator.crt":   path.Join(configs.assetsDir, "tls", "apiserver.crt"), // this does not exist in bootkube, but might be necessary for aggregated apiserver authn
-		"openshift-aggregator.key":   path.Join(configs.assetsDir, "tls", "apiserver.key"), // this does not exist in bootkube, but might be necessary for aggregated apiserver authn
-		"master.kubelet-client.crt":  path.Join(configs.assetsDir, "tls", "apiserver.crt"),
-		"master.kubelet-client.key":  path.Join(configs.assetsDir, "tls", "apiserver.key"),
-		"master.proxy-client.crt":    path.Join(configs.assetsDir, "tls", "apiserver.crt"),
-		"master.proxy-client.key":    path.Join(configs.assetsDir, "tls", "apiserver.key"),
+		"kube-ca.crt":          path.Join(configs.bootkubeDir, "tls", "ca.crt"),
+		"root-ca.crt":          path.Join(configs.bootkubeDir, "tls", "ca.crt"),
+		"admin.crt":            path.Join(configs.bootkubeDir, "tls", "admin.crt"),
+		"admin.key":            path.Join(configs.bootkubeDir, "tls", "admin.key"),
+		"openshift-master.crt": path.Join(configs.bootkubeDir, "tls", "admin.crt"),
+		"openshift-master.key": path.Join(configs.bootkubeDir, "tls", "admin.key"),
+		"apiserver.crt":        path.Join(configs.bootkubeDir, "tls", "apiserver.crt"),
+		"apiserver.key":        path.Join(configs.bootkubeDir, "tls", "apiserver.key"),
+		"etcd-client-ca.crt":   path.Join(configs.bootkubeDir, "tls", "etcd-client-ca.crt"), // this does not exist in legacy cluster-up, but might be necessary for etcd access
+		"etcd-client.crt":      path.Join(configs.bootkubeDir, "tls", "etcd-client.crt"),
+		"etcd-client.key":      path.Join(configs.bootkubeDir, "tls", "etcd-client.key"),
+		"service-account.pub":  path.Join(configs.bootkubeDir, "tls", "service-account.pub"),
+		"service-account.key":  path.Join(configs.bootkubeDir, "tls", "service-account.key"),
+		"aggregator-ca.crt":    path.Join(configs.bootkubeDir, "tls", "apiserver.crt"), // this does not exist in bootkube, but might be necessary for aggregated apiserver authn
+		"apiserver-proxy.crt":  path.Join(configs.bootkubeDir, "tls", "apiserver.crt"), // this does not exist in bootkube, but might be necessary for aggregated apiserver authn
+		"apiserver-proxy.key":  path.Join(configs.bootkubeDir, "tls", "apiserver.key"), // this does not exist in bootkube, but might be necessary for aggregated apiserver authn
+		"kubeconfig":           path.Join(configs.bootkubeDir, "auth", "kubeconfig"),
 	}
 	if _, err := os.Stat(masterDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(masterDir, 0755); err != nil {
@@ -247,7 +246,7 @@ kind: KubeAPIServerConfig
 	ok := controlplaneoperator.RenderConfig{
 		OperatorImage:   "openshift/origin-cluster-kube-apiserver-operator:latest",
 		AssetInputDir:   masterDir,
-		AssetsOutputDir: configs.assetsDir,
+		AssetsOutputDir: configs.bootkubeDir,
 		ConfigOutputDir: masterDir, // we put config, overrides and certs+keys in one dir
 		ConfigFileName:  "kube-apiserver-config.yaml",
 		ConfigOverrides: apiserverConfigOverride,
