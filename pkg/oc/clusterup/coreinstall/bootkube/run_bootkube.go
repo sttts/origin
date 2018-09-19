@@ -67,6 +67,20 @@ func (opt *BootkubeRunConfig) RemoveApiserver(bootkubeDir string) error {
 		return err
 	}
 
+	if err := os.Remove(path.Join(bootkubeDir, "bootstrap-manifests", "bootstrap-controller-manager.yaml")); err != nil {
+		return err
+	}
+	if err := os.Remove(path.Join(bootkubeDir, "manifests", "kube-controller-manager.yaml")); err != nil {
+		return err
+	}
+
+	if err := os.Remove(path.Join(bootkubeDir, "bootstrap-manifests", "bootstrap-scheduler.yaml")); err != nil {
+		return err
+	}
+	if err := os.Remove(path.Join(bootkubeDir, "manifests", "kube-scheduler.yaml")); err != nil {
+		return err
+	}
+
 	return nil
 }
 
