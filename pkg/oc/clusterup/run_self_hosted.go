@@ -170,20 +170,9 @@ func (c *ClusterUpConfig) BuildConfig() (*configDirs, error) {
 		}
 	}
 
-	bk := bootkube.BootkubeRunConfig{
-		BootkubeImage:        OpenShiftImages.Get("bootkube").ToPullSpec(),
-		StaticPodManifestDir: configs.podManifestDir,
-		AssetsDir:            configs.assetsDir,
-		ContainerBinds:       []string{},
-	}
-
 	// If --public-hostname is specified, use that instead of 127.0.0.1
 	hostIP, err := c.determineIP()
 	if err != nil {
-		return nil, err
-	}
-
-	if err := bk.RemoveApiserver(configs.kubernetesDir); err != nil {
 		return nil, err
 	}
 
@@ -202,24 +191,23 @@ func (c *ClusterUpConfig) BuildConfig() (*configDirs, error) {
 	// TODO: generate tls files without bootkube-render
 	masterDir := filepath.Join(configs.assetsDir, "master")
 	legacyBootkubeMapping := map[string]string{
-		"ca.crt":                     path.Join(configs.assetsDir, "tls", "ca.crt"),
-		"admin.crt":                  path.Join(configs.assetsDir, "tls", "admin.crt"),
-		"admin.key":                  path.Join(configs.assetsDir, "tls", "admin.key"),
-		"openshift-master.crt":       path.Join(configs.assetsDir, "tls", "admin.crt"),
-		"openshift-master.key":       path.Join(configs.assetsDir, "tls", "admin.key"),
-		"master.server.crt":          path.Join(configs.assetsDir, "tls", "apiserver.crt"),
-		"master.server.key":          path.Join(configs.assetsDir, "tls", "apiserver.key"),
-		"master.etcd-client-ca.crt":  path.Join(configs.assetsDir, "tls", "etcd-client-ca.crt"), // this does not exist in legacy cluster-up, but might be necessary for etcd access
-		"master.etcd-client.crt":     path.Join(configs.assetsDir, "tls", "etcd-client.crt"),
-		"master.etcd-client.key":     path.Join(configs.assetsDir, "tls", "etcd-client.key"),
-		"serviceaccounts.public.key": path.Join(configs.assetsDir, "tls", "service-account.pub"),
-		"frontproxy-ca.crt":          path.Join(configs.assetsDir, "tls", "apiserver.crt"), // this does not exist in bootkube, but might be necessary for aggregated apiserver authn
-		"openshift-aggregator.crt":   path.Join(configs.assetsDir, "tls", "apiserver.crt"), // this does not exist in bootkube, but might be necessary for aggregated apiserver authn
-		"openshift-aggregator.key":   path.Join(configs.assetsDir, "tls", "apiserver.key"), // this does not exist in bootkube, but might be necessary for aggregated apiserver authn
-		"master.kubelet-client.crt":  path.Join(configs.assetsDir, "tls", "apiserver.crt"),
-		"master.kubelet-client.key":  path.Join(configs.assetsDir, "tls", "apiserver.key"),
-		"master.proxy-client.crt":    path.Join(configs.assetsDir, "tls", "apiserver.crt"),
-		"master.proxy-client.key":    path.Join(configs.assetsDir, "tls", "apiserver.key"),
+		"kube-ca.crt":          path.Join(configs.assetsDir, "tls", "ca.crt"),
+		"root-ca.crt":          path.Join(configs.assetsDir, "tls", "ca.crt"),
+		"admin.crt":            path.Join(configs.assetsDir, "tls", "admin.crt"),
+		"admin.key":            path.Join(configs.assetsDir, "tls", "admin.key"),
+		"openshift-master.crt": path.Join(configs.assetsDir, "tls", "admin.crt"),
+		"openshift-master.key": path.Join(configs.assetsDir, "tls", "admin.key"),
+		"apiserver.crt":        path.Join(configs.assetsDir, "tls", "apiserver.crt"),
+		"apiserver.key":        path.Join(configs.assetsDir, "tls", "apiserver.key"),
+		"etcd-client-ca.crt":   path.Join(configs.assetsDir, "tls", "etcd-client-ca.crt"), // this does not exist in legacy cluster-up, but might be necessary for etcd access
+		"etcd-client.crt":      path.Join(configs.assetsDir, "tls", "etcd-client.crt"),
+		"etcd-client.key":      path.Join(configs.assetsDir, "tls", "etcd-client.key"),
+		"service-account.pub":  path.Join(configs.assetsDir, "tls", "service-account.pub"),
+		"service-account.key":  path.Join(configs.assetsDir, "tls", "service-account.key"),
+		"aggregator-ca.crt":    path.Join(configs.assetsDir, "tls", "apiserver.crt"), // this does not exist in bootkube, but might be necessary for aggregated apiserver authn
+		"apiserver-proxy.crt":  path.Join(configs.assetsDir, "tls", "apiserver.crt"), // this does not exist in bootkube, but might be necessary for aggregated apiserver authn
+		"apiserver-proxy.key":  path.Join(configs.assetsDir, "tls", "apiserver.key"), // this does not exist in bootkube, but might be necessary for aggregated apiserver authn
+		"kubeconfig":           path.Join(configs.assetsDir, "auth", "kubeconfig"),
 	}
 	if _, err := os.Stat(masterDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(masterDir, 0755); err != nil {

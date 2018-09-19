@@ -49,6 +49,7 @@ func (opt *RenderConfig) RunRender(component string, hyperShiftImage, hyperKubeI
 		fmt.Sprintf("--manifest-hyperkube-image=%s", hyperKubeImage),
 		fmt.Sprintf("--manifest-config-host-path=%s", opt.ConfigOutputDir),
 		fmt.Sprintf("--manifest-config-file-name=%s", opt.ConfigFileName),
+		fmt.Sprintf("--manifest-secrets-host-path=%s", opt.ConfigOutputDir),
 	}
 
 	binds := opt.ContainerBinds

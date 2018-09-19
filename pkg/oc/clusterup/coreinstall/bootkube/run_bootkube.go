@@ -26,9 +26,13 @@ type BootkubeRunConfig struct {
 
 // RemoveApiserver removes the apiserver manifest because the cluster-kube-apiserver-operator will generate them.
 // Eventually, our operators will generate all files and we don't need bootkube render anymore.
-func (opt *BootkubeRunConfig) RemoveApiserver(kubernetesDir string) error {
-	os.Remove(path.Join(kubernetesDir, "bootstrap-manifests", "bootstrap-apiserver.yaml"))
-	os.Remove(path.Join(kubernetesDir, "manifests", "kube-apiserver.yaml"))
+func (opt *BootkubeRunConfig) RemoveApiserver(bootkubeDir string) error {
+	if err := os.Remove(path.Join(bootkubeDir, "bootstrap-manifests", "bootstrap-apiserver.yaml")); err != nil {
+		return err
+	}
+	if err := os.Remove(path.Join(bootkubeDir, "manifests", "kube-apiserver.yaml")); err != nil {
+		return err
+	}
 
 	return nil
 }
