@@ -252,7 +252,7 @@ kind: KubeAPIServerConfig
 		ConfigOverrides: apiserverConfigOverride,
 		ContainerBinds:  nil,
 	}
-	if _, err := ok.RunRender("kube-apiserver", c.hypershiftImage(), c.GetDockerClient(), hostIP); err != nil {
+	if _, err := ok.RunRender("kube-apiserver", c.hypershiftImage(), c.hyperkubeImage(), c.GetDockerClient(), hostIP); err != nil {
 		return nil, err
 	}
 
