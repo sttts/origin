@@ -8,21 +8,24 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/openshift/origin/pkg/oc/clusterup/componentinstall"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/kubernetes"
 	kclientcmd "k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
-	"k8s.io/kubernetes/staging/src/k8s.io/apimachinery/pkg/util/sets"
 
+	legacyconfigv1 "github.com/openshift/api/legacyconfig/v1"
 	cmdutil "github.com/openshift/origin/pkg/cmd/util"
-	"github.com/openshift/origin/pkg/oc/clusterup/docker/dockerhelper"
 	"github.com/openshift/origin/pkg/oc/clusterup/docker/errors"
 	"github.com/openshift/origin/pkg/oc/clusterup/docker/run"
+	"github.com/openshift/origin/pkg/oc/clusterup/docker/util"
 )
 
 const (
 	defaultNodeName      = "localhost"
 	DefaultDNSPort       = 8053
+	DefaultSvcCIDR       = "172.30.0.0/16"
 	cmdDetermineNodeHost = "for name in %s; do ls /var/lib/origin/openshift.local.config/node-$name &> /dev/null && echo $name && break; done"
 
 	// TODO: Figure out why cluster up relies on this name
@@ -31,7 +34,7 @@ const (
 	BootkubeRenderContainerName       = "bootkube-render"
 	OperatorRenderContainerNameSuffix = "-operator-render"
 	BootkubeStartContainerName        = "bootkube-start"
-	Namespace                         = "openshift"
+	ContainerName                     = "origin"
 )
 
 var (
@@ -50,7 +53,7 @@ var (
 
 // Helper contains methods and utilities to help with OpenShift startup
 type Helper struct {
-	dockerHelper  *dockerhelper.Helper
+	dockerHelper  *util.Helper
 	runHelper     *run.RunHelper
 	image         string
 	containerName string
@@ -58,7 +61,7 @@ type Helper struct {
 }
 
 // NewHelper creates a new OpenShift helper
-func NewHelper(dockerHelper *dockerhelper.Helper, image, containerName string) *Helper {
+func NewHelper(dockerHelper *util.Helper, image, containerName string) *Helper {
 	return &Helper{
 		dockerHelper:  dockerHelper,
 		runHelper:     run.NewRunHelper(dockerHelper),
@@ -170,7 +173,7 @@ func (h *Helper) OtherIPs(excludeIP string) ([]string, error) {
 	}
 
 	candidates := strings.Split(result, " ")
-	var resultIPs []string
+	resultIPs := []string{}
 	for _, ip := range candidates {
 		if len(strings.TrimSpace(ip)) == 0 {
 			continue
@@ -191,7 +194,7 @@ func (h *Helper) CheckNodes(kclient kubernetes.Interface) error {
 	}
 	if len(nodes.Items) > 1 {
 		glog.V(2).Infof("Found more than one node, will attempt to remove duplicate nodes")
-		var nodesToRemove []string
+		nodesToRemove := []string{}
 
 		// First, find default node
 		defaultNodeMachineId := ""
@@ -222,9 +225,28 @@ func (h *Helper) CheckNodes(kclient kubernetes.Interface) error {
 	return nil
 }
 
+func (h *Helper) OriginLog() string {
+	log := h.dockerHelper.ContainerLog(h.containerName, 10)
+	if len(log) > 0 {
+		return fmt.Sprintf("Last 10 lines of %q container log:\n%s\n", h.containerName, log)
+	}
+	return fmt.Sprintf("No log available from %q container\n", h.containerName)
+}
+
+func (h *Helper) Master(ip string) string {
+	return fmt.Sprintf("https://%s:8443", ip)
+}
+
+func (h *Helper) GetConfigFromLocalDir(configDir string) (*legacyconfigv1.MasterConfig, string, error) {
+	configPath := filepath.Join(configDir, "master-config.yaml")
+	glog.V(1).Infof("Reading master config from %s", configPath)
+	masterConfig, err := componentinstall.ReadMasterConfig(configPath)
+	return masterConfig, configPath, err
+}
+
 func checkPortsInUse(data string, ports []int) error {
 	used := getUsedPorts(data)
-	var conflicts []int
+	conflicts := []int{}
 	for _, port := range ports {
 		if _, inUse := used[port]; inUse {
 			conflicts = append(conflicts, port)
