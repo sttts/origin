@@ -10,7 +10,7 @@ import (
 )
 
 type TLSAssetsRenderOptions struct {
-	AltNames *tlsutil.AltNames
+	AltNames tlsutil.AltNames
 
 	etcdServerURL string
 	serverURL     string
@@ -37,7 +37,7 @@ func (r *TLSAssetsRenderOptions) Render() (*assetslib.Assets, error) {
 	r.caCert = caCert
 
 	// Generate apiserver certs and keys
-	if files, err := r.newTLSAssets(caCert, caPrivateKey, *r.AltNames); err != nil {
+	if files, err := r.newTLSAssets(caCert, caPrivateKey, r.AltNames); err != nil {
 		return nil, err
 	} else {
 		result = append(result, files...)
