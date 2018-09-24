@@ -17,6 +17,7 @@ var OpenShiftImages = Images{
 	{Name: "cli"},
 	{Name: "hyperkube"},
 	{Name: "hypershift"},
+	{Name: "node"},
 	{Name: "pod"},
 
 	// External images
