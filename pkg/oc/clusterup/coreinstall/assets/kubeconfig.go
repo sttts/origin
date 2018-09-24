@@ -25,5 +25,5 @@ contexts:
 `)
 
 func (r *TLSAssetsRenderOptions) newAdminKubeConfig() assetslib.Asset {
-	assetslib.MustCreateAssetFromTemplate(AssetAdminKubeConfig, AdminKubeConfigTemplate, r)
+	return assetslib.MustCreateAssetFromTemplate(AssetAdminKubeConfig, AdminKubeConfigTemplate, r)
 }
