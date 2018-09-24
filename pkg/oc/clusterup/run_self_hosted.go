@@ -47,6 +47,7 @@ func (c *ClusterUpConfig) StartSelfHosted(out io.Writer) error {
 	kubeletConfig.HostPersistentVolumesDir = c.HostPersistentVolumesDir
 	kubeletConfig.HostVolumesDir = c.HostVolumesDir
 	kubeletConfig.DockerRoot = dockerRoot
+	kubeletConfig.UseNsenterMount = true
 	kubeletConfig.NodeImage = OpenShiftImages.Get("node").ToPullSpec(c.ImageTemplate).String()
 	kubeletConfig.PodImage = OpenShiftImages.Get("pod").ToPullSpec(c.ImageTemplate).String()
 
