@@ -15,6 +15,7 @@ var OpenShiftImages = Images{
 	{Name: "cluster-kube-apiserver-operator"},
 	{Name: "control-plane"},
 	{Name: "cli"},
+	{Name: "hyperkube"},
 	{Name: "hypershift"},
 	{Name: "pod"},
 
