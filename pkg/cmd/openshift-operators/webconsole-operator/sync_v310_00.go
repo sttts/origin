@@ -10,7 +10,7 @@ import (
 	operatorsv1alpha1 "github.com/openshift/api/operator/v1alpha1"
 	webconsoleconfigv1 "github.com/openshift/api/webconsole/v1"
 	"github.com/openshift/library-go/pkg/operator/resource/resourceapply"
-	"github.com/openshift/library-go/pkg/operator/resource/resourcecread"
+	"github.com/openshift/library-go/pkg/operator/resource/resourceread"
 	"github.com/openshift/origin/pkg/cmd/openshift-operators/apis/operators/v1alpha1helpers"
 	webconsolev1alpha1 "github.com/openshift/origin/pkg/cmd/openshift-operators/apis/webconsole/v1alpha1"
 	"github.com/openshift/origin/pkg/cmd/openshift-operators/webconsole-operator/v310_00"
