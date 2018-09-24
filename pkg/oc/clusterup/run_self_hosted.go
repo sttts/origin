@@ -207,7 +207,7 @@ func (c *ClusterUpConfig) BuildConfig() (*configDirs, error) {
 		"aggregator-ca.crt":    path.Join(configs.assetsDir, "tls", "apiserver.crt"), // this does not exist in bootkube, but might be necessary for aggregated apiserver authn
 		"apiserver-proxy.crt":  path.Join(configs.assetsDir, "tls", "apiserver.crt"), // this does not exist in bootkube, but might be necessary for aggregated apiserver authn
 		"apiserver-proxy.key":  path.Join(configs.assetsDir, "tls", "apiserver.key"), // this does not exist in bootkube, but might be necessary for aggregated apiserver authn
-		"kubeconfig":           path.Join(configs.assetsDir, "auth", "kubeconfig"),
+		"kubeconfig":           path.Join(configs.assetsDir, "auth", "admin.kubeconfig"),
 	}
 	if _, err := os.Stat(masterDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(masterDir, 0755); err != nil {
