@@ -16,9 +16,9 @@ type TLSAssetsRenderOptions struct {
 type tlsAssetsRenderConfig struct {
 	EtcdServerURL string
 	ServerURL     string
-	AdminKey      string
-	AdminCert     string
-	CACert        string
+	AdminKey      []byte
+	AdminCert     []byte
+	CACert        []byte
 }
 
 func NewTLSAssetsRenderer(hostname string) *TLSAssetsRenderOptions {
@@ -38,7 +38,7 @@ func (r *TLSAssetsRenderOptions) Render() (*assetslib.Assets, error) {
 	if err != nil {
 		return nil, err
 	}
-	r.config.CACert = string(tlsutil.EncodeCertificatePEM(caCert))
+	r.config.CACert = tlsutil.EncodeCertificatePEM(caCert)
 
 	// Generate apiserver certs and keys
 	if files, err := r.newTLSAssets(caCert, caPrivateKey, r.AltNames); err != nil {
