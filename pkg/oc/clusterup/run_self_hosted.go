@@ -218,6 +218,7 @@ kind: KubeAPIServerConfig
 		ConfigFileName:  "kube-apiserver-config.yaml",
 		ConfigOverrides: apiserverConfigOverride,
 		ContainerBinds:  nil,
+		EtcdServerURLs:  []string{fmt.Sprintf("https://%s:2379", c.PublicHostname)},
 	}
 	if _, err := ok.RunRender("kube-apiserver", OpenShiftImages.Get("hypershift").ToPullSpec(c.ImageTemplate).String(), OpenShiftImages.Get("hyperkube").ToPullSpec(c.ImageTemplate).String(), c.DockerClient(), hostIP); err != nil {
 		return nil, err

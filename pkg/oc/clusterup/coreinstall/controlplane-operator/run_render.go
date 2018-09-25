@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/openshift/origin/pkg/oc/clusterup/docker/openshift"
 	"github.com/openshift/origin/pkg/oc/clusterup/docker/run"
@@ -29,6 +30,9 @@ type RenderConfig struct {
 
 	// ContainerBinds is location to additional container bind mounts for bootkube containers.
 	ContainerBinds []string
+
+	// EtcdServerURLs is a list etcd server URLs
+	EtcdServerURLs []string
 }
 
 // Start runs the operator render command.
@@ -49,6 +53,7 @@ func (opt *RenderConfig) RunRender(component string, hyperShiftImage, hyperKubeI
 		fmt.Sprintf("--manifest-config-host-path=%s", opt.ConfigOutputDir),
 		fmt.Sprintf("--manifest-config-file-name=%s", opt.ConfigFileName),
 		fmt.Sprintf("--manifest-secrets-host-path=%s", opt.AssetInputDir),
+		fmt.Sprintf("--manifest-etcd-server-urls=%s", strings.Join(opt.EtcdServerURLs, ",")),
 	}
 
 	binds := opt.ContainerBinds
