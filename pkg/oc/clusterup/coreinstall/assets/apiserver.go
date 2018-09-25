@@ -19,6 +19,9 @@ const (
 	AssetPathServiceAccountPubKey  = "tls/service-account.pub"
 	AssetPathAdminKey              = "tls/admin.key"
 	AssetPathAdminCert             = "tls/admin.crt"
+	AssetPathAggregatorCACert      = "tls/aggregator-ca.crt"
+	AssetPathApiserverProxyKey     = "tls/apiserver-proxy.key"
+	AssetPathApiserverProxyCert    = "tls/apiserver-proxy.crt"
 )
 
 func (r *TLSAssetsRenderOptions) newAPIKeyAndCert(caCert *x509.Certificate, caPrivKey *rsa.PrivateKey, altNames tlsutil.AltNames) (*rsa.PrivateKey, *x509.Certificate, error) {
@@ -85,6 +88,9 @@ func (r *TLSAssetsRenderOptions) newTLSAssets(caCert *x509.Certificate, caPrivKe
 		{Name: AssetPathServiceAccountPubKey, Data: saPubKey},
 		{Name: AssetPathAdminKey, Data: tlsutil.EncodePrivateKeyPEM(adminKey)},
 		{Name: AssetPathAdminCert, Data: tlsutil.EncodeCertificatePEM(adminCert)},
+		{Name: AssetPathAggregatorCACert, Data: tlsutil.EncodeCertificatePEM(apiCert)},
+		{Name: AssetPathApiserverProxyKey, Data: tlsutil.EncodePrivateKeyPEM(apiKey)},
+		{Name: AssetPathApiserverProxyCert, Data: tlsutil.EncodeCertificatePEM(apiCert)},
 	}...)
 	return assets, nil
 }
