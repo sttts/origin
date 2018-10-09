@@ -1,16 +1,26 @@
 language: go
 
 go:
-  - 1.7
+  - 1.11
+
+sudo: required
+
+services:
+  - docker
 
 install:
   - export PATH=$GOPATH/bin:./_output/tools/etcd/bin:$PATH
   - make install-travis
+  - git fetch --tags
+  - sed -i 's/# enforce that certain binaries/return 0 \#/' hack/lib/constants.sh
+  - sudo mount --make-rshared /
+  - sudo mount --make-rshared /run
+
 
 script:
-  - make verify-commits
-
-notifications:
-  irc: "chat.freenode.net#openshift-dev"
-
-sudo: false
+  - export OS_GIT_MAJOR=4
+  - export OS_GIT_MINOR=0
+  - export PATH=_output/local/bin/linux/amd64:${PATH}
+  - make WHAT="cmd/hypershift vendor/k8s.io/kubernetes/cmd/hyperkube cmd/openshift-node-config cmd/oc"
+  - hack/build-local-images.py hypershift hyperkube node
+  - oc cluster up --base-dir=/tmp/clusterup$n --v=5 --tag=latest --image='openshift/origin-${component}:latest'
