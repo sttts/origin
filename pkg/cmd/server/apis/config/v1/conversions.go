@@ -236,8 +236,8 @@ func Convert_config_IdentityProvider_To_v1_IdentityProvider(in *internal.Identit
 
 func addConversionFuncs(scheme *runtime.Scheme) error {
 	return scheme.AddConversionFuncs(
-	//convert_runtime_Object_To_runtime_RawExtension,
-	//convert_runtime_RawExtension_To_runtime_Object,
+		convert_runtime_Object_To_runtime_RawExtension, // convert between v1 and internal
+		convert_runtime_RawExtension_To_runtime_Object, // convert between v1 and internal
 	//Convert_v1_AuditConfig_To_config_AuditConfig,
 	//Convert_config_AuditConfig_To_v1_AuditConfig,
 	//Convert_v1_EtcdConnectionInfo_To_config_EtcdConnectionInfo,
