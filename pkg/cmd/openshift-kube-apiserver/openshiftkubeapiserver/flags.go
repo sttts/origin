@@ -148,6 +148,8 @@ func ConfigToFlags(kubeAPIServerConfig *kubecontrolplanev1.KubeAPIServerConfig) 
 	configflags.SetIfUnset(args, "tls-sni-cert-key", sniCertKeys(kubeAPIServerConfig.ServingInfo.NamedCertificates)...)
 	configflags.SetIfUnset(args, "secure-port", portString)
 
+	configflags.SetIfUnset(args, "feature-gates", "CustomResourcePublishOpenAPI=true")
+
 	return configflags.ToFlagSlice(args), nil
 }
 
