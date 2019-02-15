@@ -42,9 +42,5 @@ func (oa OpenAPI) Install(c *restful.Container, mux *mux.PathRecorderMux) (*hand
 	if err != nil {
 		glog.Fatalf("Failed to register open api spec for root: %v", err)
 	}
-	_, err = handler.BuildAndRegisterOpenAPIVersionedService("/openapi/v2", c.RegisteredWebServices(), oa.Config, mux)
-	if err != nil {
-		glog.Fatalf("Failed to register versioned open api spec for root: %v", err)
-	}
 	return openAPIVersionedService, spec
 }
