@@ -75,7 +75,7 @@ func ConvertJSONSchemaPropsToOpenAPIv2Schema(in *apiextensions.JSONSchemaProps) 
 			case "array":
 				// https://github.com/kubernetes/kube-openapi/pull/143/files#diff-62afddb578e9db18fb32ffb6b7802d92R183
 				// https://github.com/kubernetes/kube-openapi/pull/143/files#diff-62afddb578e9db18fb32ffb6b7802d92R184
-				if p.Items == nil || len(p.Items.Schemas) != 1 {
+				if p.Items == nil || (p.Items.Schema == nil && len(p.Items.Schemas) != 1) {
 					p.Type = nil
 					p.Items = nil
 				}
