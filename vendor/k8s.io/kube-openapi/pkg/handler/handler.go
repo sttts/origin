@@ -245,6 +245,10 @@ func jsonToYAMLValue(j interface{}) interface{} {
 			}
 			return i64
 		}
+		if ui64 := uint64(j); j == float64(ui64) {
+			return ui64
+		}
+		return j
 	case int64:
 		if i := int(j); j == int64(i) {
 			return i

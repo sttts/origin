@@ -2,6 +2,7 @@ package handler
 
 import (
 	"io/ioutil"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -99,6 +100,13 @@ func TestRegisterOpenAPIVersionedService(t *testing.T) {
 }
 
 func TestJsonToYAML(t *testing.T) {
+	intOrInt64 := func(i64 int64) interface{} {
+		if i := int(i64); i64 == int64(i) {
+			return i
+		}
+		return i64
+	}
+
 	tests := []struct {
 		name     string
 		input    map[string]interface{}
@@ -114,9 +122,11 @@ func TestJsonToYAML(t *testing.T) {
 				"fractionless": float64(42),
 				"int":          int(42),
 				"int64":        int64(42),
+				"int64 big":    float64(math.Pow(2, 62)),
 				"map":          map[string]interface{}{"foo": "bar"},
 				"slice":        []interface{}{"foo", "bar"},
 				"string":       string("foo"),
+				"uint64 big":   float64(math.Pow(2, 63)),
 			},
 			yaml.MapSlice{
 				{"bool", true},
@@ -124,9 +134,11 @@ func TestJsonToYAML(t *testing.T) {
 				{"fractionless", int(42)},
 				{"int", int(42)},
 				{"int64", int(42)},
+				{"int64 big", intOrInt64(int64(1) << 62)},
 				{"map", yaml.MapSlice{{"foo", "bar"}}},
 				{"slice", []interface{}{"foo", "bar"}},
 				{"string", string("foo")},
+				{"uint64 big", uint64(1) << 63},
 			},
 		},
 	}
