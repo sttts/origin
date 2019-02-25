@@ -28,14 +28,14 @@ import (
 	"time"
 
 	"github.com/NYTimes/gziphandler"
-	restful "github.com/emicklei/go-restful"
+	"github.com/emicklei/go-restful"
 	"github.com/go-openapi/spec"
 	"github.com/golang/protobuf/proto"
-	openapi_v2 "github.com/googleapis/gnostic/OpenAPIv2"
+	"github.com/googleapis/gnostic/OpenAPIv2"
 	"github.com/googleapis/gnostic/compiler"
 	"github.com/json-iterator/go"
 	"github.com/munnerz/goautoneg"
-	yaml "gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v2"
 
 	"k8s.io/kube-openapi/pkg/builder"
 	"k8s.io/kube-openapi/pkg/common"
@@ -238,6 +238,18 @@ func jsonToYAMLValue(j interface{}) interface{} {
 			ret[i] = jsonToYAMLValue(j[i])
 		}
 		return ret
+	case float64:
+		if i64 := int64(j); j == float64(i64) {
+			if i := int(i64); i64 == int64(i) {
+				return i
+			}
+			return i64
+		}
+	case int64:
+		if i := int(j); j == int64(i) {
+			return i
+		}
+		return j
 	}
 	return j
 }

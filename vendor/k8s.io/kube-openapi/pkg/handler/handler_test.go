@@ -8,6 +8,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/go-openapi/spec"
 	json "github.com/json-iterator/go"
 	yaml "gopkg.in/yaml.v2"
@@ -108,20 +109,24 @@ func TestJsonToYAML(t *testing.T) {
 		{
 			"values",
 			map[string]interface{}{
-				"int64":   int64(42),
-				"float64": float64(42.0),
-				"string":  string("foo"),
-				"bool":    true,
-				"slice":   []interface{}{"foo", "bar"},
-				"map":     map[string]interface{}{"foo": "bar"},
+				"bool":         true,
+				"float64":      float64(42.1),
+				"fractionless": float64(42),
+				"int":          int(42),
+				"int64":        int64(42),
+				"map":          map[string]interface{}{"foo": "bar"},
+				"slice":        []interface{}{"foo", "bar"},
+				"string":       string("foo"),
 			},
 			yaml.MapSlice{
-				{"int64", int64(42)},
-				{"float64", float64(42.0)},
-				{"string", string("foo")},
 				{"bool", true},
-				{"slice", []interface{}{"foo", "bar"}},
+				{"float64", float64(42.1)},
+				{"fractionless", int(42)},
+				{"int", int(42)},
+				{"int64", int(42)},
 				{"map", yaml.MapSlice{{"foo", "bar"}}},
+				{"slice", []interface{}{"foo", "bar"}},
+				{"string", string("foo")},
 			},
 		},
 	}
@@ -131,7 +136,7 @@ func TestJsonToYAML(t *testing.T) {
 			sortMapSlicesInPlace(tt.expected)
 			sortMapSlicesInPlace(got)
 			if !reflect.DeepEqual(got, tt.expected) {
-				t.Errorf("jsonToYAML() = %v, want %v", got, tt.expected)
+				t.Errorf("jsonToYAML() = %v, want %v", spew.Sdump(got), spew.Sdump(tt.expected))
 			}
 		})
 	}
