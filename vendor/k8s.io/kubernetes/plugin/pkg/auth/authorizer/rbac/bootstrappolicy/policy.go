@@ -211,6 +211,16 @@ func clusterRoles() []rbacv1.ClusterRole {
 			},
 		},
 		{
+			// a role which provides unauthenticated access to /readyz.
+			// TODO: integrate into system:public-info-viewer (new in 1.14) when upstreaming
+			ObjectMeta: metav1.ObjectMeta{Name: "system:openshift:public-info-viewer"},
+			Rules: []rbacv1.PolicyRule{
+				rbacv1helpers.NewRule("get").URLs(
+					"/readyz",
+				).RuleOrDie(),
+			},
+		},
+		{
 			// a role which provides minimal resource access to allow a "normal" user to learn information about themselves
 			ObjectMeta: metav1.ObjectMeta{Name: "system:basic-user"},
 			Rules: []rbacv1.PolicyRule{
@@ -529,7 +539,8 @@ func clusterRoleBindings() []rbacv1.ClusterRoleBinding {
 	rolebindings := []rbacv1.ClusterRoleBinding{
 		rbacv1helpers.NewClusterBinding("cluster-admin").Groups(user.SystemPrivilegedGroup).BindingOrDie(),
 		rbacv1helpers.NewClusterBinding("system:discovery").Groups(user.AllAuthenticated, user.AllUnauthenticated).BindingOrDie(),
-		rbacv1helpers.NewClusterBinding("system:basic-user").Groups(user.AllAuthenticated, user.AllUnauthenticated).BindingOrDie(),
+		// TODO: integrate into system:public-info-viewer (new in 1.14) when upstreaming
+		rbacv1helpers.NewClusterBinding("system:openshift:public-info-viewer").Groups(user.AllAuthenticated, user.AllUnauthenticated).BindingOrDie(), rbacv1helpers.NewClusterBinding("system:basic-user").Groups(user.AllAuthenticated, user.AllUnauthenticated).BindingOrDie(),
 		rbacv1helpers.NewClusterBinding("system:node-proxier").Users(user.KubeProxy).BindingOrDie(),
 		rbacv1helpers.NewClusterBinding("system:kube-controller-manager").Users(user.KubeControllerManager).BindingOrDie(),
 		rbacv1helpers.NewClusterBinding("system:kube-dns").SAs("kube-system", "kube-dns").BindingOrDie(),
