@@ -31,16 +31,18 @@ import (
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/types"
+	utilversion "k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apimachinery/pkg/util/wait"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	k8sclientset "k8s.io/client-go/kubernetes"
 	openapiutil "k8s.io/kube-openapi/pkg/util"
-	utilversion "k8s.io/kubernetes/pkg/util/version"
 	"k8s.io/kubernetes/test/e2e/framework"
+	"k8s.io/kubernetes/test/utils/crd"
+	"sigs.k8s.io/yaml"
 )
 
 var (
-	crdPublishOpenAPIVersion = utilversion.MustParseSemantic("v1.12.0")
+	crdPublishOpenAPIVersion = utilversion.MustParseSemantic("v1.13.0")
 	metaPattern              = `"kind":"%s","apiVersion":"%s/%s","metadata":{"name":"%s"}`
 )
 
@@ -57,7 +59,7 @@ var _ = SIGDescribe("CustomResourcePublishOpenAPI [Feature:CustomResourcePublish
 			framework.Failf("%v", err)
 		}
 
-		meta := fmt.Sprintf(metaPattern, crd.Kind, crd.ApiGroup, crd.ApiVersion, "test-foo")
+		meta := fmt.Sprintf(metaPattern, crd.Kind, crd.APIGroup, crd.Versions[0].Name, "test-foo")
 		ns := fmt.Sprintf("--namespace=%v", f.Namespace.Name)
 
 		By("client-side validation (kubectl create and apply) allows request with known and required properties")
@@ -110,7 +112,7 @@ var _ = SIGDescribe("CustomResourcePublishOpenAPI [Feature:CustomResourcePublish
 		}
 
 		By("kubectl explain works to return error when explain is called on property that doesn't exist")
-		if _, err := framework.RunKubectl(ns, "explain", crd.GetPluralName()+".spec.bars2"); err == nil || !strings.Contains(err.Error(), `field "bars2" does not exist`) {
+		if _, err := framework.RunKubectl("explain", crd.GetPluralName()+".spec.bars2"); err == nil || !strings.Contains(err.Error(), `field "bars2" does not exist`) {
 			framework.Failf("unexpected no error when explaining property that doesn't exist: %v", err)
 		}
 
@@ -125,18 +127,18 @@ var _ = SIGDescribe("CustomResourcePublishOpenAPI [Feature:CustomResourcePublish
 			framework.Failf("%v", err)
 		}
 
-		meta := fmt.Sprintf(metaPattern, crd.Kind, crd.ApiGroup, crd.ApiVersion, "test-cr")
+		meta := fmt.Sprintf(metaPattern, crd.Kind, crd.APIGroup, crd.Versions[0].Name, "test-cr")
 		ns := fmt.Sprintf("--namespace=%v", f.Namespace.Name)
 
 		By("client-side validation (kubectl create and apply) allows request with any unknown properties")
 		randomCR := fmt.Sprintf(`{%s,"a":{"b":[{"c":"d"}]}}`, meta)
-		if _, err := framework.RunKubectlInput(randomCR, ns, "create", "--validate=false", "-f", "-"); err != nil {
+		if _, err := framework.RunKubectlInput(randomCR, ns, "create", "-f", "-"); err != nil {
 			framework.Failf("failed to create random CR %s for CRD without schema: %v", randomCR, err)
 		}
 		if _, err := framework.RunKubectl(ns, "delete", crd.GetPluralName(), "test-cr"); err != nil {
 			framework.Failf("failed to delete random CR: %v", err)
 		}
-		if _, err := framework.RunKubectlInput(randomCR, ns, "apply", "--validate=false", "-f", "-"); err != nil {
+		if _, err := framework.RunKubectlInput(randomCR, ns, "apply", "-f", "-"); err != nil {
 			framework.Failf("failed to apply random CR %s for CRD without schema: %v", randomCR, err)
 		}
 		if _, err := framework.RunKubectl(ns, "delete", crd.GetPluralName(), "test-cr"); err != nil {
@@ -152,10 +154,197 @@ var _ = SIGDescribe("CustomResourcePublishOpenAPI [Feature:CustomResourcePublish
 			framework.Failf("%v", err)
 		}
 	})
+
+	It("works for multiple CRDs of different groups", func() {
+		By("CRs in different groups (two CRDs) show up in OpenAPI documentation")
+		crdFoo, err := setupCRD(f, schemaFoo, "foo", "v1")
+		if err != nil {
+			framework.Failf("%v", err)
+		}
+		crdWaldo, err := setupCRD(f, schemaWaldo, "waldo", "v1beta1")
+		if err != nil {
+			framework.Failf("%v", err)
+		}
+		if crdFoo.APIGroup == crdWaldo.APIGroup {
+			framework.Failf("unexpected: CRDs should be of different group %v, %v", crdFoo.APIGroup, crdWaldo.APIGroup)
+		}
+		if err := waitForDefinition(f.ClientSet, definitionName(crdWaldo, "v1beta1"), schemaWaldo); err != nil {
+			framework.Failf("%v", err)
+		}
+		if err := waitForDefinition(f.ClientSet, definitionName(crdFoo, "v1"), schemaFoo); err != nil {
+			framework.Failf("%v", err)
+		}
+		if err := cleanupCRD(f, crdFoo); err != nil {
+			framework.Failf("%v", err)
+		}
+		if err := cleanupCRD(f, crdWaldo); err != nil {
+			framework.Failf("%v", err)
+		}
+	})
+
+	It("works for multiple CRDs of same group but different versions", func() {
+		By("CRs in the same group but different versions (one multiversion CRD) show up in OpenAPI documentation")
+		crdMultiVer, err := setupCRD(f, schemaFoo, "multi-ver", "v2", "v3")
+		if err != nil {
+			framework.Failf("%v", err)
+		}
+		if err := waitForDefinition(f.ClientSet, definitionName(crdMultiVer, "v3"), schemaFoo); err != nil {
+			framework.Failf("%v", err)
+		}
+		if err := waitForDefinition(f.ClientSet, definitionName(crdMultiVer, "v2"), schemaFoo); err != nil {
+			framework.Failf("%v", err)
+		}
+		if err := cleanupCRD(f, crdMultiVer); err != nil {
+			framework.Failf("%v", err)
+		}
+
+		By("CRs in the same group but different versions (two CRDs) show up in OpenAPI documentation")
+		crdFoo, err := setupCRD(f, schemaFoo, "common-group", "v4")
+		if err != nil {
+			framework.Failf("%v", err)
+		}
+		crdWaldo, err := setupCRD(f, schemaWaldo, "common-group", "v5")
+		if err != nil {
+			framework.Failf("%v", err)
+		}
+		if crdFoo.APIGroup != crdWaldo.APIGroup {
+			framework.Failf("unexpected: CRDs should be of the same group %v, %v", crdFoo.APIGroup, crdWaldo.APIGroup)
+		}
+		if err := waitForDefinition(f.ClientSet, definitionName(crdWaldo, "v5"), schemaWaldo); err != nil {
+			framework.Failf("%v", err)
+		}
+		if err := waitForDefinition(f.ClientSet, definitionName(crdFoo, "v4"), schemaFoo); err != nil {
+			framework.Failf("%v", err)
+		}
+		if err := cleanupCRD(f, crdFoo); err != nil {
+			framework.Failf("%v", err)
+		}
+		if err := cleanupCRD(f, crdWaldo); err != nil {
+			framework.Failf("%v", err)
+		}
+	})
+
+	It("works for multiple CRDs of same group and version but different kinds", func() {
+		By("CRs in the same group and version but different kinds (two CRDs) show up in OpenAPI documentation")
+		crdFoo, err := setupCRD(f, schemaFoo, "common-group", "v6")
+		if err != nil {
+			framework.Failf("%v", err)
+		}
+		crdWaldo, err := setupCRD(f, schemaWaldo, "common-group", "v6")
+		if err != nil {
+			framework.Failf("%v", err)
+		}
+		if crdFoo.APIGroup != crdWaldo.APIGroup {
+			framework.Failf("unexpected: CRDs should be of the same group %v, %v", crdFoo.APIGroup, crdWaldo.APIGroup)
+		}
+		if err := waitForDefinition(f.ClientSet, definitionName(crdWaldo, "v6"), schemaWaldo); err != nil {
+			framework.Failf("%v", err)
+		}
+		if err := waitForDefinition(f.ClientSet, definitionName(crdFoo, "v6"), schemaFoo); err != nil {
+			framework.Failf("%v", err)
+		}
+		if err := cleanupCRD(f, crdFoo); err != nil {
+			framework.Failf("%v", err)
+		}
+		if err := cleanupCRD(f, crdWaldo); err != nil {
+			framework.Failf("%v", err)
+		}
+	})
+
+	It("updates the published spec when one versin gets renamed", func() {
+		By("set up a multi version CRD")
+		crdMultiVer, err := setupCRD(f, schemaFoo, "multi-ver", "v2", "v3")
+		if err != nil {
+			framework.Failf("%v", err)
+		}
+		if err := waitForDefinition(f.ClientSet, definitionName(crdMultiVer, "v3"), schemaFoo); err != nil {
+			framework.Failf("%v", err)
+		}
+		if err := waitForDefinition(f.ClientSet, definitionName(crdMultiVer, "v2"), schemaFoo); err != nil {
+			framework.Failf("%v", err)
+		}
+
+		By("rename a version")
+		patch := []byte(`{"spec":{"versions":[{"name":"v2","served":true,"storage":true},{"name":"v4","served":true,"storage":false}]}}`)
+		crdMultiVer.Crd, err = crdMultiVer.APIExtensionClient.ApiextensionsV1beta1().CustomResourceDefinitions().Patch(crdMultiVer.GetMetaName(), types.MergePatchType, patch)
+		if err != nil {
+			framework.Failf("%v", err)
+		}
+
+		By("check the new version name is served")
+		if err := waitForDefinition(f.ClientSet, definitionName(crdMultiVer, "v4"), schemaFoo); err != nil {
+			framework.Failf("%v", err)
+		}
+		By("check the old version name is removed")
+		if err := waitForDefinitionCleanup(f.ClientSet, definitionName(crdMultiVer, "v3")); err != nil {
+			framework.Failf("%v", err)
+		}
+		By("check the other version is not changed")
+		if err := waitForDefinition(f.ClientSet, definitionName(crdMultiVer, "v2"), schemaFoo); err != nil {
+			framework.Failf("%v", err)
+		}
+
+		// TestCrd.Versions is different from TestCrd.Crd.Versions, we have to manually
+		// update the name there. Used by cleanupCRD
+		crdMultiVer.Versions[1].Name = "v4"
+		if err := cleanupCRD(f, crdMultiVer); err != nil {
+			framework.Failf("%v", err)
+		}
+	})
+
+	It("removes definition from spec when one versin gets changed to not be served", func() {
+		By("set up a multi version CRD")
+		crd, err := setupCRD(f, schemaFoo, "multi-to-single-ver", "v5", "v6alpha1")
+		if err != nil {
+			framework.Failf("%v", err)
+		}
+		// just double check. setupCRD() checked this for us already
+		if err := waitForDefinition(f.ClientSet, definitionName(crd, "v6alpha1"), schemaFoo); err != nil {
+			framework.Failf("%v", err)
+		}
+		if err := waitForDefinition(f.ClientSet, definitionName(crd, "v5"), schemaFoo); err != nil {
+			framework.Failf("%v", err)
+		}
+
+		By("mark a version not serverd")
+		crd.Crd.Spec.Versions[1].Served = false
+		crd.Crd, err = crd.APIExtensionClient.ApiextensionsV1beta1().CustomResourceDefinitions().Update(crd.Crd)
+		if err != nil {
+			framework.Failf("%v", err)
+		}
+
+		By("check the unserved version gets removed")
+		if err := waitForDefinitionCleanup(f.ClientSet, definitionName(crd, "v6alpha1")); err != nil {
+			framework.Failf("%v", err)
+		}
+		By("check the other version is not changed")
+		if err := waitForDefinition(f.ClientSet, definitionName(crd, "v5"), schemaFoo); err != nil {
+			framework.Failf("%v", err)
+		}
+
+		if err := cleanupCRD(f, crd); err != nil {
+			framework.Failf("%v", err)
+		}
+	})
 })
 
-func setupCRD(f *framework.Framework, schema []byte, groupSuffix string, version string) (*framework.TestCrd, error) {
-	crd, err := framework.CreateTestCRD(f)
+func setupCRD(f *framework.Framework, schema []byte, groupSuffix string, versions ...string) (*crd.TestCrd, error) {
+	group := fmt.Sprintf("%s-test-%s.k8s.io", f.BaseName, groupSuffix)
+	if len(versions) == 0 {
+		return nil, fmt.Errorf("require at least one version for CRD")
+	}
+	apiVersions := []v1beta1.CustomResourceDefinitionVersion{}
+	for _, version := range versions {
+		v := v1beta1.CustomResourceDefinitionVersion{
+			Name:    version,
+			Served:  true,
+			Storage: false,
+		}
+		apiVersions = append(apiVersions, v)
+	}
+	apiVersions[0].Storage = true
+
+	crd, err := crd.CreateMultiVersionTestCRD(f, group, apiVersions, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CRD: %v", err)
 	}
@@ -170,26 +359,33 @@ func setupCRD(f *framework.Framework, schema []byte, groupSuffix string, version
 		schema = []byte(`type: object`)
 	}
 
-	if err := waitForDefinition(f.ClientSet, definitionName(crd, version), schema); err != nil {
-		framework.Failf("%v", err)
+	for _, v := range crd.Versions {
+		if err := waitForDefinition(f.ClientSet, definitionName(crd, v.Name), schema); err != nil {
+			return nil, fmt.Errorf("%v", err)
+		}
 	}
-
 	return crd, nil
 }
 
-func cleanupCRD(f *framework.Framework, crd *framework.TestCrd) error {
+func cleanupCRD(f *framework.Framework, crd *crd.TestCrd) error {
 	crd.CleanUp()
+	for _, v := range crd.Versions {
+		name := definitionName(crd, v.Name)
+		if err := waitForDefinitionCleanup(f.ClientSet, name); err != nil {
+			return fmt.Errorf("%v", err)
+		}
+	}
 	return nil
 }
 
 // patchSchema takes schema in YAML and patches it to given CRD in given version
-func patchSchema(schema []byte, crd *framework.TestCrd) error {
+func patchSchema(schema []byte, crd *crd.TestCrd) error {
 	s, err := utilyaml.ToJSON(schema)
 	if err != nil {
 		return fmt.Errorf("failed to create json patch: %v", err)
 	}
 	patch := []byte(fmt.Sprintf(`{"spec":{"validation":{"openAPIV3Schema":%s}}}`, string(s)))
-	crd.Crd, err = crd.ApiExtensionClient.ApiextensionsV1beta1().CustomResourceDefinitions().Patch(crd.GetMetaName(), types.MergePatchType, patch)
+	crd.Crd, err = crd.APIExtensionClient.ApiextensionsV1beta1().CustomResourceDefinitions().Patch(crd.GetMetaName(), types.MergePatchType, patch)
 	return err
 }
 
@@ -201,7 +397,7 @@ func waitForDefinition(c k8sclientset.Interface, name string, schema []byte) err
 	}
 
 	lastMsg := ""
-	if err := wait.Poll(1*time.Second, 30*time.Second, func() (bool, error) {
+	if err := wait.Poll(500*time.Millisecond, 10*time.Second, func() (bool, error) {
 		bs, err := c.CoreV1().RESTClient().Get().AbsPath("openapi", "v2").DoRaw()
 		if err != nil {
 			return false, err
@@ -254,12 +450,8 @@ func waitForDefinitionCleanup(c k8sclientset.Interface, name string) error {
 
 // convertJSONSchemaProps converts JSONSchemaProps in YAML to spec.Schema
 func convertJSONSchemaProps(in []byte, out *spec.Schema) error {
-	injson, err := utilyaml.ToJSON(in)
-	if err != nil {
-		return err
-	}
 	external := v1beta1.JSONSchemaProps{}
-	if err := json.Unmarshal(injson, &external); err != nil {
+	if err := yaml.UnmarshalStrict(in, &external); err != nil {
 		return err
 	}
 	internal := apiextensions.JSONSchemaProps{}
@@ -293,8 +485,8 @@ func verifyKubectlExplain(name, pattern string) error {
 }
 
 // definitionName returns the openapi definition name for given CRD in given version
-func definitionName(crd *framework.TestCrd, version string) string {
-	return openapiutil.ToRESTFriendlyName(fmt.Sprintf("%s/%s/%s", crd.ApiGroup, version, crd.Kind))
+func definitionName(crd *crd.TestCrd, version string) string {
+	return openapiutil.ToRESTFriendlyName(fmt.Sprintf("%s/%s/%s", crd.APIGroup, version, crd.Kind))
 }
 
 var schemaFoo = []byte(`description: Foo CRD for Testing
