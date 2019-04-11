@@ -41,9 +41,9 @@ const (
 // serveSecurely runs the secure http server. It fails only if certificates cannot
 // be loaded or the initial listen call fails. The actual server loop (stoppable by closing
 // stopCh) runs in a go routine, i.e. serveSecurely does not block.
-func (s *SecureServingInfo) Serve(handler http.Handler, shutdownTimeout time.Duration, stopCh <-chan struct{}) error {
+func (s *SecureServingInfo) Serve(handler http.Handler, shutdownTimeout time.Duration, stopCh <-chan struct{}) (<-chan struct{}, error) {
 	if s.Listener == nil {
-		return fmt.Errorf("listener must not be nil")
+		return nil, fmt.Errorf("listener must not be nil")
 	}
 
 	secureServer := &http.Server{
@@ -86,7 +86,7 @@ func (s *SecureServingInfo) Serve(handler http.Handler, shutdownTimeout time.Dur
 
 		// need to load the certs at least once
 		if err := loader.CheckCerts(); err != nil {
-			return err
+			return nil, err
 		}
 		go loader.Run(stopCh)
 
@@ -119,7 +119,7 @@ func (s *SecureServingInfo) Serve(handler http.Handler, shutdownTimeout time.Dur
 
 	// apply settings to the server
 	if err := http2.ConfigureServer(secureServer, http2Options); err != nil {
-		return fmt.Errorf("error configuring http2: %v", err)
+		return nil, fmt.Errorf("error configuring http2: %v", err)
 	}
 
 	klog.Infof("Serving securely on %s", secureServer.Addr)
@@ -135,10 +135,12 @@ func RunServer(
 	ln net.Listener,
 	shutDownTimeout time.Duration,
 	stopCh <-chan struct{},
-) error {
+) (<-chan struct{}, error) {
 	if ln == nil {
-		return fmt.Errorf("listener must not be nil")
+		return nil, fmt.Errorf("listener must not be nil")
 	}
+
+	doneCh := make(chan struct{})
 
 	// Shutdown server gracefully.
 	go func() {
@@ -149,6 +151,8 @@ func RunServer(
 	}()
 
 	go func() {
+		defer close(doneCh)
+
 		defer utilruntime.HandleCrash()
 
 		var listener net.Listener
@@ -168,7 +172,7 @@ func RunServer(
 		}
 	}()
 
-	return nil
+	return doneCh, nil
 }
 
 type NamedTLSCert struct {
