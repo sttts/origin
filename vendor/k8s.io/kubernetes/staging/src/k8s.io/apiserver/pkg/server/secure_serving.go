@@ -86,7 +86,7 @@ func (s *SecureServingInfo) Serve(handler http.Handler, shutdownTimeout time.Dur
 
 		// need to load the certs at least once
 		if err := loader.CheckCerts(); err != nil {
-			return err
+			return nil, err
 		}
 		go loader.Run(stopCh)
 
@@ -142,6 +142,8 @@ func RunServer(
 		return nil, fmt.Errorf("listener must not be nil")
 	}
 
+	doneCh := make(chan struct{})
+
 	// Shutdown server gracefully.
 	stoppedCh := make(chan struct{})
 	go func() {
@@ -153,6 +155,8 @@ func RunServer(
 	}()
 
 	go func() {
+		defer close(doneCh)
+
 		defer utilruntime.HandleCrash()
 
 		var listener net.Listener
