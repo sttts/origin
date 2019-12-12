@@ -41,8 +41,8 @@ import (
 
 var fakeSchema = prototesting.Fake{
 	Path: filepath.Join(
-		strings.Repeat(".."+string(filepath.Separator), 8),
-		"api", "openapi-spec", "swagger.json"),
+		strings.Repeat(".."+string(filepath.Separator), 5),
+		"kubernetes", "api", "openapi-spec", "swagger.json"),
 }
 
 type fakeObjectConvertor struct{}
