@@ -28,7 +28,7 @@ const authenticatedOAuthGroup = "system:authenticated:oauth"
 // before then we should try to eliminate our direct to storage access.  It's making us do weird things.
 const defaultInformerResyncPeriod = 10 * time.Minute
 
-func AddOAuthServerAuthenticatorIfNeeded(tokenAuthenticators []authenticator.Token, serviceAccountTokenGetter serviceaccount.ServiceAccountTokenGetter) []authenticator.Token {
+func AddOAuthServerAndLegacyServiceAccountAuthenticatorIfNeeded(tokenAuthenticators []authenticator.Token, audiences authenticator.Audiences, serviceAccountTokenGetter serviceaccount.ServiceAccountTokenGetter) []authenticator.Token {
 	if !enablement.IsOpenShift() {
 		return tokenAuthenticators
 	}
@@ -69,7 +69,7 @@ func AddOAuthServerAuthenticatorIfNeeded(tokenAuthenticators []authenticator.Tok
 	serviceAccountTokenAuthenticator := serviceaccount.JWTTokenAuthenticator(
 		serviceaccount.LegacyIssuer,
 		publicKeys,
-		nil, // TODO audiences
+		audiences,
 		serviceaccount.NewLegacyValidator(true, serviceAccountTokenGetter),
 	)
 	tokenAuthenticators = append(tokenAuthenticators, serviceAccountTokenAuthenticator)

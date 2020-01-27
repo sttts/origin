@@ -103,7 +103,7 @@ func StartDefaultServerWithClients(t servertesting.Logger, extraFlags ...string)
 	return tearDown, apiExtensionsClient, dynamicClient, nil
 }
 
-// IntegrationEtcdServers returns etcd server URLs.
+// integrationEtcdServers returns etcd server URLs.
 func IntegrationEtcdServers() []string {
 	if etcdURL, ok := os.LookupEnv("KUBE_INTEGRATION_ETCD_URL"); ok {
 		return []string{etcdURL}
