@@ -1,6 +1,7 @@
 package builds
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -60,7 +61,7 @@ var _ = g.Describe("[sig-builds][Feature:Builds][Slow] update failure status", f
 				br.AssertFailure()
 				br.DumpLogs()
 
-				build, err := oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(br.Build.Name, metav1.GetOptions{})
+				build, err := oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(context.Background(), br.Build.Name, metav1.GetOptions{})
 				o.Expect(err).NotTo(o.HaveOccurred())
 				o.Expect(build.Status.Reason).To(o.Equal(buildv1.StatusReasonGenericBuildFailed))
 				o.Expect(build.Status.Message).To(o.Equal("Generic Build failure - check logs for details."))
@@ -71,7 +72,7 @@ var _ = g.Describe("[sig-builds][Feature:Builds][Slow] update failure status", f
 				// is set if one is going to be set.
 				err = wait.Poll(time.Second, 30*time.Second, func() (bool, error) {
 					// note this is the same build variable used in the test scope
-					build, err = oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(br.Build.Name, metav1.GetOptions{})
+					build, err = oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(context.Background(), br.Build.Name, metav1.GetOptions{})
 					if err != nil {
 						return true, err
 					}
@@ -95,7 +96,7 @@ var _ = g.Describe("[sig-builds][Feature:Builds][Slow] update failure status", f
 				br.AssertFailure()
 				br.DumpLogs()
 
-				build, err := oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(br.Build.Name, metav1.GetOptions{})
+				build, err := oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(context.Background(), br.Build.Name, metav1.GetOptions{})
 				o.Expect(err).NotTo(o.HaveOccurred())
 				o.Expect(build.Status.Reason).To(o.Equal(buildv1.StatusReasonFetchSourceFailed))
 				o.Expect(build.Status.Message).To(o.Equal(StatusMessageFetchSourceFailed))
@@ -114,7 +115,7 @@ var _ = g.Describe("[sig-builds][Feature:Builds][Slow] update failure status", f
 				br.AssertFailure()
 				br.DumpLogs()
 
-				build, err := oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(br.Build.Name, metav1.GetOptions{})
+				build, err := oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(context.Background(), br.Build.Name, metav1.GetOptions{})
 				o.Expect(err).NotTo(o.HaveOccurred())
 				o.Expect(build.Status.Reason).To(o.Equal(buildv1.StatusReasonFetchSourceFailed))
 				o.Expect(build.Status.Message).To(o.Equal(StatusMessageFetchSourceFailed))
@@ -135,7 +136,7 @@ var _ = g.Describe("[sig-builds][Feature:Builds][Slow] update failure status", f
 
 				var build *buildv1.Build
 				wait.PollImmediate(200*time.Millisecond, 30*time.Second, func() (bool, error) {
-					build, err = oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(br.Build.Name, metav1.GetOptions{})
+					build, err = oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(context.Background(), br.Build.Name, metav1.GetOptions{})
 					if build.Status.Reason != buildv1.StatusReasonOutOfMemoryKilled {
 						return false, nil
 					}
@@ -159,7 +160,7 @@ var _ = g.Describe("[sig-builds][Feature:Builds][Slow] update failure status", f
 				br.AssertFailure()
 				br.DumpLogs()
 
-				build, err := oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(br.Build.Name, metav1.GetOptions{})
+				build, err := oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(context.Background(), br.Build.Name, metav1.GetOptions{})
 				o.Expect(err).NotTo(o.HaveOccurred())
 				o.Expect(build.Status.Reason).To(o.Equal(buildv1.StatusReasonInvalidContextDirectory))
 				o.Expect(build.Status.Message).To(o.Equal(StatusMessageInvalidContextDirectory))
@@ -178,7 +179,7 @@ var _ = g.Describe("[sig-builds][Feature:Builds][Slow] update failure status", f
 				br.AssertFailure()
 				br.DumpLogs()
 
-				build, err := oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(br.Build.Name, metav1.GetOptions{})
+				build, err := oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(context.Background(), br.Build.Name, metav1.GetOptions{})
 				o.Expect(err).NotTo(o.HaveOccurred())
 				o.Expect(build.Status.Reason).To(o.Equal(buildv1.StatusReasonPullBuilderImageFailed))
 				o.Expect(build.Status.Message).To(o.Equal(StatusMessagePullBuilderImageFailed))
@@ -202,7 +203,7 @@ var _ = g.Describe("[sig-builds][Feature:Builds][Slow] update failure status", f
 				o.Expect(err).NotTo(o.HaveOccurred())
 				o.Expect(logs).NotTo(o.ContainSubstring("identifier is not an image"))
 
-				build, err := oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(br.Build.Name, metav1.GetOptions{})
+				build, err := oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(context.Background(), br.Build.Name, metav1.GetOptions{})
 				o.Expect(err).NotTo(o.HaveOccurred())
 				o.Expect(build.Status.Reason).To(o.Equal(buildv1.StatusReasonPushImageToRegistryFailed))
 				o.Expect(build.Status.Message).To(o.Equal(StatusMessagePushImageToRegistryFailed))
@@ -221,7 +222,7 @@ var _ = g.Describe("[sig-builds][Feature:Builds][Slow] update failure status", f
 				br.AssertFailure()
 				br.DumpLogs()
 
-				build, err := oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(br.Build.Name, metav1.GetOptions{})
+				build, err := oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(context.Background(), br.Build.Name, metav1.GetOptions{})
 				o.Expect(err).NotTo(o.HaveOccurred())
 				o.Expect(build.Status.Reason).To(o.Equal(buildv1.StatusReasonGenericBuildFailed))
 				o.Expect(build.Status.Message).To(o.Equal(StatusMessageGenericBuildFailed))
@@ -240,7 +241,7 @@ var _ = g.Describe("[sig-builds][Feature:Builds][Slow] update failure status", f
 				br.AssertFailure()
 				br.DumpLogs()
 
-				build, err := oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(br.Build.Name, metav1.GetOptions{})
+				build, err := oc.BuildClient().BuildV1().Builds(oc.Namespace()).Get(context.Background(), br.Build.Name, metav1.GetOptions{})
 				o.Expect(err).NotTo(o.HaveOccurred())
 				o.Expect(build.Status.Reason).To(o.Equal(buildv1.StatusReasonGenericBuildFailed))
 				o.Expect(build.Status.Message).To(o.Equal(StatusMessageGenericBuildFailed))
