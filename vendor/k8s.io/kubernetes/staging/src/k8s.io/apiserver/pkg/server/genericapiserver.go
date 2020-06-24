@@ -354,10 +354,9 @@ func (s preparedGenericAPIServer) Run(stopCh <-chan struct{}) error {
 
 	s.SecureServingInfo.Listener = &terminationLoggingListener{
 		Listener:   s.SecureServingInfo.Listener,
-		stopCh:     stopCh,
 		lateStopCh: lateStopCh,
-		Eventf:     s.Eventf,
 	}
+	lateConnectionEventf = s.Eventf
 
 	// close socket after delayed stopCh
 	stoppedCh, err := s.NonBlockingRun(delayedStopCh)
@@ -675,14 +674,23 @@ func (s *GenericAPIServer) Eventf(eventType, reason, messageFmt string, args ...
 	}
 }
 
-// terminationLoggingListener wraps the given listener and logs new connections
-// after the stopCh has been closed, i.e. when termination has begun.
+// terminationLoggingListener wraps the given listener to mark late connections
+// as such, identified by the remote address. In parallel, we have a filter that
+// logs bad requests through these connections. We need this filter to get
+// access to the http path in order to filter out healthz or readyz probes that
+// are allowed at any point during termination.
+//
+// Connections are late after the lateStopCh has been closed.
 type terminationLoggingListener struct {
 	net.Listener
-	stopCh, lateStopCh <-chan struct{}
-	Eventf             func(eventType, reason, messageFmt string, args ...interface{})
-	lateConnReceived   atomic.Bool
+	lateStopCh <-chan struct{}
 }
+
+var (
+	lateConnectionRemoteAddrsLock sync.RWMutex
+	lateConnectionRemoteAddrs     map[string]bool = map[string]bool{}
+	lateConnectionEventf          func(eventType, reason, messageFmt string, args ...interface{})
+)
 
 func (l *terminationLoggingListener) Accept() (net.Conn, error) {
 	c, err := l.Listener.Accept()
@@ -692,17 +700,48 @@ func (l *terminationLoggingListener) Accept() (net.Conn, error) {
 
 	select {
 	case <-l.lateStopCh:
-		klog.Warningf("Accepted new connection from %s very late in the graceful termination process (more than 80%% has passed), possibly a sign for a broken load balancer setup.", c.RemoteAddr().String())
-		if swapped := l.lateConnReceived.CAS(false, true); swapped {
-			l.Eventf(corev1.EventTypeWarning, "LateConnections", "The apiserver received connections (e.g. from %q) very late in the graceful termination process, possibly a sign for a broken load balancer setup.", c.RemoteAddr().String())
-		}
+		lateConnectionRemoteAddrsLock.Lock()
+		defer lateConnectionRemoteAddrsLock.Unlock()
+		lateConnectionRemoteAddrs[c.RemoteAddr().String()] = true
 	default:
-		select {
-		case <-l.stopCh:
-			klog.V(2).Infof("Accepted new connection from %s during graceful termination.", c.RemoteAddr())
-		default:
-		}
 	}
 
-	return c, err
+	return c, nil
+}
+
+// WithLateConnectionFilter logs every non-probe request that comes through a late connection identified by remote address.
+func WithLateConnectionFilter(handler http.Handler) http.Handler {
+	var lateRequestReceived atomic.Bool
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lateConnectionRemoteAddrsLock.RLock()
+		late := lateConnectionRemoteAddrs[r.RemoteAddr]
+		lateConnectionRemoteAddrsLock.RUnlock()
+
+		if late {
+			// ignore connections to local IP. Those clients better know what they are doing.
+			local := false
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				// ignore error and keep going
+			} else if ip := net.ParseIP(host); ip != nil {
+				local = ip.IsLoopback()
+			}
+
+			if pth := "/" + strings.TrimLeft(r.URL.Path, "/"); pth != "/readyz" && pth != "/healthz" {
+				if local {
+					klog.V(4).Infof("Request from loopback client %s to %q (user agent %q) through connection created very late in the graceful termination process (more than 80%% has passed). This client probably does not watch /readyz and might get failures when termination is over.", r.RemoteAddr, r.URL.Path, r.UserAgent())
+				} else {
+					klog.Warningf("Request from %s to %q (user agent %q) through connection created very late in the graceful termination process (more than 80%% has passed), possibly a sign for a broken load balancer setup.", r.RemoteAddr, r.URL.Path, r.UserAgent())
+
+					// create only one event to avoid event spam.
+					if swapped := lateRequestReceived.CAS(false, true); swapped && lateConnectionEventf != nil {
+						lateConnectionEventf(corev1.EventTypeWarning, "LateConnections", "The apiserver received connections (e.g. from %q, user agent %q) very late in the graceful termination process, possibly a sign for a broken load balancer setup.", r.RemoteAddr, r.UserAgent())
+					}
+				}
+			}
+		}
+
+		handler.ServeHTTP(w, r)
+	})
 }
